@@ -64,12 +64,12 @@ class ApprovalHandler(Protocol):
 @dataclass(frozen=True)
 class AuditRecord:
     """권한 판정 1건의 기록. 감사 로그 한 줄(JSONL)에 해당."""
-
     call: ToolCall
     result: PermissionResult
     approved: bool | None = None  # ASK 였을 때 사용자 응답, 그 외엔 None
     executed: bool = False
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    tool_ok: bool | None = None
 
 
 @runtime_checkable

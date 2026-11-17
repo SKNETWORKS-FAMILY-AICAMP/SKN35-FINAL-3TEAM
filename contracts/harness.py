@@ -85,6 +85,10 @@ class LLMResponse:
 class LLMClient(Protocol):
     def chat(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse: ...
 
+@dataclass
+class RunResult:
+    status: Literal["completed", "blocked"]
+    message: str
 
 @dataclass(frozen=True)
 class ToolResult:
@@ -92,6 +96,7 @@ class ToolResult:
     ok: bool
     content: str  # LLM 에게 돌려줄 텍스트 (에러면 에러 설명)
     data: Any = None  # 화면 표시 등 LLM 외 용도로 쓸 원본 데이터
+    blocked: bool = False
 
 
 @runtime_checkable

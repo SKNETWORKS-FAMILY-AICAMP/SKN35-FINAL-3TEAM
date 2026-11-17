@@ -16,6 +16,12 @@ class MathPermissionChecker:
                 Decision.ALLOW
             )
 
+        if call.tool_name == "multiply":
+            return PermissionResult(
+                Decision.ASK,
+                reason="곱하기는 사용자 승인이 필요합니다."
+            )
+
         # 나머지는 거부
         return PermissionResult(
             Decision.DENY,

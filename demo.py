@@ -11,55 +11,32 @@ from apps.api.src.harness.dy.agents.math_agents import create_math_agent
 from apps.api.src.harness.dy.audit import JsonlAuditLogger
 from apps.api.src.harness.dy.session import Session
 from apps.api.src.harness.dy.math_permission import MathPermissionChecker
+from apps.api.src.harness.dy.approval import CliApprovalHandler
 
 class DemoLLM:
     def chat(self, messages, tools):
         latest = messages[-1]
 
-        if latest.role == "tool":
-            return LLMResponse(
-                Message(
-                    role="assistant",
-                    content=f"계산 결과: {latest.content}"
-                )
+        if latest.role == "user":
+            call = LLMToolCall(
+                call_id="demo-add",
+                tool_name="add",
+                arguments={"a": 10, "b": 5},
             )
-
-        question = latest.content
-
-        # 질문에서 숫자 추출
-        numbers = re.findall(r"\d+", question)
-        a, b = map(int, numbers[:2])
-
-        # 질문에 따라 Tool 선택
-        if "더" in question:
-            tool_name = "add"
-
-        elif "빼" in question:
-            tool_name = "subtract"
-
-        elif "곱" in question:
-            tool_name = "multiply"
-
+        elif latest.role == "tool" and latest.tool_call_id == "demo-add":
+            call = LLMToolCall(
+                call_id="demo-multiply",
+                tool_name="multiply",
+                arguments={"a": int(latest.content), "b": 2},
+            )
+        elif latest.role == "tool" and latest.tool_call_id == "demo-multiply":
+            return LLMResponse(
+                Message(role="assistant", content=f"계산 결과는 {latest.content}입니다.")
+            )
         else:
-            return LLMResponse(
-                Message(
-                    role="assistant",
-                    content="지원하지 않는 연산입니다."
-                )
-            )
+            raise RuntimeError(f"예상하지 못한 메시지: {latest}")
 
-        return LLMResponse(
-            Message(
-                role="assistant",
-                tool_calls=(
-                    LLMToolCall(
-                        call_id="call-1",
-                        tool_name=tool_name,
-                        arguments={"a": a, "b": b}
-                    ),
-                )
-            )
-        )
+        return LLMResponse(Message(role="assistant", tool_calls=(call,)))
 
 class NoApprovalNeeded:
     def request_approval(self, call, result):
@@ -68,51 +45,54 @@ class NoApprovalNeeded:
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         # 올라마
-        llm = OpenAICompatClient(
-            model="llama3.1",
-            base_url="http://localhost:11434/v1",
-            temperature=0
-        )
-        # llm = DemoLLM()
+        # llm = OpenAICompatClient(
+        #     model="llama3.1",
+        #     base_url="http://localhost:11434/v1",
+        #     temperature=0
+        # )
+        llm = DemoLLM()
         common = (
             llm,
             MathPermissionChecker(),
-            NoApprovalNeeded(),
+            CliApprovalHandler(),
             JsonlAuditLogger(Path(tmp) / "audit.jsonl") # 저장 X
             # JsonlAuditLogger("logs/audit.jsonl") # 저장 O
         )
 
         # 세션
-        session = Session(sid, storage_dir=tmp) # 세선 저장 X
-        # session = Session("math-session",storage_dir="sessions") # 세션 저장 O
+        # session = Session(sid, storage_dir=tmp) # 세선 저장 X
+        session = Session("math-session",storage_dir="sessions") # 세션 저장 O
 
         # 여러 질문 준비(권한 확인)
-        questions = [
-            "10과 5를 더해줘",
-            "10에서 5를 빼줘",
-            "7과 8을 곱해줘",
-            "100에서 40을 빼줘"
-        ]
+        # questions = [
+        #     "10과 5를 더해줘",
+        #     "10에서 5를 빼줘",
+        #     "7과 8을 곱해줘",
+        #     "100에서 40을 빼줘"
+        # ]
         # 여러 질문 준비(세션 저장)
         # questions = [
         #      "10과 5를 더해줘",
         #     "방금 결과에서 3을 빼줘",
         #     "이번 결과에 2를 곱해줘"
         # ]
+        questions = [
+            "7과 8을 multiply 도구로 곱해줘"
+        ]
         for index, (name, factory) in enumerate([
             ("수학", create_math_agent)
         ]):
             agent = factory(*common)
             sid = f"example-{index}"
             ctx = RunContext(run_id=sid,session_id=sid,
-                user_id="admin",roles=("admin",), # admin , user
+                user_id="user",roles=("user",), # admin , user
                 data_level=0,agent_id=name
             )
             # 질문을 하나씩 실행
             for question in questions:
                 result = agent.run(ctx, session, question)
                 print(f"질문: {question}")
-                print(f"{name} Agent → {result}")
+                print(f"{name} Agent → [{result.status}] {result.message}")
                 print("--------------------")
 
         # show_logs() # 로그 보여주기
