@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     # knowledge/ingestion: 문서 판별(router)·파싱. Docling 내부 함수(text_quality, docling-parse 백엔드)를 쓰므로 버전 고정.
     # docling-parse·olefile은 docling과 함께 설치된다.
-    "docling==2.150.0",
+    "docling==2.150.1",
 ]
 
 [dependency-groups]

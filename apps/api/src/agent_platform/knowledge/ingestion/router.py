@@ -16,7 +16,7 @@
   - 판별 근거(evidence)를 항상 남긴다. 규제 산업에서 "왜 이 경로로 갔나"를 설명해야 한다.
 
 사용: python -m agent_platform.knowledge.ingestion.router <파일 또는 폴더> ...
-의존성: docling==2.150.0 (docling-parse·olefile 포함). Docling 내부 함수를 쓰므로 버전 고정.
+의존성: docling==2.150.1 (docling-parse·olefile 포함). Docling 내부 함수를 쓰므로 버전 고정.
 """
 
 from __future__ import annotations
