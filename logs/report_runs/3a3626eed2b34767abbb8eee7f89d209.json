@@ -1,0 +1,33 @@
+{
+  "run_id": "3a3626eed2b34767abbb8eee7f89d209",
+  "user_id": "employee_a",
+  "plan_id": "report-plan-001",
+  "status": "completed",
+  "step_results": {
+    "search": [
+      {
+        "id": "doc-001",
+        "title": "상품 현황",
+        "dept": "여신",
+        "classification": 1,
+        "content": "연습용 개인신용대출 상품의 지난 분기 잔액은 100억 원이고, 이번 분기 잔액은 110억 원이다."
+      },
+      {
+        "id": "doc-002",
+        "title": "내부 검토 의견",
+        "dept": "여신",
+        "classification": 2,
+        "content": "개인신용대출의 잔액 증가 원인을 추가 확인하고, 보고서에 검토가 완료되지 않았음을 표시하도록 제안했다."
+      }
+    ],
+    "write": {
+      "status": "completed",
+      "content": "연습용 개인신용대출 상품의 지난 분기 잔액은 100억 원이고, 이번 분기 잔액은 110억 원이다.\n개인신용대출의 잔액 증가 원인을 추가 확인하고, 보고서에 검토가 완료되지 않았음을 표시하도록 제안했다.",
+      "document_ids": [
+        "doc-001",
+        "doc-002"
+      ],
+      "classification": 2
+    }
+  }
+}
