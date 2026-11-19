@@ -1,7 +1,7 @@
 """하네스 계약 (에이전트 루프 ↔ LLM / 툴).
 
 흐름:
-  messages → LLMClient.chat(messages, tools) → LLMResponse
+  messages → await LLMClient.chat(messages, tools) → LLMResponse
     tool_calls 가 있으면: 각 호출마다
       PermissionChecker.check() → (ASK 면 ApprovalHandler) → Tool.run() → ToolResult
       결과를 role="tool" 메시지로 붙이고 다시 chat()
@@ -9,6 +9,10 @@
   HARNESS_MAX_TURNS 를 넘으면 중단.
 
 LLMClient 는 OpenAI 호환 API(Ollama /v1) 기준으로 맞췄다.
+
+모든 I/O 경계(LLM·툴·권한·승인·감사)는 async 다. 구현 안에서 블로킹 호출
+(requests, time.sleep, 동기 DB 드라이버, 무거운 연산 등)을 하면 이벤트 루프가 멈추므로
+반드시 async 라이브러리를 쓰거나 asyncio.to_thread() 로 감싼다.
 """
 
 from __future__ import annotations
@@ -16,7 +20,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
-from contracts.permission import ToolCall
+from contracts.permission import (
+    ApprovalHandler,
+    AuditLogger,
+    PermissionChecker,
+    Principal,
+    ToolCall,
+)
 
 Role = Literal["system", "user", "assistant", "tool"]
 
@@ -57,7 +67,7 @@ class LLMResponse:
 
 @runtime_checkable
 class LLMClient(Protocol):
-    def chat(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse: ...
+    async def chat(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse: ...
 
 
 @dataclass(frozen=True)
@@ -72,11 +82,66 @@ class ToolResult:
 class Tool(Protocol):
     spec: ToolSpec
 
-    def run(self, call: ToolCall) -> ToolResult: ...
+    async def run(self, call: ToolCall) -> ToolResult: ...
 
 
 @runtime_checkable
 class ToolRegistry(Protocol):
-    def specs(self) -> list[ToolSpec]: ...
+    async def specs(self) -> list[ToolSpec]: ...
 
-    def get(self, name: str) -> Tool | None: ...
+    async def get(self, name: str) -> Tool | None: ...
+
+
+# ── 에이전트 루프 ────────────────────────────────────────────
+#
+# 동작 규칙 (공통 테스트 tests/test_harness_contract.py 가 이걸 검사한다):
+# 0. 모든 프로토콜 메서드는 await 해서 호출한다.
+# 1. LLMClient.chat() 은 한 run 에서 최대 max_turns 번까지만 호출한다.
+#    max_turns 번째 응답에도 tool_calls 가 있으면 stop_reason="max_turns" 로 끝낸다.
+# 2. LLM 이 요청한 tool_call 하나하나에 반드시 role="tool" 메시지(tool_call_id 일치)를
+#    붙인 뒤 다음 chat() 을 호출한다. 실패·거부도 예외 없이 메시지로 돌려준다.
+# 3. 툴 처리 순서: ToolRegistry.get() → 없으면 에러 메시지 (권한 검사·감사 로그 없음)
+#    → PermissionChecker.check() → ASK 면 ApprovalHandler → 허용되면 Tool.run()
+#    → 권한을 검사한 호출은 모두 AuditLogger.log() 로 남긴다.
+# 4. DENY / ASK 거절이면 PermissionResult.reason 을 툴 메시지 content 에 포함한다.
+# 5. Tool.run() 이 예외를 던져도 run 이 죽으면 안 된다. 에러를 툴 메시지로 돌려준다.
+#    (이때 AuditRecord.executed 는 True: "run() 을 호출했는가" 의 의미)
+# 6. 한 응답 안의 tool_call 들은 요청 순서대로 하나씩 처리한다 (병렬 X).
+#    툴 메시지·감사 로그 순서가 tool_calls 순서와 같아야 한다.
+
+
+StopReason = Literal["completed", "max_turns"]
+
+
+@dataclass(frozen=True)
+class RunResult:
+    final_message: Message | None  # completed 면 마지막 assistant 메시지, max_turns 면 None
+    messages: list[Message]  # 이번 run 까지의 전체 대화 (history + 새 메시지)
+    llm_calls: int  # chat() 호출 횟수
+    stop_reason: StopReason
+
+
+@runtime_checkable
+class AgentLoop(Protocol):
+    async def run(
+        self,
+        user_input: str,
+        principal: Principal,
+        session_id: str,
+        history: list[Message] | None = None,
+    ) -> RunResult: ...
+
+
+class HarnessFactory(Protocol):
+    """각자 구현 패키지에서 `create_harness` 라는 이름으로 내보낸다."""
+
+    def __call__(
+        self,
+        *,
+        llm: LLMClient,
+        tools: ToolRegistry,
+        checker: PermissionChecker,
+        approver: ApprovalHandler,
+        audit: AuditLogger,
+        max_turns: int,
+    ) -> AgentLoop: ...

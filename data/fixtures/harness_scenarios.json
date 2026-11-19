@@ -1,0 +1,208 @@
+{
+  "_doc": {
+    "설명": "하네스 공통 시나리오. LLM 은 llm_script 순서대로 응답하는 가짜(ScriptedLLM)라서 결과가 항상 같다.",
+    "llm_script": "chat() 이 호출될 때마다 하나씩 돌려줄 assistant 응답. content 또는 tool_calls.",
+    "tools": "등록할 가짜 툴. output 을 돌려주거나, raises 가 있으면 그 메시지로 예외를 던진다.",
+    "permissions": "툴 이름 → allow|deny|ask. 없으면 allow. 사유는 'scripted <decision>' 으로 고정.",
+    "approval": "ASK 일 때 가짜 승인자가 돌려줄 값.",
+    "expected.executed": "Tool.run() 이 호출된 툴 이름 순서. 생략하면 검사 안 함.",
+    "expected.tool_messages": "LLM 에게 돌려준 role=tool 메시지 검사. contains 는 content 에 포함돼야 할 문자열.",
+    "expected.audit": "AuditLogger 에 남아야 할 기록 (call_id 순서대로). 생략하면 검사 안 함.",
+    "expected.approval_requests": "ApprovalHandler 가 받은 call_id 목록."
+  },
+  "scenarios": [
+    {
+      "id": "direct_answer",
+      "description": "툴 없이 바로 답한다",
+      "user_input": "안녕?",
+      "max_turns": 5,
+      "tools": [{"name": "search", "output": "검색 결과"}],
+      "llm_script": [{"content": "안녕하세요!"}],
+      "expected": {
+        "stop_reason": "completed",
+        "final_content": "안녕하세요!",
+        "llm_calls": 1,
+        "executed": [],
+        "tool_messages": [],
+        "audit": [],
+        "approval_requests": []
+      }
+    },
+    {
+      "id": "single_tool",
+      "description": "툴 1번 호출 후 결과를 보고 답한다",
+      "user_input": "SK 뉴스 찾아줘",
+      "max_turns": 5,
+      "tools": [{"name": "search", "output": "SK 관련 뉴스 3건"}],
+      "llm_script": [
+        {"tool_calls": [{"id": "c1", "name": "search", "arguments": {"q": "SK 뉴스"}}]},
+        {"content": "뉴스 3건을 찾았어요."}
+      ],
+      "expected": {
+        "stop_reason": "completed",
+        "final_content": "뉴스 3건을 찾았어요.",
+        "llm_calls": 2,
+        "executed": ["search"],
+        "tool_messages": [{"call_id": "c1", "contains": "SK 관련 뉴스 3건"}],
+        "audit": [{"call_id": "c1", "decision": "allow", "approved": null, "executed": true}],
+        "approval_requests": []
+      }
+    },
+    {
+      "id": "parallel_tools",
+      "description": "한 응답에 툴 호출 2개",
+      "user_input": "날씨랑 뉴스 둘 다",
+      "max_turns": 5,
+      "tools": [
+        {"name": "weather", "output": "맑음"},
+        {"name": "search", "output": "뉴스 1건"}
+      ],
+      "llm_script": [
+        {"tool_calls": [
+          {"id": "c1", "name": "weather", "arguments": {"city": "서울"}},
+          {"id": "c2", "name": "search", "arguments": {"q": "뉴스"}}
+        ]},
+        {"content": "서울은 맑고 뉴스는 1건이에요."}
+      ],
+      "expected": {
+        "stop_reason": "completed",
+        "final_content": "서울은 맑고 뉴스는 1건이에요.",
+        "llm_calls": 2,
+        "executed": ["weather", "search"],
+        "tool_messages": [
+          {"call_id": "c1", "contains": "맑음"},
+          {"call_id": "c2", "contains": "뉴스 1건"}
+        ],
+        "audit": [
+          {"call_id": "c1", "decision": "allow", "approved": null, "executed": true},
+          {"call_id": "c2", "decision": "allow", "approved": null, "executed": true}
+        ],
+        "approval_requests": []
+      }
+    },
+    {
+      "id": "denied",
+      "description": "거부된 툴은 실행하지 않고 사유를 LLM 에게 돌려준다",
+      "user_input": "파일 지워줘",
+      "max_turns": 5,
+      "tools": [{"name": "delete_file", "output": "삭제됨"}],
+      "permissions": {"delete_file": "deny"},
+      "llm_script": [
+        {"tool_calls": [{"id": "c1", "name": "delete_file", "arguments": {"path": "/a.txt"}}]},
+        {"content": "권한이 없어서 지우지 못했어요."}
+      ],
+      "expected": {
+        "stop_reason": "completed",
+        "final_content": "권한이 없어서 지우지 못했어요.",
+        "llm_calls": 2,
+        "executed": [],
+        "tool_messages": [{"call_id": "c1", "contains": "scripted deny"}],
+        "audit": [{"call_id": "c1", "decision": "deny", "approved": null, "executed": false}],
+        "approval_requests": []
+      }
+    },
+    {
+      "id": "ask_approved",
+      "description": "ASK → 사용자가 승인 → 실행",
+      "user_input": "메일 보내줘",
+      "max_turns": 5,
+      "tools": [{"name": "send_email", "output": "전송 완료"}],
+      "permissions": {"send_email": "ask"},
+      "approval": true,
+      "llm_script": [
+        {"tool_calls": [{"id": "c1", "name": "send_email", "arguments": {"to": "team"}}]},
+        {"content": "메일을 보냈어요."}
+      ],
+      "expected": {
+        "stop_reason": "completed",
+        "final_content": "메일을 보냈어요.",
+        "llm_calls": 2,
+        "executed": ["send_email"],
+        "tool_messages": [{"call_id": "c1", "contains": "전송 완료"}],
+        "audit": [{"call_id": "c1", "decision": "ask", "approved": true, "executed": true}],
+        "approval_requests": ["c1"]
+      }
+    },
+    {
+      "id": "ask_rejected",
+      "description": "ASK → 사용자가 거절 → 실행 안 함, 사유 전달",
+      "user_input": "메일 보내줘",
+      "max_turns": 5,
+      "tools": [{"name": "send_email", "output": "전송 완료"}],
+      "permissions": {"send_email": "ask"},
+      "approval": false,
+      "llm_script": [
+        {"tool_calls": [{"id": "c1", "name": "send_email", "arguments": {"to": "team"}}]},
+        {"content": "승인되지 않아 보내지 않았어요."}
+      ],
+      "expected": {
+        "stop_reason": "completed",
+        "final_content": "승인되지 않아 보내지 않았어요.",
+        "llm_calls": 2,
+        "executed": [],
+        "tool_messages": [{"call_id": "c1", "contains": "scripted ask"}],
+        "audit": [{"call_id": "c1", "decision": "ask", "approved": false, "executed": false}],
+        "approval_requests": ["c1"]
+      }
+    },
+    {
+      "id": "unknown_tool",
+      "description": "없는 툴을 부르면 에러 메시지로 돌려주고 계속 진행 (권한 검사·감사 없음)",
+      "user_input": "계산해줘",
+      "max_turns": 5,
+      "tools": [{"name": "search", "output": "검색 결과"}],
+      "llm_script": [
+        {"tool_calls": [{"id": "c1", "name": "calculator", "arguments": {"expr": "1+1"}}]},
+        {"content": "계산기 툴이 없어요."}
+      ],
+      "expected": {
+        "stop_reason": "completed",
+        "final_content": "계산기 툴이 없어요.",
+        "llm_calls": 2,
+        "executed": [],
+        "tool_messages": [{"call_id": "c1", "contains": ""}],
+        "audit": [],
+        "approval_requests": []
+      }
+    },
+    {
+      "id": "tool_raises",
+      "description": "툴이 예외를 던져도 run 이 죽지 않고 에러를 돌려준다",
+      "user_input": "DB 조회",
+      "max_turns": 5,
+      "tools": [{"name": "query_db", "raises": "connection refused"}],
+      "llm_script": [
+        {"tool_calls": [{"id": "c1", "name": "query_db", "arguments": {"sql": "select 1"}}]},
+        {"content": "DB 연결에 실패했어요."}
+      ],
+      "expected": {
+        "stop_reason": "completed",
+        "final_content": "DB 연결에 실패했어요.",
+        "llm_calls": 2,
+        "executed": ["query_db"],
+        "tool_messages": [{"call_id": "c1", "contains": "connection refused"}],
+        "audit": [{"call_id": "c1", "decision": "allow", "approved": null, "executed": true}],
+        "approval_requests": []
+      }
+    },
+    {
+      "id": "max_turns",
+      "description": "LLM 이 계속 툴만 부르면 max_turns 에서 멈춘다",
+      "user_input": "끝없이 검색해",
+      "max_turns": 3,
+      "tools": [{"name": "search", "output": "또 결과"}],
+      "llm_script": [
+        {"tool_calls": [{"id": "c1", "name": "search", "arguments": {"q": "1"}}]},
+        {"tool_calls": [{"id": "c2", "name": "search", "arguments": {"q": "2"}}]},
+        {"tool_calls": [{"id": "c3", "name": "search", "arguments": {"q": "3"}}]},
+        {"tool_calls": [{"id": "c4", "name": "search", "arguments": {"q": "4"}}]},
+        {"content": "여기까지 오면 안 됨"}
+      ],
+      "expected": {
+        "stop_reason": "max_turns",
+        "final_content": null,
+        "llm_calls": 3
+      }
+    }
+  ]
+}
