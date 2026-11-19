@@ -27,7 +27,7 @@ from contracts.permission import (
     Principal,
     ToolCall,
 )
-from harness.son.denial import DoneTool, template_reply, wrapup_instruction
+from harness.denial import DoneTool, template_reply, wrapup_instruction
 
 log = logging.getLogger(__name__)
 
@@ -176,7 +176,7 @@ class AgentRunner:
         except Exception as e:  # 툴이 죽어도 루프는 계속 돈다 (CancelledError 는 BaseException 이라 그대로 전파)
             content = f"error: tool '{call.tool_name}' raised {type(e).__name__}: {e}"
 
-        await self.audit.log(AuditRecord(call, result, approval=approval, executed=True))
+        await self.audit.log(AuditRecord(call, result, approval=approval, executed=True, tool_ok=ok))
         return _Outcome(tool_msg(content or "(empty result)"), ok=ok, label=spec.label)
 
 

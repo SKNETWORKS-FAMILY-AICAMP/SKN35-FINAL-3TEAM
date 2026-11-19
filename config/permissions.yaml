@@ -1,4 +1,4 @@
-# 권한 정책 (ABAC). 형식은 apps/api/src/permission/son/policy.py 참고.
+# 권한 정책 (ABAC). 형식은 apps/api/src/permission/policy.py 참고.
 # 위에서부터 처음 맞는 규칙이 이긴다. 맞는 규칙이 없으면 default.
 # 예시 규칙이다. MVP 툴 목록과 위험도가 정해지면 바꾼다.
 

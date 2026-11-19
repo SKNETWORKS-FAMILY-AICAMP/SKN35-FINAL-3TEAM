@@ -7,11 +7,13 @@ from dataclasses import dataclass, field
 
 from contracts.harness import LLMClient
 from contracts.permission import AuditLogger, Decision, PermissionChecker
-from harness.son.llm import OpenAICompatLLM
-from permission.son import create_checker
-from permission.son.approval import FutureApprovalHandler
-from permission.son.audit import JsonlAuditLogger
-from permission.son.policy import load_policy
+from harness.llm import OpenAICompatLLM
+from harness.local_math import LocalMathClient
+from permission import create_checker
+from permission.approval import FutureApprovalHandler
+from permission.audit import JsonlAuditLogger
+from permission.policy import load_policy
+from services.agents import InMemoryAgentStore
 from services.sessions import InMemorySessionStore
 from services.users import UserDirectory
 from tools.arithmetic import arithmetic_tools
@@ -32,9 +34,20 @@ class AppServices:
     audit: AuditLogger
     users: UserDirectory
     sessions: InMemorySessionStore = field(default_factory=InMemorySessionStore)
+    agents: InMemoryAgentStore = field(default_factory=InMemoryAgentStore)
     max_turns: int = 10
     tool_timeout: float | None = 30.0
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
+
+
+def llm_from_env() -> LLMClient:
+    """LLM_PROVIDER=openai (기본, Ollama 등 OpenAI 호환) | local_math (LLM 없이 사칙연산 데모)."""
+    provider = os.environ.get("LLM_PROVIDER", "openai")
+    if provider == "local_math":
+        return LocalMathClient()
+    if provider != "openai":
+        raise ValueError(f"알 수 없는 LLM_PROVIDER: {provider}")
+    return OpenAICompatLLM.from_env()
 
 
 def build_from_env() -> AppServices:
@@ -44,7 +57,7 @@ def build_from_env() -> AppServices:
         default=Decision(env("PERMISSION_DEFAULT_DECISION", "ask")),
     )
     return AppServices(
-        llm=OpenAICompatLLM.from_env(),
+        llm=llm_from_env(),
         tools=SimpleToolRegistry(arithmetic_tools()),
         checker=create_checker(rules=rules, default=default),
         approvals=FutureApprovalHandler(float(env("PERMISSION_APPROVAL_TIMEOUT_SECONDS", "120"))),

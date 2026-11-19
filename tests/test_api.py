@@ -11,9 +11,9 @@ import pytest
 from contracts.harness import ToolResult, ToolSpec
 from contracts.permission import Decision, Principal, PolicyRule
 from main import create_app
-from permission.son import create_checker
-from permission.son.approval import FutureApprovalHandler
-from permission.son.audit import JsonlAuditLogger
+from permission import create_checker
+from permission.approval import FutureApprovalHandler
+from permission.audit import JsonlAuditLogger
 from services.container import AppServices
 from services.users import UserDirectory
 from tests.fakes import ScriptedLLM

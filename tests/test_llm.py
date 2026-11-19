@@ -1,4 +1,4 @@
-"""harness.son.llm 테스트. 가짜 HTTP 응답으로 변환을 확인하고,
+"""harness.llm 테스트. 가짜 HTTP 응답으로 변환을 확인하고,
 RUN_OLLAMA_TESTS=1 이면 로컬 Ollama 로 실제 호출도 해 본다.
 """
 
@@ -12,7 +12,7 @@ import pytest
 from openai import AsyncOpenAI
 
 from contracts.harness import LLMClient, LLMToolCall, Message, ToolSpec
-from harness.son.llm import OpenAICompatLLM, parse_arguments, strip_thinking
+from harness.llm import OpenAICompatLLM, parse_arguments, strip_thinking
 
 
 def fake_llm(reply: dict, seen: list) -> OpenAICompatLLM:

@@ -152,6 +152,7 @@ CREATE TABLE audit_log (
     rule_id             VARCHAR(100) REFERENCES policy_rule (policy_rule_id),
     approval            VARCHAR(20) CHECK (approval IN ('approved', 'rejected', 'timeout')),
     executed            BOOLEAN NOT NULL DEFAULT FALSE,
+    tool_ok             BOOLEAN,  -- 실행했을 때 툴 성공 여부, 실행 안 했으면 NULL
     ts                  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -253,6 +254,7 @@ COMMENT ON COLUMN policy_rule.conditions         IS 'ABAC 조건 (사용자 속�
 COMMENT ON COLUMN audit_log.agent_id             IS '호출한 에이전트 ID (기록용, FK 없음)';
 COMMENT ON COLUMN audit_log.principal_snapshot   IS '판정 시점 요청자 속성';
 COMMENT ON COLUMN audit_log.approval             IS 'ASK 일 때 승인 결과 (approved, rejected, timeout)';
+COMMENT ON COLUMN audit_log.tool_ok              IS '실행했을 때 툴 성공 여부 (실행 안 했으면 NULL)';
 COMMENT ON COLUMN audit_log.ts                   IS '판정 시각 (UTC)';
 COMMENT ON COLUMN document.scope                 IS '공개 범위 (personal, dept, company)';
 COMMENT ON COLUMN document_version.is_current    IS '현재 버전 여부';
