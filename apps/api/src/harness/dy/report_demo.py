@@ -264,7 +264,7 @@ def execute_plan(user, plan, *, profile=REPORT_PROFILE):
         "step_results": step_results,
     }
 
-def save_execution(user, plan, execution):
+def save_execution(user, plan, execution, *, profile=REPORT_PROFILE):
     run_id = uuid4().hex
 
     record = {
@@ -273,6 +273,12 @@ def save_execution(user, plan, execution):
         "plan_id": plan["id"],
         "status": execution["status"],
         "step_results": execution["step_results"],
+        "profile": {
+            "id": profile["id"],
+            "version": profile["version"],
+            "allowed_capabilities": profile["allowed_capabilities"],
+        },
+        "plan": plan,
     }
 
     output_dir = Path("logs/report_runs")
@@ -287,16 +293,23 @@ def save_execution(user, plan, execution):
 
     return output_path
 
+def load_execution(path):
+    text = Path(path).read_text(encoding= "utf-8")
+    return json.loads(text)
+
 def main():
     for user in USERS.values():
         execution = execute_plan(user, REPORT_PLAN)
         saved_path = save_execution(user, REPORT_PLAN, execution)
-        print("실행 기록 저장:", saved_path)
-        results = execution["step_results"]
+        loaded = load_execution(saved_path)
 
-        print(f"\n{user['name']} → {execution['status']}")
-        print("검색 문서:", [doc["id"] for doc in results["search"]])
-        print("작성 결과:", results["write"])
+        print("프로필:", loaded["profile"]["id"])
+        print("버전:", loaded["profile"]["version"])
+        print("계획 단계:", [step["id"] for step in loaded["plan"]["steps"]])
+
+        assert loaded["user_id"] == user["user_id"]
+        assert loaded["plan"] == REPORT_PLAN
+        assert loaded["step_results"] == execution["step_results"]
 
 
 if __name__ == "__main__":
