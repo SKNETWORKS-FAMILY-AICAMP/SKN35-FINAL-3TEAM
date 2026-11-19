@@ -18,15 +18,15 @@ from typing import Any
 
 import pytest
 
-# TODO: teammate 를 팀원 이름(브랜치명 등)으로 바꾸세요.
+# 구현 담당별 패키지 (브랜치 이름과 같게)
 HARNESS_IMPLS = [
     "harness.son:create_harness",
-    "harness.teammate:create_harness",
+    "harness.dy:create_harness",
 ]
 
 CHECKER_IMPLS = [
     "permission.son:create_checker",
-    "permission.teammate:create_checker",
+    "permission.dy:create_checker",
 ]
 
 

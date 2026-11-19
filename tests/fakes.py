@@ -13,6 +13,7 @@ from contracts.harness import (
     ToolSpec,
 )
 from contracts.permission import (
+    ApprovalOutcome,
     AuditRecord,
     Decision,
     PermissionResult,
@@ -33,6 +34,8 @@ class ScriptedLLM:
         if idx >= len(self._script):
             raise AssertionError(f"LLM 이 스크립트({len(self._script)}개)보다 많이 호출됨")
         step = self._script[idx]
+        if "raises" in step:
+            raise RuntimeError(step["raises"])
         tool_calls = tuple(
             LLMToolCall(call_id=tc["id"], tool_name=tc["name"], arguments=tc["arguments"])
             for tc in step.get("tool_calls", [])
@@ -42,8 +45,11 @@ class ScriptedLLM:
 
 
 class FakeTool:
-    def __init__(self, name: str, output: str = "", raises: str | None = None, log: list[str] | None = None):
-        self.spec = ToolSpec(name=name, description=f"fake {name}")
+    def __init__(
+        self, name: str, output: str = "", raises: str | None = None,
+        log: list[str] | None = None, display_name: str = "",
+    ):
+        self.spec = ToolSpec(name=name, description=f"fake {name}", display_name=display_name)
         self._output = output
         self._raises = raises
         self._log = log if log is not None else []
@@ -78,11 +84,13 @@ class ScriptedChecker:
 
 
 class FixedApprover:
-    def __init__(self, answer: bool):
-        self._answer = answer
+    def __init__(self, answer: ApprovalOutcome | bool):
+        if isinstance(answer, bool):
+            answer = "approved" if answer else "rejected"
+        self._answer: ApprovalOutcome = answer
         self.requests: list[str] = []
 
-    async def request_approval(self, call: ToolCall, result: PermissionResult) -> bool:
+    async def request_approval(self, call: ToolCall, result: PermissionResult) -> ApprovalOutcome:
         self.requests.append(call.call_id)
         return self._answer
 
@@ -110,14 +118,15 @@ class ScenarioWorld:
     def from_scenario(cls, sc: dict[str, Any]) -> ScenarioWorld:
         executed: list[str] = []
         tools = [
-            FakeTool(t["name"], output=t.get("output", ""), raises=t.get("raises"), log=executed)
+            FakeTool(t["name"], output=t.get("output", ""), raises=t.get("raises"), log=executed,
+                     display_name=t.get("display_name", ""))
             for t in sc.get("tools", [])
         ]
         return cls(
             llm=ScriptedLLM(sc["llm_script"]),
             tools=FakeRegistry(tools),
             checker=ScriptedChecker(sc.get("permissions", {})),
-            approver=FixedApprover(sc.get("approval", False)),
+            approver=FixedApprover(sc.get("approval", "rejected")),
             audit=MemoryAudit(),
             executed=executed,
         )

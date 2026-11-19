@@ -1,0 +1,15 @@
+# 개발용 사용자 목록. 로그인(COM-01)이 붙으면 DB(users, user_role)로 대체한다.
+# API 요청 헤더 X-User-Id 에 user_id 를 넣으면 그 사용자로 동작한다.
+users:
+  - user_id: kim
+    roles: [member]
+    attributes: {department_id: 10, position: 사원, security_level: 2}
+  - user_id: lee
+    roles: [dept_head]
+    attributes: {department_id: 10, position: 팀장, security_level: 3}
+  - user_id: park
+    roles: [member]
+    attributes: {department_id: 20, position: 대리, security_level: 2}
+  - user_id: admin
+    roles: [admin]
+    attributes: {department_id: 1, position: 관리자, security_level: 5}

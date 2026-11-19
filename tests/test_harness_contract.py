@@ -53,12 +53,31 @@ async def test_scenario(factory, sc):
     # 종료 상태
     assert result.stop_reason == exp["stop_reason"]
     assert result.llm_calls == exp["llm_calls"] == len(world.llm.calls)
-    if exp["final_content"] is None:
+    if exp.get("final_content", "") is None:
         assert result.final_message is None
     else:
         assert result.final_message is not None
         assert result.final_message.role == "assistant"
-        assert result.final_message.content == exp["final_content"]
+        assert result.final_message.content, "final_message.content 가 비어 있음"
+        assert result.messages[-1] == result.final_message
+        if "final_content" in exp:
+            assert result.final_message.content == exp["final_content"]
+        if "final_contains" in exp:
+            assert exp["final_contains"] in result.final_message.content
+
+    # 거부로 멈춤 (규칙 8)
+    if "denial" in exp:
+        assert result.denial is not None
+        assert (result.denial.kind, result.denial.tool_name) == (exp["denial"]["kind"], exp["denial"]["tool_name"])
+        assert result.denial.reason, "Denial.reason 이 비어 있음"
+    elif result.stop_reason != "denied":
+        assert result.denial is None
+    if "wrapup_call" in exp:
+        last_tools = world.llm.calls[-1][1]
+        has_wrapup = len(world.llm.calls) > 1 and last_tools == []
+        assert has_wrapup is exp["wrapup_call"]
+    # 마무리 지시문 등 하네스가 만든 user 메시지는 기록에 남지 않는다
+    assert [m.content for m in result.messages if m.role == "user"] == [sc["user_input"]]
 
     # 툴 실행
     if "executed" in exp:
@@ -83,7 +102,7 @@ async def test_scenario(factory, sc):
             {
                 "call_id": r.call.call_id,
                 "decision": r.result.decision.value,
-                "approved": r.approved,
+                "approval": r.approval,
                 "executed": r.executed,
             }
             for r in world.audit.records
@@ -97,9 +116,13 @@ async def test_llm_input_invariants(factory, sc):
     _, world = await run_scenario(factory, sc)
     tool_names = sorted(t["name"] for t in sc.get("tools", []))
 
+    wrapup = sc["expected"].get("wrapup_call", False)
     for i, (messages, tools) in enumerate(world.llm.calls):
-        # 등록된 툴 목록을 LLM 에게 넘긴다
-        assert sorted(t.name for t in tools) == tool_names
+        # 등록된 툴 목록을 LLM 에게 넘긴다 (거부 후 마무리 호출만 tools=[])
+        if wrapup and i == len(world.llm.calls) - 1:
+            assert tools == []
+        else:
+            assert sorted(t.name for t in tools) == tool_names
         # 사용자 입력이 들어 있다
         assert any(m.role == "user" and m.content == sc["user_input"] for m in messages)
         # 이전 응답의 tool_call 마다 짝이 맞는 tool 메시지가 있다
@@ -132,3 +155,48 @@ async def test_history_is_kept(factory):
     sent = world.llm.calls[0][0]
     assert any(m.content == "이전 질문" for m in sent)
     assert result.messages[: len(history)] == history
+
+
+async def test_agent_and_run_id_reach_every_tool_call(factory):
+    sc = next(s for s in SCENARIOS if s["id"] == "parallel_tools")
+    world = ScenarioWorld.from_scenario(sc)
+    harness = factory(
+        llm=world.llm, tools=world.tools, checker=world.checker,
+        approver=world.approver, audit=world.audit, max_turns=5,
+    )
+    await harness.run(sc["user_input"], Principal("tester"), "session-1", agent_id="agent-7", run_id="run-1")
+    assert [(c.agent_id, c.run_id) for c in world.checker.calls] == [("agent-7", "run-1")] * 2
+    assert all(r.call.agent_id == "agent-7" for r in world.audit.records)
+
+
+async def test_agent_id_defaults_to_none(factory):
+    sc = next(s for s in SCENARIOS if s["id"] == "single_tool")
+    _, world = await run_scenario(factory, sc)
+    assert world.checker.calls[0].agent_id is None
+
+
+def test_tool_spec_label_falls_back_to_name():
+    from contracts.harness import Denial, ToolSpec
+
+    assert ToolSpec("send_email", "d").label == "send_email"
+    assert ToolSpec("send_email", "d", display_name="메일 발송").label == "메일 발송"
+    assert Denial("c1", "send_email", "deny", "r").label == "send_email"
+    assert Denial("c1", "send_email", "deny", "r", "메일 발송").label == "메일 발송"
+
+
+async def test_denial_carries_display_name(factory):
+    sc = next(s for s in SCENARIOS if s["id"] == "ask_timeout")
+    sc = {**sc, "tools": [{**sc["tools"][0], "display_name": "메일 발송"}]}
+    result, _ = await run_scenario(factory, sc)
+    assert result.denial is not None and result.denial.display_name == "메일 발송"
+
+
+def test_message_round_trips_through_dict():
+    from contracts.harness import LLMToolCall
+
+    msgs = [
+        Message("system", "sys"),
+        Message("assistant", "", (LLMToolCall("c1", "search", {"q": "휴가", "n": [1, 2]}),)),
+        Message("tool", "결과", tool_call_id="c1"),
+    ]
+    assert [Message.from_dict(m.to_dict()) for m in msgs] == msgs

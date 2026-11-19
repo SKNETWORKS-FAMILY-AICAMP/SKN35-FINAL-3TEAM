@@ -10,7 +10,14 @@ from pathlib import Path
 
 import pytest
 
-from contracts.permission import Decision, PermissionChecker, PolicyRule, Principal, ToolCall
+from contracts.permission import (
+    Condition,
+    Decision,
+    PermissionChecker,
+    PolicyRule,
+    Principal,
+    ToolCall,
+)
 from tests.implementations import CHECKER_IMPLS, impl_ids, load_factory
 
 FIXTURE = Path(__file__).parent.parent / "data/fixtures/permission_scenarios.json"
@@ -49,6 +56,62 @@ async def test_case(checker, case):
     assert result.rule_id == case["rule_id"]
     if result.decision != Decision.ALLOW:
         assert result.reason, "DENY/ASK 인데 reason 이 비어 있음"
+
+
+# ── ABAC ────────────────────────────────────────────────
+
+ABAC_FIXTURE = Path(__file__).parent.parent / "data/fixtures/permission_abac_scenarios.json"
+ABAC = json.loads(ABAC_FIXTURE.read_text(encoding="utf-8"))
+
+
+def to_rule(r: dict) -> PolicyRule:
+    return PolicyRule(
+        id=r["id"],
+        tool=r["tool"],
+        decision=Decision(r["decision"]),
+        roles=tuple(r.get("roles", [])),
+        reason=r.get("reason", ""),
+        conditions=tuple(
+            Condition(c["attr"], c["op"], c.get("value"), c.get("value_from"))
+            for c in r.get("conditions", [])
+        ),
+    )
+
+
+ABAC_RULES = [to_rule(r) for r in ABAC["rules"]]
+
+
+@pytest.fixture(params=impl_ids("CHECKER_IMPLS", CHECKER_IMPLS))
+def checker_factory(request):
+    return load_factory(request.param)
+
+
+@pytest.mark.parametrize("case", ABAC["cases"], ids=[c["id"] for c in ABAC["cases"]])
+async def test_abac_case(checker_factory, case):
+    checker = checker_factory(rules=ABAC_RULES, default=Decision(ABAC["default"]))
+    principal = Principal("tester", tuple(case["roles"]), dict(case["attributes"]))
+    result = await checker.check(ToolCall("c1", case["tool"], case["args"], principal, "session-1"))
+    assert result.decision == Decision(case["decision"])
+    assert result.rule_id == case["rule_id"]
+    if result.decision != Decision.ALLOW:
+        assert result.reason, "DENY/ASK 인데 reason 이 비어 있음"
+
+
+@pytest.mark.parametrize("case", ABAC["op_cases"], ids=[c["id"] for c in ABAC["op_cases"]])
+async def test_condition_op(checker_factory, case):
+    rule = PolicyRule(
+        id="r", tool="*", decision=Decision.ALLOW,
+        conditions=(Condition("principal.x", case["op"], case["value"]),),
+    )
+    checker = checker_factory(rules=[rule], default=Decision.DENY)
+    attrs = {} if case["attr_value"] is None else {"x": case["attr_value"]}
+    result = await checker.check(ToolCall("c1", "any", {}, Principal("tester", (), attrs), "session-1"))
+    assert (result.decision == Decision.ALLOW) is case["matches"]
+
+
+async def test_principal_still_hashable():
+    p = Principal("u", ("member",), {"department_id": 1})
+    assert hash(p) == hash(Principal("u", ("member",), {"department_id": 2}))
 
 
 @pytest.mark.parametrize("default", list(Decision))
