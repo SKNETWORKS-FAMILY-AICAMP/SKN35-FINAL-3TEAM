@@ -8,6 +8,7 @@ __pycache__/
 *.pyc
 # pytest 캐시 
 .pytest_cache/ 
+
 # 환경변수 및 비밀정보 
 .env 
 .env.* 
@@ -47,3 +48,6 @@ media/
 
 .cache/
 .env_old
+
+# 미업로드 파일
+*.txt

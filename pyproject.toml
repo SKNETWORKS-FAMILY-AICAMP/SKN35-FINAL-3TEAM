@@ -5,3 +5,31 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []
+
+# ── uv workspace ──────────────────────────────────────────
+# 새 패키지(MCP 서버 등)를 추가하면 members에 경로를 적는다.
+[tool.uv.workspace]
+members = [
+    "mcp-servers/gmail",
+]
+
+[tool.uv.sources]
+gmail-mcp = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "gmail-mcp",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pyyaml>=6.0",  # manifest.yaml 계약 테스트
+]
+
+# ── pytest ────────────────────────────────────────────────
+# 패키지마다 tests/ 폴더가 생길 수 있으므로 importlib 모드로 이름 충돌을 피한다.
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = [
+    "mcp-servers",
+]
