@@ -12,6 +12,18 @@ from typing import Any
 
 from contracts.permission import AuditRecord
 
+MAX_STR = 500  # 인자 값이 길면(예: 메일 본문) 감사 로그에는 앞부분만 남긴다
+
+
+def clip(v: Any) -> Any:
+    if isinstance(v, str) and len(v) > MAX_STR:
+        return v[:MAX_STR] + f"…(+{len(v) - MAX_STR} chars)"
+    if isinstance(v, dict):
+        return {k: clip(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [clip(x) for x in v]
+    return v
+
 
 def to_dict(record: AuditRecord) -> dict[str, Any]:
     call = record.call
@@ -24,13 +36,14 @@ def to_dict(record: AuditRecord) -> dict[str, Any]:
         "agent_id": call.agent_id,
         "run_id": call.run_id,
         "tool_name": call.tool_name,
-        "arguments": call.arguments,
+        "arguments": clip(call.arguments),
         "principal_snapshot": {"user_id": p.user_id, "roles": list(p.roles), **p.attributes},
         "decision": record.result.decision.value,
         "reason": record.result.reason,
         "rule_id": record.result.rule_id,
         "approval": record.approval,
         "executed": record.executed,
+        "tool_ok": record.tool_ok,
     }
 
 

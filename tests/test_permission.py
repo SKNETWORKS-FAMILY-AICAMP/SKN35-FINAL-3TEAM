@@ -1,4 +1,4 @@
-"""permission.son 전용 테스트 (정책 로더·감사 로그·승인). 계약 테스트는 test_permission_contract.py."""
+"""permission 구현 테스트 (정책 로더·감사 로그·승인). 계약 테스트는 test_permission_contract.py."""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ from pathlib import Path
 import pytest
 
 from contracts.permission import AuditRecord, Decision, PermissionResult, Principal, ToolCall
-from permission.son import create_checker
-from permission.son.approval import FutureApprovalHandler
-from permission.son.audit import JsonlAuditLogger
-from permission.son.policy import PolicyError, load_policy, parse_policy
+from permission import create_checker
+from permission.approval import FutureApprovalHandler
+from permission.audit import JsonlAuditLogger
+from permission.policy import PolicyError, load_policy, parse_policy
 
 ROOT = Path(__file__).parent.parent
 
@@ -115,3 +115,18 @@ async def test_approval_on_request_callback_sees_pending():
     handler = FutureApprovalHandler(timeout_seconds=5, on_request=notify)
     assert await handler.request_approval(call(call_id="c9"), PermissionResult(Decision.ASK, "x")) == "rejected"
     assert seen == ["c9"]
+
+
+def test_audit_clips_long_arguments():
+    from permission.audit import to_dict
+
+    args = {"body": "가" * 600, "to": ["a@b.c"], "nested": {"x": "y" * 501}}
+    rec = AuditRecord(
+        call(tool="send_email", args=args),
+        PermissionResult(Decision.ALLOW), executed=True, tool_ok=True,
+    )
+    row = to_dict(rec)
+    assert row["arguments"]["body"] == "가" * 500 + "…(+100 chars)"
+    assert row["arguments"]["nested"]["x"].endswith("…(+1 chars)") and row["arguments"]["to"] == ["a@b.c"]
+    assert row["tool_ok"] is True
+    assert len(rec.call.arguments["body"]) == 600  # 원본은 그대로

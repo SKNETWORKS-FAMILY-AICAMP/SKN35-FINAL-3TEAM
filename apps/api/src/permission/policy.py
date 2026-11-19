@@ -24,7 +24,7 @@ from typing import Any
 import yaml
 
 from contracts.permission import Condition, Decision, PolicyRule
-from permission.son.checker import validate_rules
+from permission.checker import validate_rules
 
 _RULE_KEYS = {"id", "tool", "decision", "roles", "reason", "conditions"}
 _COND_KEYS = {"attr", "op", "value", "value_from"}

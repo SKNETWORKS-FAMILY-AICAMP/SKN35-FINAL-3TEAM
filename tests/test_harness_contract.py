@@ -1,7 +1,7 @@
 """하네스 공통 테스트: 모든 구현 × 모든 시나리오.
 
 실행:  uv run pytest tests/test_harness_contract.py -v
-특정 구현만:  HARNESS_IMPLS=harness.son:create_harness uv run pytest ...
+특정 구현만:  HARNESS_IMPLS=harness:create_harness uv run pytest ...
 """
 
 from __future__ import annotations
@@ -104,6 +104,7 @@ async def test_scenario(factory, sc):
                 "decision": r.result.decision.value,
                 "approval": r.approval,
                 "executed": r.executed,
+                "tool_ok": r.tool_ok,
             }
             for r in world.audit.records
         ]

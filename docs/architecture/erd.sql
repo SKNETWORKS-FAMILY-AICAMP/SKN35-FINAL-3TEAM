@@ -113,6 +113,7 @@ CREATE TABLE `audit_log` (
 	`rule_id`	VARCHAR(100)	NULL	COMMENT '매칭된 규칙 ID (없으면 기본값)',
 	`approval`	VARCHAR(20)	NULL	COMMENT 'ASK 일 때 승인 결과 (approved, rejected, timeout)',
 	`executed`	BOOLEAN	NOT NULL	DEFAULT FALSE	COMMENT '실행 여부',
+	`tool_ok`	BOOLEAN	NULL	COMMENT '실행했을 때 툴 성공 여부 (실행 안 했으면 NULL)',
 	`ts`	DATETIME	NOT NULL	DEFAULT CURRENT_TIMESTAMP	COMMENT '판정 시각 (UTC)'
 );
 

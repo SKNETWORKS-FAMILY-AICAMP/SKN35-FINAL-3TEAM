@@ -136,7 +136,8 @@ class ToolRegistry(Protocol):
 # 4. DENY, 또는 ASK 인데 승인되지 않았으면(rejected·timeout) PermissionResult.reason 을
 #    툴 메시지 content 에 포함한다. AuditRecord.approval 에는 ApprovalHandler 가 돌려준 값을 그대로 넣는다.
 # 5. Tool.run() 이 예외를 던져도 run 이 죽으면 안 된다. 에러를 툴 메시지로 돌려준다.
-#    (이때 AuditRecord.executed 는 True: "run() 을 호출했는가" 의 의미)
+#    (이때 AuditRecord.executed 는 True: "run() 을 호출했는가" 의 의미, tool_ok 는 False)
+#    AuditRecord.tool_ok: 실행했으면 ToolResult.ok (예외·시간 초과는 False), 실행 안 했으면 None.
 # 6. 한 응답 안의 tool_call 들은 요청 순서대로 하나씩 처리한다 (병렬 X).
 #    툴 메시지·감사 로그 순서가 tool_calls 순서와 같아야 한다.
 # 7. run() 의 agent_id / run_id 는 그 run 에서 만드는 모든 ToolCall 에 그대로 넣는다.

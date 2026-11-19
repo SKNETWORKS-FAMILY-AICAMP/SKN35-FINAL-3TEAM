@@ -93,6 +93,7 @@ class AuditRecord:
     result: PermissionResult
     approval: ApprovalOutcome | None = None  # ASK 였을 때 승인 결과, 그 외엔 None
     executed: bool = False
+    tool_ok: bool | None = None  # executed 일 때 툴이 성공(ToolResult.ok)했는지. 실행 안 했으면 None
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 

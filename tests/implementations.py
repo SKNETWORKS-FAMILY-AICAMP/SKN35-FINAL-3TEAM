@@ -6,7 +6,7 @@
 
 아직 패키지가 없으면 해당 구현의 테스트는 skip 된다.
 환경변수로 덮어쓸 수도 있다 (쉼표 구분):
-  HARNESS_IMPLS=harness.son:create_harness pytest
+  HARNESS_IMPLS=harness:create_harness pytest
 """
 
 from __future__ import annotations
@@ -20,13 +20,11 @@ import pytest
 
 # 구현 담당별 패키지 (브랜치 이름과 같게)
 HARNESS_IMPLS = [
-    "harness.son:create_harness",
-    "harness.dy:create_harness",
+    "harness:create_harness",  # 하네스 구현은 하나로 합쳤다 (apps/api/src/harness)
 ]
 
 CHECKER_IMPLS = [
-    "permission.son:create_checker",
-    "permission.dy:create_checker",
+    "permission:create_checker",  # 권한 구현은 하나로 합쳤다 (apps/api/src/permission)
 ]
 
 

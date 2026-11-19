@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 
 from contracts.permission import Principal
 from routers.deps import current_user, get_services
+from services import agents as agent_rules
+from services.agents import Agent
 from services.chat import send_message
 from services.container import AppServices
 
@@ -17,8 +19,12 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 
 class ChatRequest(BaseModel):
+    # Swagger 예시에 session_id 를 넣지 않는다 ("string" 이 그대로 가면 404)
+    model_config = {"json_schema_extra": {"examples": [{"content": "123 곱하기 45 계산해줘"}]}}
+
     content: str = Field(min_length=1, max_length=4000)
     session_id: str | None = None  # 없으면 새 세션
+    agent_id: str | None = None  # 새 세션을 열 때 쓸 에이전트 (없으면 기본 에이전트). 이어 쓸 때는 무시
 
 
 class ToolEventOut(BaseModel):
@@ -58,6 +64,20 @@ class MessageOut(BaseModel):
     tool_call_id: str | None = None
 
 
+def usable_agent(svc: AppServices, user: Principal, agent_id: str | None, existing: bool = False) -> Agent | None:
+    """채팅에 쓸 에이전트. 매 요청마다 다시 검사한다 (그사이 비활성화·공유 해제될 수 있다)."""
+    if agent_id is None:
+        return None
+    agent = svc.agents.get(agent_id)
+    if agent is None or not agent_rules.can_view(user, agent):
+        if existing:
+            raise HTTPException(409, "이 대화의 에이전트가 삭제됐거나 더 이상 쓸 수 없습니다")
+        raise HTTPException(404, "에이전트를 찾을 수 없습니다")
+    if not agent_rules.can_use(user, agent):
+        raise HTTPException(409, "비활성화된 에이전트입니다")
+    return agent
+
+
 @router.post("/messages", response_model=ChatResponse)
 async def post_message(
     req: ChatRequest,
@@ -65,13 +85,15 @@ async def post_message(
     svc: AppServices = Depends(get_services),
 ) -> ChatResponse:
     if req.session_id is None:
-        session = svc.sessions.create(user.user_id)
+        agent = usable_agent(svc, user, req.agent_id)
+        session = svc.sessions.create(user.user_id, agent.agent_id if agent else None)
     else:
         session = svc.sessions.get_owned(req.session_id, user.user_id)
         if session is None:
             raise HTTPException(404, "세션을 찾을 수 없습니다")
+        agent = usable_agent(svc, user, session.agent_id, existing=True)
     try:
-        turn = await send_message(svc, user, session, req.content)
+        turn = await send_message(svc, user, session, req.content, agent)
     except (APITimeoutError, APIConnectionError, APIError) as e:  # NFR-06: LLM 장애는 사용자에게 알린다
         log.warning("LLM 호출 실패: %s", e)
         raise HTTPException(502, "LLM 서버 응답이 없습니다. 잠시 후 다시 시도해 주세요.") from e

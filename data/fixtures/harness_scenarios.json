@@ -7,7 +7,7 @@
     "approval": "ASK 일 때 가짜 승인자가 돌려줄 ApprovalOutcome: approved | rejected | timeout.",
     "expected.executed": "Tool.run() 이 호출된 툴 이름 순서. 생략하면 검사 안 함.",
     "expected.tool_messages": "LLM 에게 돌려준 role=tool 메시지 검사. contains 는 content 에 포함돼야 할 문자열.",
-    "expected.audit": "AuditLogger 에 남아야 할 기록 (call_id 순서대로). approval 은 AuditRecord.approval. 생략하면 검사 안 함.",
+    "expected.audit": "AuditLogger 에 남아야 할 기록 (call_id 순서대로). approval 은 AuditRecord.approval, tool_ok 는 실행했을 때 툴 성공 여부. 생략하면 검사 안 함.",
     "expected.approval_requests": "ApprovalHandler 가 받은 call_id 목록.",
     "expected.final_contains": "final_message.content 에 포함돼야 할 문자열 (final_content 대신, 고정 문구라 구현마다 다를 때).",
     "expected.denial": "RunResult.denial 의 kind (deny | rejected | timeout) / tool_name.",
@@ -86,7 +86,8 @@
             "call_id": "c1",
             "decision": "allow",
             "approval": null,
-            "executed": true
+            "executed": true,
+            "tool_ok": true
           }
         ],
         "approval_requests": []
@@ -153,13 +154,15 @@
             "call_id": "c1",
             "decision": "allow",
             "approval": null,
-            "executed": true
+            "executed": true,
+            "tool_ok": true
           },
           {
             "call_id": "c2",
             "decision": "allow",
             "approval": null,
-            "executed": true
+            "executed": true,
+            "tool_ok": true
           }
         ],
         "approval_requests": []
@@ -207,7 +210,8 @@
             "call_id": "c1",
             "decision": "deny",
             "approval": null,
-            "executed": false
+            "executed": false,
+            "tool_ok": null
           }
         ],
         "approval_requests": [],
@@ -268,7 +272,8 @@
             "call_id": "c1",
             "decision": "ask",
             "approval": "approved",
-            "executed": true
+            "executed": true,
+            "tool_ok": true
           }
         ],
         "approval_requests": [
@@ -319,7 +324,8 @@
             "call_id": "c1",
             "decision": "ask",
             "approval": "rejected",
-            "executed": false
+            "executed": false,
+            "tool_ok": null
           }
         ],
         "approval_requests": [
@@ -375,7 +381,8 @@
             "call_id": "c1",
             "decision": "ask",
             "approval": "timeout",
-            "executed": false
+            "executed": false,
+            "tool_ok": null
           }
         ],
         "approval_requests": [
@@ -442,7 +449,8 @@
             "call_id": "c1",
             "decision": "deny",
             "approval": null,
-            "executed": false
+            "executed": false,
+            "tool_ok": null
           }
         ],
         "approval_requests": [],
@@ -506,13 +514,15 @@
             "call_id": "c1",
             "decision": "allow",
             "approval": null,
-            "executed": true
+            "executed": true,
+            "tool_ok": true
           },
           {
             "call_id": "c2",
             "decision": "deny",
             "approval": null,
-            "executed": false
+            "executed": false,
+            "tool_ok": null
           }
         ],
         "denial": {
@@ -759,7 +769,8 @@
             "call_id": "c1",
             "decision": "allow",
             "approval": null,
-            "executed": true
+            "executed": true,
+            "tool_ok": false
           }
         ],
         "approval_requests": []
