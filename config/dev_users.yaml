@@ -3,13 +3,13 @@
 users:
   - user_id: kim
     roles: [member]
-    attributes: {department_id: 10, position: 사원, security_level: 2}
+    attributes: {dept_id: 10, position: 사원, security_grade: 2}
   - user_id: lee
     roles: [dept_head]
-    attributes: {department_id: 10, position: 팀장, security_level: 3}
+    attributes: {dept_id: 10, position: 팀장, security_grade: 3}
   - user_id: park
     roles: [member]
-    attributes: {department_id: 20, position: 대리, security_level: 2}
+    attributes: {dept_id: 20, position: 대리, security_grade: 2}
   - user_id: admin
     roles: [admin]
-    attributes: {department_id: 1, position: 관리자, security_level: 5}
+    attributes: {dept_id: 1, position: 관리자, security_grade: 5}

@@ -31,8 +31,8 @@ def test_repo_policy_file_loads_and_works():
 async def test_policy_yaml_drives_checker():
     rules, default = load_policy(ROOT / "config/permissions.yaml")
     checker = create_checker(rules=rules, default=default)
-    own = await checker.check(call(args={"department_id": 7}, attrs={"department_id": 7}))
-    other = await checker.check(call(args={"department_id": 8}, attrs={"department_id": 7}))
+    own = await checker.check(call(args={"dept_id": 7}, attrs={"dept_id": 7}))
+    other = await checker.check(call(args={"dept_id": 8}, attrs={"dept_id": 7}))
     assert (own.decision, own.rule_id) == (Decision.ALLOW, "db-own-dept")
     assert (other.decision, other.rule_id) == (Decision.DENY, "db-others")
 
@@ -71,7 +71,7 @@ def test_default_reason_is_filled():
 async def test_jsonl_audit_writes_one_line_per_record(tmp_path):
     path = tmp_path / "logs/audit.jsonl"
     logger = JsonlAuditLogger(path)
-    c = call(args={"department_id": 3}, attrs={"department_id": 3, "security_level": 2})
+    c = call(args={"dept_id": 3}, attrs={"dept_id": 3, "security_grade": 2})
     await asyncio.gather(*[
         logger.log(AuditRecord(c, PermissionResult(Decision.ALLOW, rule_id="r"), executed=True))
         for _ in range(20)
@@ -80,7 +80,7 @@ async def test_jsonl_audit_writes_one_line_per_record(tmp_path):
     assert len(lines) == 20
     row = json.loads(lines[0])
     assert row["decision"] == "allow" and row["executed"] is True and row["rule_id"] == "r"
-    assert row["principal_snapshot"] == {"user_id": "u1", "roles": ["member"], "department_id": 3, "security_level": 2}
+    assert row["principal_snapshot"] == {"user_id": "u1", "roles": ["member"], "dept_id": 3, "security_grade": 2}
     assert row["ts"].endswith("+00:00")  # UTC
 
 

@@ -18,12 +18,12 @@ from tests.fakes import ScriptedLLM
 from tools.arithmetic import arithmetic_tools
 from tools.registry import SimpleToolRegistry
 
-KIM = Principal("kim", ("member",), {"department_id": 10})  # 만든 사람
-CHOI = Principal("choi", ("member",), {"department_id": 10})  # 같은 부서 동료
-LEE = Principal("lee", ("dept_head",), {"department_id": 10})  # kim 의 부서장
-HAN = Principal("han", ("dept_head",), {"department_id": 20})  # 다른 부서 부서장
-PARK = Principal("park", ("member",), {"department_id": 20})  # 다른 부서
-ADMIN = Principal("admin", ("admin",), {"department_id": 1})
+KIM = Principal("kim", ("member",), {"dept_id": 10})  # 만든 사람
+CHOI = Principal("choi", ("member",), {"dept_id": 10})  # 같은 부서 동료
+LEE = Principal("lee", ("dept_head",), {"dept_id": 10})  # kim 의 부서장
+HAN = Principal("han", ("dept_head",), {"dept_id": 20})  # 다른 부서 부서장
+PARK = Principal("park", ("member",), {"dept_id": 20})  # 다른 부서
+ADMIN = Principal("admin", ("admin",), {"dept_id": 1})
 USERS = {p.user_id: p for p in (KIM, CHOI, LEE, HAN, PARK, ADMIN)}
 
 

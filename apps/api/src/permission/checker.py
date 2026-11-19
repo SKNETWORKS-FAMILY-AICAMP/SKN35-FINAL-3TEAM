@@ -80,7 +80,7 @@ def validate_rules(rules: Iterable[PolicyRule]) -> None:
 
 
 def resolve(path: str, principal: Principal, args: Mapping[str, Any]) -> Any:
-    """'principal.department_id' / 'args.target.id' 경로의 값. 없으면 _MISSING."""
+    """'principal.dept_id' / 'args.target.id' 경로의 값. 없으면 _MISSING."""
     root, _, rest = path.partition(".")
     keys = rest.split(".")
     if root == "principal":
