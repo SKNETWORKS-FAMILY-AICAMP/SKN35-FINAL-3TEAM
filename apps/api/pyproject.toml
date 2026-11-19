@@ -5,9 +5,16 @@ description = "규제 산업용 사내 설치형 AI 에이전트 플랫폼 — A
 requires-python = ">=3.12"
 dependencies = [
     # knowledge/ingestion: 문서 판별(router)·파싱. Docling 내부 함수(text_quality, docling-parse 백엔드)를 쓰므로 버전 고정.
-    # docling-parse·olefile은 docling과 함께 설치된다.
-    "docling==2.150.1",
+    # docling-parse·olefile·pypdfium2·lxml 은 docling 과 함께 설치된다. rapidocr(+onnxruntime)는 한국어 OCR.
+    "docling[rapidocr]==2.150.1",
+    # parsers: 후처리가 DoclingDocument 표·칸 구조를 직접 고치므로 docling-core 도 고정. pypdf 는 PDF 만든 프로그램(한컴) 판별.
+    "docling-core==2.107.0",
+    "pypdf==7.1.0",
 ]
+
+[project.optional-dependencies]
+# 바이너리 HWP 읽기. 없으면 HWP 는 '미설치' 이유와 함께 failed 로 돌려준다 (HWPX·PDF 등은 영향 없음).
+hwp = ["syhwp==0.0.8"]
 
 [dependency-groups]
 dev = [
