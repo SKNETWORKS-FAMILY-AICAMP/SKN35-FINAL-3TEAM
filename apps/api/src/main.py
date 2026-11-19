@@ -1,9 +1,35 @@
+"""FastAPI 앱.
+
+실행 (저장소 루트에서):
+    uv run python -m uvicorn main:app --app-dir apps/api/src --reload
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
-from apps.api.src.routers.chat import router as chat_router
 
-app = FastAPI(title="Team Agent API")
-app.include_router(chat_router)
+from routers import approvals, chat
+from services.container import AppServices, build_from_env
 
-@app.get("/health")
-def health():
-    return {"status" : "ok"}
+
+def create_app(build: Callable[[], AppServices] = build_from_env) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        app.state.services = build()
+        yield
+
+    app = FastAPI(title="Team Agent API", lifespan=lifespan)
+    app.include_router(chat.router)
+    app.include_router(approvals.router)
+
+    @app.get("/health")
+    async def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    return app
+
+
+app = create_app()
