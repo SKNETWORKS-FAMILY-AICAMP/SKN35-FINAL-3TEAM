@@ -20,7 +20,8 @@ from services.users import UserDirectory
 from tools.arithmetic import arithmetic_tools
 from tools.registry import SimpleToolRegistry
 from tools.search_doc import SearchDocumentsTool, search_chunks
-from tools.read_doc import can_read_chunk, load_doc_chunks
+from tools.read_doc import can_read_chunk, load_doc_chunks , ReadDocumentTool
+from tools.today import TodayTool
 
 DEFAULT_SYSTEM_PROMPT = (
     "너는 사내 업무를 돕는 에이전트다. 한국어로 간결하게 답한다. "
@@ -63,7 +64,7 @@ def build_from_env() -> AppServices:
     document_path = repository_root / "data" / "fixtures" / "document_chunks.json"
     return AppServices(
         llm=llm_from_env(),
-        tools=SimpleToolRegistry(arithmetic_tools() + [SearchDocumentsTool(document_path),]),
+        tools=SimpleToolRegistry(arithmetic_tools() + [SearchDocumentsTool(document_path), ReadDocumentTool(document_path),TodayTool(),]),
         checker=create_checker(rules=rules, default=default),
         approvals=FutureApprovalHandler(float(env("PERMISSION_APPROVAL_TIMEOUT_SECONDS", "120"))),
         audit=JsonlAuditLogger(env("PERMISSION_AUDIT_LOG_PATH", "logs/permission_audit.jsonl")),

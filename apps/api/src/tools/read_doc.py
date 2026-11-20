@@ -1,4 +1,5 @@
 import json
+import asyncio
 from pathlib import Path
 from contracts.permission import Principal
 from contracts.harness import ToolSpec, ToolResult
@@ -40,7 +41,7 @@ READ_DOC_SPEC = ToolSpec(
     display_name="문서 원문 열람",
     description="검색 결과의 chunk_id로 열람 가능한 문단 원문을 가져옵니다.",
     parameters={
-        "type" : object,
+        "type" : "object",
         "properties" : {
             "chunk_id" : {
                 "type" : "string",
@@ -66,5 +67,39 @@ class ReadDocumentTool:
     def __init__(self, doc_path:Path)->None:
         self.document_path = doc_path
 
-    # async def run(self, call : ToolCall) -> ToolResult:
-        
+    async def run(self, call : ToolCall) -> ToolResult:
+        chunk_id = call.arguments.get("chunk_id")
+
+        if not isinstance(chunk_id, str):
+            return ToolResult(call.call_id, False, "문단 ID를 문자열로 입력해 주세요.",)
+
+        chunk_id = chunk_id.strip()
+        if not chunk_id:
+            return ToolResult(call.call_id, False,"문단 ID를 입력해 주세요.")
+
+        try:
+            chunks = await asyncio.to_thread(
+                load_doc_chunks,
+                self.document_path,
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return ToolResult(call.call_id, False, "문서 목록을 읽을 수 없습니다.")
+
+        chunk = find_readable_chunk(chunks, chunk_id, call.principal)
+        if chunk is None:
+            return ToolResult(call.call_id, False, "문단을 찾을 수 없습니다.")
+
+        payload = {
+            "doc_id": chunk["doc_id"],
+            "chunk_id": chunk["chunk_id"],
+            "title": chunk["title"],
+            "location": chunk["location"],
+            "text": chunk["text"],
+        }
+
+        return ToolResult(
+            call.call_id,
+            True,
+            json.dumps(payload, ensure_ascii=False),
+            data=payload,
+        )

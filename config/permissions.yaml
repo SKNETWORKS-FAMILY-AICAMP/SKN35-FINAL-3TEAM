@@ -55,3 +55,11 @@ rules:
     tool: delete_file
     decision: deny
     reason: 파일 삭제는 보안등급 3 이상 부서장만 가능합니다
+
+  - id: read-document-chunk
+    tool: get_doc_chunk
+    decision: allow
+
+  - id : today
+    tool : today
+    decision : allow
