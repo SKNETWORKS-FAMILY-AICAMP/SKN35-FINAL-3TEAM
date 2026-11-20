@@ -1,0 +1,66 @@
+# 권한 정책 (ABAC). 형식은 apps/api/src/permission/policy.py 참고.
+# 위에서부터 처음 맞는 규칙이 이긴다. 맞는 규칙이 없으면 default.
+# 예시 규칙이다. MVP 툴 목록과 위험도가 정해지면 바꾼다.
+
+default: ask
+
+rules:
+  - id: admin-all
+    tool: "*"
+    decision: allow
+    roles: [admin]
+
+  # 데모용 사칙연산 툴
+  - id: arithmetic
+    tool: add
+    decision: allow
+  - id: arithmetic-subtract
+    tool: subtract
+    decision: allow
+  - id: arithmetic-multiply
+    tool: multiply
+    decision: allow
+
+  # 문서 검색은 누구나. 권한 필터(scope·보안등급)는 검색 툴 안에서 강제한다 (SYS-03).
+  - id: search-documents
+    tool: search_doc
+    decision: allow
+
+  # 자기 부서 데이터만 조회
+  - id: db-own-dept
+    tool: query_db
+    decision: allow
+    conditions:
+      - {attr: args.dept_id, op: eq, value_from: principal.dept_id}
+  - id: db-others
+    tool: query_db
+    decision: deny
+    reason: 다른 부서 데이터는 조회할 수 없습니다
+
+  # 외부로 나가는 메일은 사용자 확인
+  - id: email-confirm
+    tool: send_email
+    decision: ask
+    reason: 메일이 발송됩니다
+
+  # 삭제는 보안등급 3 이상 부서장만, 그 외 거부
+  - id: delete-dept-head
+    tool: delete_file
+    decision: ask
+    roles: [dept_head]
+    reason: 파일을 삭제합니다
+    conditions:
+      - {attr: principal.security_grade, op: gte, value: 3}
+  - id: delete-others
+    tool: delete_file
+    decision: deny
+    reason: 파일 삭제는 보안등급 3 이상 부서장만 가능합니다
+
+  # 문서 원문 열람: 검색과 같은 필터를 툴 안에서 다시 적용한다
+  - id: read-document-chunk
+    tool: get_doc_chunk
+    decision: allow
+
+  - id: today
+    tool: today
+    decision: allow
