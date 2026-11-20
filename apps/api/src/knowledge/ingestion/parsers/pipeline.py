@@ -277,8 +277,9 @@ class DocumentParser:
 
 # ------------------------------------------------------------------ 항목 목록 (청킹용)
 def _elements(doc, sources: dict, default_table_source: str) -> list[dict]:
-    """DoclingDocument → [{type, text, page, pages, bbox(l,t,r,b 왼쪽 위 원점), heading_path, (표면) table}] 읽는 순서대로."""
-    from docling_core.types.doc import PictureItem, SectionHeaderItem, TableItem, TextItem, TitleItem
+    """DoclingDocument → [{type, text, page, pages, bbox(l,t,r,b 왼쪽 위 원점), heading_path, (표면) table, (목록 항목이면) marker}] 읽는 순서대로.
+    청킹용 필드 2개: marker = 목록 항목의 번호("1.", "가." 등, PDF에서 본문과 따로 나옴), 표 칸의 h = Docling이 머리행으로 본 칸."""
+    from docling_core.types.doc import ListItem, PictureItem, SectionHeaderItem, TableItem, TextItem, TitleItem
 
     out, path = [], []                             # path: [(단계, 제목)]
     for it, _ in doc.iterate_items():
