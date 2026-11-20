@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from contracts.harness import LLMClient
 from contracts.permission import AuditLogger, Decision, PermissionChecker
@@ -17,7 +18,12 @@ from services.agents import InMemoryAgentStore, InMemoryShareRequestStore
 from services.sessions import InMemorySessionStore
 from services.users import UserDirectory
 from tools.arithmetic import arithmetic_tools
+from tools.read_doc import ReadDocumentTool
 from tools.registry import SimpleToolRegistry
+from tools.search_doc import SearchDocumentsTool
+from tools.today import TodayTool
+
+REPO_ROOT = Path(__file__).resolve().parents[4]
 
 DEFAULT_SYSTEM_PROMPT = (
     "너는 사내 업무를 돕는 에이전트다. 한국어로 간결하게 답한다. "
@@ -51,6 +57,12 @@ def llm_from_env() -> LLMClient:
     return OpenAICompatLLM.from_env()
 
 
+def build_tools(document_path: str | Path) -> list:
+    """관리자가 등록한 툴 목록. 에이전트는 이 중에서 고른다 (MCP 연결 전까지는 코드로 등록)."""
+    doc = Path(document_path)
+    return [*arithmetic_tools(), SearchDocumentsTool(doc), ReadDocumentTool(doc), TodayTool()]
+
+
 def build_from_env() -> AppServices:
     env = os.environ.get
     rules, default = load_policy(
@@ -59,7 +71,7 @@ def build_from_env() -> AppServices:
     )
     return AppServices(
         llm=llm_from_env(),
-        tools=SimpleToolRegistry(arithmetic_tools()),
+        tools=SimpleToolRegistry(build_tools(env("DOCUMENT_CHUNKS_PATH", str(REPO_ROOT / "data/fixtures/document_chunks.json")))),
         checker=create_checker(rules=rules, default=default),
         approvals=FutureApprovalHandler(float(env("PERMISSION_APPROVAL_TIMEOUT_SECONDS", "120"))),
         audit=JsonlAuditLogger(env("PERMISSION_AUDIT_LOG_PATH", "logs/permission_audit.jsonl")),
