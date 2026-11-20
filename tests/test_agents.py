@@ -295,3 +295,47 @@ async def test_shared_or_pending_agent_cannot_be_edited(tmp_path):
     await client.post(f"{url}/unshare", headers=h(KIM))
     r = await client.patch(url, json={"system_prompt": "고친 역할"}, headers=h(KIM))
     assert r.status_code == 200 and r.json()["can_edit"] is True
+
+
+# ── 자연어 초안 ─────────────────────────────────────────────
+
+async def test_draft_uses_llm_json_and_drops_unknown_tools(tmp_path):
+    reply = '```json\n{"name": "덧셈봇", "description": "더해 준다", "system_prompt": "덧셈만 한다.", "tools": ["add", "send_rocket", "add"]}\n```'
+    client, svc = make([{"content": reply}], tmp_path)
+    r = await client.post("/api/agents/draft", json={"description": "숫자 더해 주는 에이전트"}, headers=h(KIM))
+    d = r.json()
+    assert r.status_code == 200
+    assert (d["name"], d["tools"], d["dropped_tools"], d["source"]) == ("덧셈봇", ["add"], ["send_rocket"], "llm")
+    messages, tools = svc.llm.calls[0]
+    assert tools == [] and "add (덧셈)" in messages[0].content
+    assert (await client.get("/api/agents", headers=h(KIM))).json() == []  # 저장하지 않는다
+
+
+async def test_draft_retries_once_then_falls_back(tmp_path):
+    client, svc = make([{"content": "음... 이렇게 하면 될 것 같아요"}, {"content": '{"name": "곱셈봇", "system_prompt": "곱한다", "tools": ["multiply"]}'}], tmp_path)
+    d = (await client.post("/api/agents/draft", json={"description": "곱해 주는 에이전트"}, headers=h(KIM))).json()
+    assert d["name"] == "곱셈봇" and d["source"] == "llm" and len(svc.llm.calls) == 2
+
+    client, _ = make([{"content": "몰라요"}, {"content": "{깨진"}], tmp_path)
+    d = (await client.post("/api/agents/draft", json={"description": "덧셈 해주는 에이전트 만들어 줘"}, headers=h(KIM))).json()
+    assert d["source"] == "fallback" and d["name"] == "덧셈 해주는" and d["tools"] == ["add"]
+
+
+async def test_draft_llm_outage_is_502(tmp_path):
+    from openai import APIConnectionError
+
+    class Down:
+        async def chat(self, messages, tools):
+            raise APIConnectionError(request=httpx.Request("POST", "http://llm"))
+
+    client, svc = make(tmp_path=tmp_path)
+    svc.llm = Down()
+    r = await client.post("/api/agents/draft", json={"description": "아무거나"}, headers=h(KIM))
+    assert r.status_code == 502
+
+
+def test_draft_instruction_keeps_tool_names_out_of_prompt():
+    from services.agent_draft import SYSTEM
+
+    assert "툴 이름(영문 name)" in SYSTEM and "쉬운 말" in SYSTEM
+
