@@ -8,6 +8,7 @@ __pycache__/
 *.pyc
 # pytest 캐시 
 .pytest_cache/ 
+
 # 환경변수 및 비밀정보 
 .env 
 .env.* 
@@ -47,3 +48,15 @@ media/
 
 .cache/
 .env_old
+# 런타임 로그 (감사 로그 등)
+logs/
+
+# 미업로드 파일
+presentations/
+runbooks/
+
+# 로컬 PostgreSQL 데이터 폴더
+data/pgdata/
+
+# 업로드 문서와 파싱 결과 (사용자 문서라 git 에 넣지 않는다)
+data/uploads/

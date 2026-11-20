@@ -1,0 +1,27 @@
+{
+  "_doc": {
+    "설명": "권한 체커 공통 시나리오. rules 는 contracts.permission.PolicyRule 형식, 위에서부터 처음 맞는 규칙이 이긴다.",
+    "cases": "tool + roles 로 check() 했을 때 나와야 할 decision 과 rule_id (null 이면 기본값 적용)."
+  },
+  "rules": [
+    {"id": "admin-all", "tool": "*", "decision": "allow", "roles": ["admin"]},
+    {"id": "no-delete", "tool": "delete_file", "decision": "deny", "reason": "파일 삭제는 관리자만 가능"},
+    {"id": "email-confirm", "tool": "send_email", "decision": "ask", "reason": "외부로 메일이 나갑니다"},
+    {"id": "search-ok", "tool": "search", "decision": "allow"},
+    {"id": "db-analyst", "tool": "query_db", "decision": "allow", "roles": ["analyst", "dev"]},
+    {"id": "db-others", "tool": "query_db", "decision": "deny", "reason": "DB 조회 권한 없음"}
+  ],
+  "default": "ask",
+  "cases": [
+    {"id": "allow_simple", "tool": "search", "roles": ["user"], "decision": "allow", "rule_id": "search-ok"},
+    {"id": "allow_no_roles", "tool": "search", "roles": [], "decision": "allow", "rule_id": "search-ok"},
+    {"id": "deny_for_user", "tool": "delete_file", "roles": ["user"], "decision": "deny", "rule_id": "no-delete"},
+    {"id": "admin_overrides", "tool": "delete_file", "roles": ["admin"], "decision": "allow", "rule_id": "admin-all"},
+    {"id": "admin_wildcard", "tool": "anything", "roles": ["user", "admin"], "decision": "allow", "rule_id": "admin-all"},
+    {"id": "ask_email", "tool": "send_email", "roles": ["user"], "decision": "ask", "rule_id": "email-confirm"},
+    {"id": "role_match", "tool": "query_db", "roles": ["dev"], "decision": "allow", "rule_id": "db-analyst"},
+    {"id": "role_any_of", "tool": "query_db", "roles": ["user", "analyst"], "decision": "allow", "rule_id": "db-analyst"},
+    {"id": "role_fallthrough", "tool": "query_db", "roles": ["user"], "decision": "deny", "rule_id": "db-others"},
+    {"id": "no_match_default", "tool": "weather", "roles": ["user"], "decision": "ask", "rule_id": null}
+  ]
+}

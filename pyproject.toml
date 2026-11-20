@@ -4,4 +4,39 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "fastapi>=0.165.0",
+    "python-multipart>=0.0.20",
+    "openai>=1.50",
+    "pyyaml>=6.0.3",
+    "tzdata>=2026.6",
+    "uvicorn>=0.54.0",
+    "mcp>=2.3,<3",
+    "httpx2>=2.16,<3",
+    # knowledge/ingestion: 문서 판별(router)·파싱. Docling 내부 함수(text_quality, docling-parse 백엔드)를 쓰므로 버전 고정.
+    # docling-parse·olefile·pypdfium2·lxml 은 docling 과 함께 설치된다. rapidocr(+onnxruntime)는 한국어 OCR.
+    "docling[rapidocr]==2.150.1",
+    # parsers: 후처리가 DoclingDocument 표·칸 구조를 직접 고치므로 docling-core 도 고정. pypdf 는 PDF 만든 프로그램(한컴) 판별.
+    "docling-core==2.107.0",
+    "pypdf==7.1.0",
+]
+
+[project.optional-dependencies]
+# 바이너리 HWP 읽기. 없으면 HWP 는 '미설치' 이유와 함께 failed 로 돌려준다 (HWPX·PDF 등은 영향 없음).
+hwp = ["syhwp==0.0.8"]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.5.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "apps/api/src"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.uv.workspace]
+members = ["mcp-servers/gmail"]

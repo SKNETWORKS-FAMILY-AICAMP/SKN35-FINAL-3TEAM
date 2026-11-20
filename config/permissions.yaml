@@ -1,0 +1,96 @@
+# 권한 정책 (ABAC). 형식은 apps/api/src/permission/policy.py 참고.
+# 위에서부터 처음 맞는 규칙이 이긴다. 맞는 규칙이 없으면 default.
+# 예시 규칙이다. MVP 툴 목록과 위험도가 정해지면 바꾼다.
+
+default: ask
+
+rules:
+  # 메일 발송은 관리자도 요청 내용을 확인하고 승인한다.
+  - id: gmail-send-confirm
+    tool: send_mail
+    decision: ask
+    reason: 연결된 본인 메일 계정으로 메일이 발송됩니다. 수신자·제목·본문을 확인해 주세요.
+
+  - id: gmail-search
+    tool: search_mail
+    decision: allow
+
+  - id: gmail-read
+    tool: read_mail
+    decision: allow
+
+  # 등록은 관리자도 기존 승인 흐름을 거친다.
+  - id: review-submit-confirm
+    tool: submit_review_request
+    decision: ask
+    reason: 로컬 가상 심사시스템에 요청이 등록됩니다. 심사 건과 메모를 확인해 주세요.
+
+  # 심사 건 조회. 부서·보안등급 필터는 툴 안에서 강제한다.
+  - id: review-case-read
+    tool: get_review_case
+    decision: allow
+
+  - id: admin-all
+    tool: "*"
+    decision: allow
+    roles: [admin]
+
+  # 데모용 사칙연산 툴
+  - id: arithmetic
+    tool: add
+    decision: allow
+  - id: arithmetic-subtract
+    tool: subtract
+    decision: allow
+  - id: arithmetic-multiply
+    tool: multiply
+    decision: allow
+
+  # 문서 검색은 누구나. 권한 필터(scope·보안등급)는 검색 툴 안에서 강제한다 (SYS-03).
+  - id: search-documents
+    tool: search_doc
+    decision: allow
+
+  # 자기 부서 데이터만 조회
+  - id: db-own-dept
+    tool: query_db
+    decision: allow
+    conditions:
+      - {attr: args.dept_id, op: eq, value_from: principal.dept_id}
+  - id: db-others
+    tool: query_db
+    decision: deny
+    reason: 다른 부서 데이터는 조회할 수 없습니다
+
+  # 외부로 나가는 메일은 사용자 확인
+  - id: email-confirm
+    tool: send_email
+    decision: ask
+    reason: 메일이 발송됩니다
+
+  # 삭제는 보안등급 3 이상 부서장만, 그 외 거부
+  - id: delete-dept-head
+    tool: delete_file
+    decision: ask
+    roles: [dept_head]
+    reason: 파일을 삭제합니다
+    conditions:
+      - {attr: principal.security_grade, op: gte, value: 3}
+  - id: delete-others
+    tool: delete_file
+    decision: deny
+    reason: 파일 삭제는 보안등급 3 이상 부서장만 가능합니다
+
+  # 문서 원문 열람: 검색과 같은 필터를 툴 안에서 다시 적용한다
+  - id: read-document-chunk
+    tool: get_doc_chunk
+    decision: allow
+
+  - id : today
+    tool : today
+    decision : allow
+
+  # 업로드 문서 읽기: 업로드 폴더 안 파일만 읽는다 (경로 제한은 툴 안에서 강제)
+  - id: parse-document
+    tool: parse_document
+    decision: allow
