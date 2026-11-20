@@ -339,3 +339,12 @@ def test_draft_instruction_keeps_tool_names_out_of_prompt():
 
     assert "툴 이름(영문 name)" in SYSTEM and "쉬운 말" in SYSTEM
 
+
+def test_base_prompt_hides_internals_and_comes_first(tmp_path):
+    from services.chat import system_prompt
+    from services.container import DEFAULT_SYSTEM_PROMPT
+
+    assert "chunk_id" in DEFAULT_SYSTEM_PROMPT and "근거:" in DEFAULT_SYSTEM_PROMPT
+    _, svc = make(tmp_path=tmp_path)
+    text = system_prompt(svc, Agent("a", "kim", 10, "규정봇", "get_doc_chunk 툴을 쓰세요"))
+    assert text.index("위 규칙을 따른다") < text.index("규정봇")
