@@ -277,8 +277,9 @@ class DocumentParser:
 
 # ------------------------------------------------------------------ 항목 목록 (청킹용)
 def _elements(doc, sources: dict, default_table_source: str) -> list[dict]:
-    """DoclingDocument → [{type, text, page, pages, bbox(l,t,r,b 왼쪽 위 원점), heading_path, (표면) table}] 읽는 순서대로."""
-    from docling_core.types.doc import PictureItem, SectionHeaderItem, TableItem, TextItem, TitleItem
+    """DoclingDocument → [{type, text, page, pages, bbox(l,t,r,b 왼쪽 위 원점), heading_path, (표면) table, (목록 항목이면) marker}] 읽는 순서대로.
+    청킹용 필드 2개: marker = 목록 항목의 번호("1.", "가." 등, PDF에서 본문과 따로 나옴), 표 칸의 h = Docling이 머리행으로 본 칸."""
+    from docling_core.types.doc import ListItem, PictureItem, SectionHeaderItem, TableItem, TextItem, TitleItem
 
     out, path = [], []                             # path: [(단계, 제목)]
     for it, _ in doc.iterate_items():
@@ -303,12 +304,14 @@ def _elements(doc, sources: dict, default_table_source: str) -> list[dict]:
             el["text"] = " ".join(c.text for c in it.data.table_cells if c.text)
             el["table"] = {"rows": it.data.num_rows, "cols": it.data.num_cols, "source": src.get("source", default_table_source),
                            "cells": [{"r": c.start_row_offset_idx, "c": c.start_col_offset_idx, "rs": c.row_span,
-                                      "cs": c.col_span, "text": c.text} for c in it.data.table_cells],
+                                      "cs": c.col_span, "text": c.text, "h": bool(c.column_header)} for c in it.data.table_cells],
                            "markdown": it.export_to_markdown(doc)}
         elif isinstance(it, PictureItem):
             el["text"] = it.caption_text(doc) if hasattr(it, "caption_text") else ""
         elif isinstance(it, TextItem):
             el["text"] = it.text
+            if isinstance(it, ListItem):
+                el["marker"] = it.marker or ""
         else:
             continue
         out.append(el)
