@@ -5,6 +5,16 @@
 default: ask
 
 rules:
+  # 등록은 관리자도 기존 승인 흐름을 거친다.
+  - id: review-submit-confirm
+    tool: submit_review_request
+    decision: ask
+    reason: 로컬 가상 심사시스템에 요청이 등록됩니다. 심사 건과 메모를 확인해 주세요.
+
+  - id: review-case-read
+    tool: get_review_case
+    decision: allow
+
   - id: admin-all
     tool: "*"
     decision: allow

@@ -22,6 +22,9 @@ from tools.registry import SimpleToolRegistry
 from tools.search_doc import SearchDocumentsTool, search_chunks
 from tools.read_doc import can_read_chunk, load_doc_chunks , ReadDocumentTool
 from tools.today import TodayTool
+from tools.get_review_case import GetReviewCaseTool
+from tools.submit_review_request import SubmitReviewRequestTool
+from tools.review_store import ReviewStore
 
 DEFAULT_SYSTEM_PROMPT = (
     "너는 사내 업무를 돕는 에이전트다. 한국어로 간결하게 답한다. "
@@ -62,9 +65,22 @@ def build_from_env() -> AppServices:
     )
     repository_root = Path(__file__).resolve().parents[4]
     document_path = repository_root / "data" / "fixtures" / "document_chunks.json"
+    holiday_path = repository_root / "data" / "fixtures" / "business_holidays_demo.json"
+    review_store = ReviewStore(
+        repository_root / "data" / "fixtures" / "review_cases.json",
+        Path(env("REVIEW_REQUEST_DB_PATH", str(repository_root / "data" / "review_requests.sqlite3"))),
+    )
     return AppServices(
         llm=llm_from_env(),
-        tools=SimpleToolRegistry(arithmetic_tools() + [SearchDocumentsTool(document_path), ReadDocumentTool(document_path),TodayTool(),]),
+        tools=SimpleToolRegistry(
+            arithmetic_tools() + [
+                SearchDocumentsTool(document_path),
+                ReadDocumentTool(document_path),
+                TodayTool(holiday_path),
+                GetReviewCaseTool(review_store),
+                SubmitReviewRequestTool(review_store),
+            ]
+        ),
         checker=create_checker(rules=rules, default=default),
         approvals=FutureApprovalHandler(float(env("PERMISSION_APPROVAL_TIMEOUT_SECONDS", "120"))),
         audit=JsonlAuditLogger(env("PERMISSION_AUDIT_LOG_PATH", "logs/permission_audit.jsonl")),

@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   ArrowUp, Bot, Calculator, Check, Code2, FileText, LayoutTemplate, ListChecks,
   MessageSquare, Plus, RefreshCw, Settings2, Sparkles, Workflow, Wrench,
@@ -354,7 +356,14 @@ function Workspace({ user, setUser }) {
           {current?.messages.length ? <div className="thread" aria-live="polite">
             {current.messages.map((message, index) => <article className={'message ' + message.role} key={index}>
               <span className="message-label">{message.role === 'user' ? '나' : current.agentName}</span>
-              <div>{message.content}</div><ToolEvents events={message.events} denial={message.denial} />
+              {message.role === 'assistant'
+                ? <div className="answer-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}
+                    components={{
+                      table: ({ children }) => <div className="answer-table"><table>{children}</table></div>,
+                      a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>,
+                    }}>{message.content}</ReactMarkdown></div>
+                : <div>{message.content}</div>}
+              <ToolEvents events={message.events} denial={message.denial} />
             </article>)}
             {sending && <p className="muted" role="status">응답을 기다리는 중…</p>}
             {sending && approvals.filter(item => !current.sessionId || item.session_id === current.sessionId).map(item => <article className="panel editor approval" key={item.call_id}>
