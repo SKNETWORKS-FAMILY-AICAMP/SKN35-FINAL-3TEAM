@@ -31,7 +31,7 @@ rules:
     tool: query_db
     decision: allow
     conditions:
-      - {attr: args.department_id, op: eq, value_from: principal.department_id}
+      - {attr: args.dept_id, op: eq, value_from: principal.dept_id}
   - id: db-others
     tool: query_db
     decision: deny
@@ -50,7 +50,7 @@ rules:
     roles: [dept_head]
     reason: 파일을 삭제합니다
     conditions:
-      - {attr: principal.security_level, op: gte, value: 3}
+      - {attr: principal.security_grade, op: gte, value: 3}
   - id: delete-others
     tool: delete_file
     decision: deny

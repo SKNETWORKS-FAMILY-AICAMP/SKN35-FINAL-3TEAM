@@ -9,8 +9,8 @@
         roles: [member]     # 생략 가능
         reason: "..."       # deny / ask 면 필수
         conditions:         # 생략 가능, 모두 참이어야 맞음
-          - {attr: args.department_id, op: eq, value_from: principal.department_id}
-          - {attr: principal.security_level, op: gte, value: 2}
+          - {attr: args.dept_id, op: eq, value_from: principal.dept_id}
+          - {attr: principal.security_grade, op: gte, value: 2}
 
 규칙은 파일에 적힌 순서대로 매칭된다 (DB 로 옮기면 policy_rule.priority 순).
 """

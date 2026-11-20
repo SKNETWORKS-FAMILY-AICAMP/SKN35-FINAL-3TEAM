@@ -18,9 +18,9 @@ CREATE TABLE users (
     id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     login_id        VARCHAR(100) NOT NULL UNIQUE,
     name            VARCHAR(100) NOT NULL,
-    department_id   BIGINT NOT NULL REFERENCES department (id),
+    dept_id   BIGINT NOT NULL REFERENCES department (id),
     position        VARCHAR(50),
-    security_level  INT NOT NULL DEFAULT 1
+    security_grade  INT NOT NULL DEFAULT 1
 );
 
 ALTER TABLE department
@@ -165,10 +165,10 @@ CREATE INDEX idx_audit_log_ts      ON audit_log (ts);
 CREATE TABLE document (
     id                   BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     owner_user_id        BIGINT NOT NULL REFERENCES users (id),
-    owner_department_id  BIGINT NOT NULL REFERENCES department (id),
+    owner_dept_id  BIGINT NOT NULL REFERENCES department (id),
     title                VARCHAR(255) NOT NULL,
     scope                VARCHAR(20) NOT NULL CHECK (scope IN ('personal', 'dept', 'company')),
-    security_level       INT NOT NULL DEFAULT 1
+    security_grade       INT NOT NULL DEFAULT 1
 );
 
 CREATE TABLE document_version (
@@ -192,15 +192,15 @@ CREATE TABLE chunk (
     chunk_index          INT NOT NULL,
     page                 INT,
     content              TEXT NOT NULL,
-    owner_department_id  BIGINT NOT NULL,  -- 문서에서 상속
+    owner_dept_id  BIGINT NOT NULL,  -- 문서에서 상속
     scope                VARCHAR(20) NOT NULL CHECK (scope IN ('personal', 'dept', 'company')),  -- 문서에서 상속
-    security_level       INT NOT NULL,     -- 문서에서 상속
+    security_grade       INT NOT NULL,     -- 문서에서 상속
     embedding            vector(1024),     -- bge-m3 (EMBEDDING_DIM=1024)
     UNIQUE (document_version_id, chunk_index)
 );
 
 CREATE INDEX idx_chunk_embedding ON chunk USING hnsw (embedding vector_cosine_ops);
-CREATE INDEX idx_chunk_access    ON chunk (scope, owner_department_id, security_level);
+CREATE INDEX idx_chunk_access    ON chunk (scope, owner_dept_id, security_grade);
 
 CREATE TABLE session_document (
     session_id   UUID NOT NULL REFERENCES chat_session (id) ON DELETE CASCADE,
@@ -238,7 +238,7 @@ COMMENT ON TABLE citation            IS '답변 근거';
 
 COMMENT ON COLUMN department.head_user_id        IS '부서장 사용자 ID';
 COMMENT ON COLUMN users.position                 IS '직급';
-COMMENT ON COLUMN users.security_level           IS '보안등급';
+COMMENT ON COLUMN users.security_grade           IS '보안등급';
 COMMENT ON COLUMN agent.scope                    IS '공개 범위 (personal, dept, company)';
 COMMENT ON COLUMN agent_share_request.approver_id IS '승인할 사용자 ID (바로 위 관리자)';
 COMMENT ON COLUMN chat_session.agent_id          IS '사용한 에이전트 ID (NULL 이면 기본 에이전트)';

@@ -29,9 +29,9 @@ class Principal:
     """누가 요청했는가. ABAC 판단의 기준 (역할 + 속성).
 
     attributes 표준 키 (ERD users 테이블과 같은 이름):
-      department_id  소속 부서 ID
+      dept_id  소속 부서 ID
       position       직급
-      security_level 보안등급 (int, 클수록 높음)
+      security_grade 보안등급 (int, 클수록 높음)
     필요하면 키를 더 넣어도 된다. 값은 로그인 시점에 서버가 채우며 LLM 이 바꿀 수 없다.
     """
 
@@ -117,7 +117,7 @@ class AuditLogger(Protocol):
 # Condition 평가:
 # - attr / value_from 은 "principal.<키>" 또는 "args.<키>" 경로다.
 #     principal.user_id, principal.roles, principal.<attributes 의 키>
-#     args.<툴 인자 키>  (점으로 중첩 dict 를 따라간다: args.target.department_id)
+#     args.<툴 인자 키>  (점으로 중첩 dict 를 따라간다: args.target.dept_id)
 # - 비교 대상은 value_from 이 있으면 그 경로의 값, 없으면 value.
 # - attr 또는 value_from 경로에 값이 없으면 그 조건은 거짓이다.
 #   (그래서 DENY 규칙이 속성 누락으로 빠져나갈 수 있다. 위험한 툴은 default 를 deny/ask 로 둘 것)
@@ -137,7 +137,7 @@ class Condition:
     attr: str
     op: ConditionOp
     value: Any = None
-    value_from: str | None = None  # 다른 경로 값과 비교할 때 (예: "principal.department_id")
+    value_from: str | None = None  # 다른 경로 값과 비교할 때 (예: "principal.dept_id")
 
 
 @dataclass(frozen=True)

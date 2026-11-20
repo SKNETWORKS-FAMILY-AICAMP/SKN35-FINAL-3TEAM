@@ -21,8 +21,8 @@ from tools.arithmetic import arithmetic_tools
 from tools.registry import SimpleToolRegistry
 
 USERS = UserDirectory({
-    "kim": Principal("kim", ("member",), {"department_id": 10, "security_level": 2}),
-    "park": Principal("park", ("member",), {"department_id": 20}),
+    "kim": Principal("kim", ("member",), {"dept_id": 10, "security_grade": 2}),
+    "park": Principal("park", ("member",), {"dept_id": 20}),
 })
 KIM = {"X-User-Id": "kim"}
 
@@ -83,7 +83,7 @@ async def test_chat_runs_tool_and_reports_events(tmp_path):
     assert svc.llm.calls[0][0][0].role == "system"
     # 감사 로그에 run_id 와 요청자 속성이 남는다
     row = json.loads((tmp_path / "audit.jsonl").read_text(encoding="utf-8"))
-    assert row["run_id"] == body["run_id"] and row["principal_snapshot"]["department_id"] == 10
+    assert row["run_id"] == body["run_id"] and row["principal_snapshot"]["dept_id"] == 10
 
 
 async def test_denied_tool_stops_with_template(tmp_path):

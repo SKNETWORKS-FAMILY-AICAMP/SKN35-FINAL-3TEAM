@@ -110,8 +110,8 @@ async def test_condition_op(checker_factory, case):
 
 
 async def test_principal_still_hashable():
-    p = Principal("u", ("member",), {"department_id": 1})
-    assert hash(p) == hash(Principal("u", ("member",), {"department_id": 2}))
+    p = Principal("u", ("member",), {"dept_id": 1})
+    assert hash(p) == hash(Principal("u", ("member",), {"dept_id": 2}))
 
 
 @pytest.mark.parametrize("default", list(Decision))

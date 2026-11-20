@@ -41,7 +41,7 @@ DEPT_HEAD = "dept_head"
 class Agent:
     agent_id: str
     owner_user_id: str
-    owner_department_id: object  # 만든 사람의 부서 (DB 에서는 users 조인)
+    owner_dept_id: object  # 만든 사람의 부서 (DB 에서는 users 조인)
     name: str
     system_prompt: str
     tools: tuple[str, ...] = ()
@@ -54,7 +54,7 @@ class Agent:
 # ── 권한 판단 ───────────────────────────────────────────────
 
 def _dept(p: Principal) -> object:
-    return p.attributes.get("department_id")
+    return p.attributes.get("dept_id")
 
 
 def _is_admin(p: Principal) -> bool:
@@ -66,7 +66,7 @@ def _is_owner(p: Principal, a: Agent) -> bool:
 
 
 def _heads_owner_dept(p: Principal, a: Agent) -> bool:
-    return DEPT_HEAD in p.roles and _dept(p) is not None and _dept(p) == a.owner_department_id
+    return DEPT_HEAD in p.roles and _dept(p) is not None and _dept(p) == a.owner_dept_id
 
 
 def _shared_with(p: Principal, a: Agent) -> bool:
@@ -74,7 +74,7 @@ def _shared_with(p: Principal, a: Agent) -> bool:
         return False
     if a.scope == "company":
         return True
-    return a.scope == "dept" and _dept(p) is not None and _dept(p) == a.owner_department_id
+    return a.scope == "dept" and _dept(p) is not None and _dept(p) == a.owner_dept_id
 
 
 def can_view(p: Principal, a: Agent) -> bool:
@@ -115,7 +115,7 @@ class InMemoryAgentStore:
         a = Agent(
             agent_id=str(uuid.uuid4()),
             owner_user_id=owner.user_id,
-            owner_department_id=_dept(owner),
+            owner_dept_id=_dept(owner),
             name=name,
             system_prompt=system_prompt,
             tools=tools,

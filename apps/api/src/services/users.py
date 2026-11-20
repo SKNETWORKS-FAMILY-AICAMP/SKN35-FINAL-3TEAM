@@ -42,9 +42,9 @@ class UserDirectory:
         """
         if "admin" in p.roles:
             return None
-        dept = p.attributes.get("department_id")
+        dept = p.attributes.get("dept_id")
         if "dept_head" not in p.roles:
             for u in self._users.values():
-                if "dept_head" in u.roles and u.user_id != p.user_id and u.attributes.get("department_id") == dept:
+                if "dept_head" in u.roles and u.user_id != p.user_id and u.attributes.get("dept_id") == dept:
                     return u
         return next((u for u in self._users.values() if "admin" in u.roles), None)

@@ -18,12 +18,12 @@ from tests.fakes import ScriptedLLM
 from tools.arithmetic import arithmetic_tools
 from tools.registry import SimpleToolRegistry
 
-KIM = Principal("kim", ("member",), {"department_id": 10})  # 만든 사람
-CHOI = Principal("choi", ("member",), {"department_id": 10})  # 같은 부서 동료
-LEE = Principal("lee", ("dept_head",), {"department_id": 10})  # kim 의 부서장
-HAN = Principal("han", ("dept_head",), {"department_id": 20})  # 다른 부서 부서장
-PARK = Principal("park", ("member",), {"department_id": 20})  # 다른 부서
-ADMIN = Principal("admin", ("admin",), {"department_id": 1})
+KIM = Principal("kim", ("member",), {"dept_id": 10})  # 만든 사람
+CHOI = Principal("choi", ("member",), {"dept_id": 10})  # 같은 부서 동료
+LEE = Principal("lee", ("dept_head",), {"dept_id": 10})  # kim 의 부서장
+HAN = Principal("han", ("dept_head",), {"dept_id": 20})  # 다른 부서 부서장
+PARK = Principal("park", ("member",), {"dept_id": 20})  # 다른 부서
+ADMIN = Principal("admin", ("admin",), {"dept_id": 1})
 USERS = {p.user_id: p for p in (KIM, CHOI, LEE, HAN, PARK, ADMIN)}
 
 
@@ -179,7 +179,7 @@ def test_superior_is_dept_head_then_admin():
     assert users.superior_of(PARK).user_id == "han"
     assert users.superior_of(LEE).user_id == "admin"
     assert users.superior_of(ADMIN) is None
-    lonely = Principal("solo", ("member",), {"department_id": 99})  # 부서장 없는 부서
+    lonely = Principal("solo", ("member",), {"dept_id": 99})  # 부서장 없는 부서
     assert users.superior_of(lonely).user_id == "admin"
 
 
