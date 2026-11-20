@@ -11,9 +11,9 @@ CREATE TABLE `users` (
 	`id`	BIGINT	NOT NULL	COMMENT '사용자 ID',
 	`login_id`	VARCHAR(100)	NOT NULL	COMMENT '로그인 ID',
 	`name`	VARCHAR(100)	NOT NULL	COMMENT '이름',
-	`dept_id`	BIGINT	NOT NULL	COMMENT '소속 부서 ID',
+	`department_id`	BIGINT	NOT NULL	COMMENT '소속 부서 ID',
 	`position`	VARCHAR(50)	NULL	COMMENT '직급',
-	`security_grade`	INT	NOT NULL	DEFAULT 1	COMMENT '보안등급'
+	`security_level`	INT	NOT NULL	DEFAULT 1	COMMENT '보안등급'
 );
 
 CREATE TABLE `user_role` (
@@ -120,10 +120,10 @@ CREATE TABLE `audit_log` (
 CREATE TABLE `document` (
 	`id`	BIGINT	NOT NULL	COMMENT '문서 ID',
 	`owner_user_id`	BIGINT	NOT NULL	COMMENT '업로드한 사용자 ID',
-	`owner_dept_id`	BIGINT	NOT NULL	COMMENT '소유 부서 ID',
+	`owner_department_id`	BIGINT	NOT NULL	COMMENT '소유 부서 ID',
 	`title`	VARCHAR(255)	NOT NULL	COMMENT '문서명',
 	`scope`	VARCHAR(20)	NOT NULL	COMMENT '공개 범위 (personal, dept, company)',
-	`security_grade`	INT	NOT NULL	DEFAULT 1	COMMENT '보안등급'
+	`security_level`	INT	NOT NULL	DEFAULT 1	COMMENT '보안등급'
 );
 
 CREATE TABLE `document_version` (
@@ -143,9 +143,9 @@ CREATE TABLE `chunk` (
 	`chunk_index`	INT	NOT NULL	COMMENT '청크 순번',
 	`page`	INT	NULL	COMMENT '페이지',
 	`content`	TEXT	NOT NULL	COMMENT '청크 본문',
-	`owner_dept_id`	BIGINT	NOT NULL	COMMENT '소유 부서 ID (문서에서 상속)',
+	`owner_department_id`	BIGINT	NOT NULL	COMMENT '소유 부서 ID (문서에서 상속)',
 	`scope`	VARCHAR(20)	NOT NULL	COMMENT '공개 범위 (문서에서 상속)',
-	`security_grade`	INT	NOT NULL	COMMENT '보안등급 (문서에서 상속)',
+	`security_level`	INT	NOT NULL	COMMENT '보안등급 (문서에서 상속)',
 	`vector_id`	VARCHAR(100)	NULL	COMMENT '벡터 DB 키'
 );
 
@@ -284,7 +284,7 @@ REFERENCES `chunk` (
 
 -- ── 비식별 관계 FK (ERDCloud 내보내기에서 빠지는 것들) ──────────
 ALTER TABLE `department` ADD CONSTRAINT `FK_users_TO_department_1` FOREIGN KEY (`head_user_id`) REFERENCES `users` (`id`);
-ALTER TABLE `users` ADD CONSTRAINT `FK_department_TO_users_1` FOREIGN KEY (`dept_id`) REFERENCES `department` (`id`);
+ALTER TABLE `users` ADD CONSTRAINT `FK_department_TO_users_1` FOREIGN KEY (`department_id`) REFERENCES `department` (`id`);
 ALTER TABLE `agent` ADD CONSTRAINT `FK_users_TO_agent_1` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`);
 ALTER TABLE `agent_share_request` ADD CONSTRAINT `FK_agent_TO_agent_share_request_1` FOREIGN KEY (`agent_id`) REFERENCES `agent` (`id`);
 ALTER TABLE `agent_share_request` ADD CONSTRAINT `FK_users_TO_agent_share_request_1` FOREIGN KEY (`requester_id`) REFERENCES `users` (`id`);
@@ -299,6 +299,6 @@ ALTER TABLE `approval_request` ADD CONSTRAINT `FK_tool_call_TO_approval_request_
 ALTER TABLE `audit_log` ADD CONSTRAINT `FK_tool_call_TO_audit_log_1` FOREIGN KEY (`call_id`) REFERENCES `tool_call` (`call_id`);
 ALTER TABLE `audit_log` ADD CONSTRAINT `FK_policy_rule_TO_audit_log_1` FOREIGN KEY (`rule_id`) REFERENCES `policy_rule` (`policy_rule_id`);
 ALTER TABLE `document` ADD CONSTRAINT `FK_users_TO_document_1` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`);
-ALTER TABLE `document` ADD CONSTRAINT `FK_department_TO_document_1` FOREIGN KEY (`owner_dept_id`) REFERENCES `department` (`id`);
+ALTER TABLE `document` ADD CONSTRAINT `FK_department_TO_document_1` FOREIGN KEY (`owner_department_id`) REFERENCES `department` (`id`);
 ALTER TABLE `document_version` ADD CONSTRAINT `FK_document_TO_document_version_1` FOREIGN KEY (`document_id`) REFERENCES `document` (`id`);
 ALTER TABLE `chunk` ADD CONSTRAINT `FK_document_version_TO_chunk_1` FOREIGN KEY (`document_version_id`) REFERENCES `document_version` (`id`);
