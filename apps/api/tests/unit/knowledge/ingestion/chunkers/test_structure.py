@@ -197,13 +197,14 @@ def test_box_title_sibling_rule():
 def test_output_fields_and_permissions():
     p = parsed("fmt", law_base())
     c = chunk_document(p, max_tokens=CAP, count_tokens=COUNT,
-                       document_meta={"owner_department_id": 7, "scope": "dept", "security_level": 2})
-    need = {"chunk_index", "document_version_id", "content", "embed_text", "heading_path", "kind", "page", "pages",
-            "table_part", "owner_department_id", "scope", "security_level", "source_spans"}
+                       document_meta={"owner_dept_id": 7, "scope": "dept", "security_grade": 2})
+    need = {"chunk_index", "doc_version_id", "content", "embed_text", "heading_path", "kind", "page", "pages",
+            "table_part", "owner_dept_id", "scope", "security_grade", "source_spans"}
     assert c and all(need <= set(ch) for ch in c)
     assert [ch["chunk_index"] for ch in c] == list(range(len(c)))
     assert all(ch["embed_text"].startswith("가상 정보보호 규정") for ch in c)
-    assert all((ch["owner_department_id"], ch["scope"], ch["security_level"]) == (7, "dept", 2) for ch in c)
+    assert all((ch["owner_dept_id"], ch["scope"], ch["security_grade"]) == (7, "dept", 2) for ch in c)
+    assert all(ch["doc_version_id"] == 1 for ch in c)
 
 
 def test_not_ok_parse_gives_no_chunks():
