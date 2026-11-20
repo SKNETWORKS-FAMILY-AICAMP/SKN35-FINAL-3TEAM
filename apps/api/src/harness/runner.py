@@ -102,7 +102,7 @@ class AgentRunner:
             if not reply.tool_calls:
                 # 문서 근거 없이 규정을 답했으면 그 답은 버리고 검색부터 시킨다 (강제 검색 + 답 쓰기 2회가 남아 있을 때만)
                 if (search_spec and not grounded and not forced and turn + 2 <= self.max_turns
-                        and rs.needed(user_input, reply.content)):
+                        and rs.needed(user_input, reply.content, used_other_tools=bool(done))):
                     forced = force_search = True
                     log.info("문서 근거 없는 답이라 검색을 강제합니다 (run %s)", run_id)
                     continue

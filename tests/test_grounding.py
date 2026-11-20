@@ -96,3 +96,23 @@ def test_trigger_and_keyword_query():
     assert not rs.needed("3 곱하기 4", "12입니다")
     assert keyword_query("서류 반려 건 예외 처리는 누가 승인해?") == "서류 반려"
     assert keyword_query("내규에서 휴가 규정은?") == "내규 휴가"
+
+
+async def test_boilerplate_citation_after_other_tool_is_not_forced():
+    # 심사 조회처럼 문서가 아닌 툴로 답한 뒤 붙인 근거 줄 때문에 쓸데없이 검색하지 않는다
+    harness, llm, log, _ = build([
+        {"tool_calls": [{"id": "t1", "name": "today", "arguments": {}}]},
+        {"content": "11월 26일입니다.\n근거: 날짜 계산 결과"},
+    ])
+    await harness.run("3영업일 뒤가 언제야?", KIM, "s")
+    assert log == ["today"] and len(llm.calls) == 2
+
+
+def test_empty_citation_lines_are_removed():
+    from harness.grounding import strip_empty_citation
+
+    assert strip_empty_citation("납세증명서가 빠졌습니다.\n근거: 검색 결과 없음") == "납세증명서가 빠졌습니다."
+    assert strip_empty_citation("답\n근거: 관련 문서 없음\n") == "답"
+    kept = "답\n근거: 공통 지침 제2절 1항"
+    assert strip_empty_citation(kept) == kept
+    assert not RequireSearch().needed("안녕", "안녕하세요\n근거: 관련 문서 없음")

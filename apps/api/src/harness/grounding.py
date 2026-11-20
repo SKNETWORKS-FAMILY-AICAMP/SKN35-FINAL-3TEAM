@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from contracts.harness import LLMToolCall, Message
 
 _CITATION = re.compile(r"근거\s*[:：]|제\s*\d+\s*(?:조|절|항|장)")
+# "근거: 검색 결과 없음" 처럼 근거가 없다는 줄 (모델이 규칙을 어기고 자주 붙인다)
+_EMPTY_CITATION = re.compile(r"^\s*근거\s*[:：][^\n]*(?:없음|없습니다|없다|찾지 못)[^\n]*$", re.M)
 _RULE_QUESTION = re.compile(
     r"규정|내규|지침|규칙|절차|조항|조문|매뉴얼|기준|누가\s*승인|승인\s*권|어떻게\s*(?:적|써|작성|처리|해야)|해야\s*(?:해|하나|돼|합니까|하나요)"
 )
@@ -34,6 +36,11 @@ NUDGE = (
     "방금 답은 사내 문서를 확인하지 않고 쓴 것이라 쓸 수 없다. "
     "먼저 사내 문서 검색 툴로 관련 규정을 찾아라. 검색어는 질문의 핵심 단어 두세 개로 짧게 쓴다. 지금은 툴만 호출한다."
 )
+
+
+def strip_empty_citation(text: str) -> str:
+    """"근거: 검색 결과 없음" 같은 빈 근거 줄을 지운다 (화면의 참고 문서 표시가 대신한다)."""
+    return _EMPTY_CITATION.sub("", text).rstrip()
 
 
 def keyword_query(text: str, limit: int = 2) -> str:
@@ -58,8 +65,11 @@ class RequireSearch:
     query_arg: str = "query"
     grounded_tools: frozenset[str] = field(default_factory=lambda: frozenset({"search_doc", "get_doc_chunk"}))
 
-    def needed(self, question: str, answer: str) -> bool:
-        return bool(_CITATION.search(answer) or _RULE_QUESTION.search(question))
+    def needed(self, question: str, answer: str, used_other_tools: bool = False) -> bool:
+        """used_other_tools: 이번 run 에서 문서가 아닌 툴(심사 조회 등)이 성공했는가.
+        그런 답에 붙은 근거 줄은 대개 형식적인 것이라 질문이 규정을 묻는 경우에만 강제한다."""
+        cited = bool(_CITATION.search(_EMPTY_CITATION.sub("", answer)))
+        return (cited and not used_other_tools) or bool(_RULE_QUESTION.search(question))
 
     def nudge(self) -> Message:
         return Message("user", NUDGE)
