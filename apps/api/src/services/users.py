@@ -34,6 +34,9 @@ class UserDirectory:
     def get(self, user_id: str) -> Principal | None:
         return self._users.get(user_id)
 
+    def ids(self) -> list[str]:
+        return list(self._users)
+
     def superior_of(self, p: Principal) -> Principal | None:
         """바로 위 관리자: 팀원 → 소속 부서장, 부서장 → admin. admin 은 위가 없다 (None).
 
