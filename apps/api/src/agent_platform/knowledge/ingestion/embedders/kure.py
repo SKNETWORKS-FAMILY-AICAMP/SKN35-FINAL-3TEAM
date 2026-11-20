@@ -4,9 +4,9 @@
 계산: 프롬프트 붙이기("passage: " / "query: ") → 마지막 은닉층 → 평균 풀링(프롬프트 포함) → 앞쪽 dim차원만 → L2 정규화.
 근거: 모델 폴더의 config_sentence_transformers.json(프롬프트), 1_Pooling/config.json(mean, include_prompt).
 
-- 차원: KURE-v3는 2,048차원이지만 Matryoshka로 2,048·1,024·512·256차원에 학습돼 앞쪽만 잘라 쓸 수 있다.
-  팀 DB chunk.embedding 이 vector(1024)라서 기본 1024. (2차 청킹 실험, 질문 108개: 1024는 2048 대비 Recall@5 같음 100%,
-  Recall@1 92.6% → 90.7%, MRR 0.957 → 0.947.)
+- 차원: KURE-v3는 2,048차원(Matryoshka로 2,048·1,024·512·256차원에 학습돼 앞쪽만 잘라 쓸 수도 있음).
+  기본 2048 = 팀 DB chunk.embedding halfvec(2048) (마이그레이션 0004 초안). 0004 전 DB(vector(1024))면 dim=1024.
+  (2차 청킹 실험, 질문 108개: 2048 Recall@1 92.6%·MRR 0.957, 1024 Recall@1 90.7%·MRR 0.947, Recall@5는 둘 다 100%.)
 - 장치: 배포·운영은 CPU 기준이라 기본 CPU. GPU는 device="cuda"로 직접 줄 때만.
 - 폐쇄망: 로컬 모델 폴더만 읽는다(인터넷에서 받지 않음). 경로는 인자 또는 환경변수 EMBEDDING_MODEL_PATH.
   (실험에서 쓴 모델: nlpai-lab/KURE-v3 판 5b0494e, model.safetensors sha256 53b26a87…dc9)
@@ -17,7 +17,7 @@ import os
 from pathlib import Path
 
 MODEL_ENV = "EMBEDDING_MODEL_PATH"
-DEFAULT_DIM = 1024
+DEFAULT_DIM = 2048
 PROMPT = {"query": "query: ", "document": "passage: "}
 
 

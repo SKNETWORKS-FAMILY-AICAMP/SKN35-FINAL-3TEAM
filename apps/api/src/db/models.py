@@ -11,13 +11,13 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 
-from pgvector.sqlalchemy import Vector
+from pgvector.sqlalchemy import HALFVEC
 from sqlalchemy import (CHAR, BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Identity, Integer, String, Text,
                         text)
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-EMBEDDING_DIM = 1024  # chunk.embedding 차원 (청킹 확정 때 바뀔 수 있음)
+EMBEDDING_DIM = 2048  # chunk.embedding 차원 — [0004 초안] KURE-v3, halfvec(2048)
 
 
 class Base(DeclarativeBase):
@@ -264,7 +264,7 @@ class Chunk(Base):
     scope: Mapped[str] = mapped_column(String(20), nullable=False)
     security_grade: Mapped[int] = mapped_column(Integer, nullable=False)
     heading_path: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
-    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM))
+    embedding: Mapped[list[float] | None] = mapped_column(HALFVEC(EMBEDDING_DIM))  # [0004 초안] vector(1024) → halfvec(2048)
 
 
 class Citation(Base):
