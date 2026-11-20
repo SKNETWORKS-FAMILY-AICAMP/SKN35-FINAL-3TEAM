@@ -7,8 +7,13 @@
 - admin: 모든 에이전트를 보고 관리한다.
 역할·부서는 서버가 채운 Principal 에서만 읽는다.
 
-공유 범위(scope)는 바로 위 관리자의 승인으로만 바뀐다 (agent_share_request, 아직 미구현).
-그래서 만들 때는 항상 personal 이고, 수정 API 로는 바꿀 수 없다.
+공유 범위(scope)는 바로 위 관리자의 승인으로만 넓어진다 (ShareRequest = agent_share_request).
+- 만들 때는 항상 personal 이고, 수정 API 로는 바꿀 수 없다.
+- 팀원 → 부서장, 부서장 → admin 이 승인한다. admin 이 만든 에이전트는 바로 바뀐다.
+- admin 은 모든 요청을 승인·반려할 수 있다.
+- 공유를 거두는 것(personal 로 되돌리기)은 승인 없이 주인·admin 이 바로 한다.
+- 공유 중이거나 승인 대기 중인 에이전트는 아무도(admin 포함) 수정할 수 없다. 승인받은 내용 그대로 쓰게 하려는 것.
+  고치려면 공유를 해제하고 고친 뒤 다시 요청한다. 비활성화·삭제·공유 해제는 그대로 된다.
 
 지금은 메모리에 둔다. DB 가 붙으면 agent / agent_tool 테이블 구현으로 바꾼다.
 """
@@ -17,12 +22,16 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from typing import Literal
 
 from contracts.permission import Principal
 
 Scope = Literal["personal", "dept", "company"]
+SharedScope = Literal["dept", "company"]
 Status = Literal["active", "disabled"]
+RequestStatus = Literal["pending", "approved", "rejected"]
+SCOPE_ORDER = {"personal": 0, "dept": 1, "company": 2}
 
 ADMIN = "admin"
 DEPT_HEAD = "dept_head"
@@ -78,7 +87,7 @@ def can_use(p: Principal, a: Agent) -> bool:
 
 
 def can_edit(p: Principal, a: Agent) -> bool:
-    """이름·설명·프롬프트·툴 수정, 삭제."""
+    """이름·설명·프롬프트·툴 수정, 삭제를 할 수 있는 사람인가 (공유 중 편집 잠금은 routers/agents.py)."""
     return _is_admin(p) or _is_owner(p, a)
 
 
@@ -130,3 +139,74 @@ class InMemoryAgentStore:
 
     def delete(self, agent_id: str) -> None:
         self._agents.pop(agent_id, None)
+
+
+# ── 공유 요청 (agent_share_request) ─────────────────────────
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+@dataclass(frozen=True)
+class ShareRequest:
+    request_id: str
+    agent_id: str
+    requester_id: str
+    approver_id: str  # 바로 위 관리자 (admin 은 이 값과 상관없이 결정할 수 있다)
+    requested_scope: SharedScope
+    comment: str = ""  # 요청 사유
+    status: RequestStatus = "pending"
+    decided_by: str | None = None
+    decision_comment: str = ""  # 승인·반려 의견
+    requested_at: datetime = field(default_factory=_now)
+    decided_at: datetime | None = None
+
+
+def can_request_share(p: Principal, a: Agent) -> bool:
+    return _is_owner(p, a)  # 주인만 공유를 요청한다 (admin 도 남의 에이전트는 직접 범위를 바꾸지 않는다)
+
+
+def can_unshare(p: Principal, a: Agent) -> bool:
+    return can_edit(p, a)
+
+
+def can_decide(p: Principal, r: ShareRequest) -> bool:
+    return _is_admin(p) or r.approver_id == p.user_id
+
+
+def can_see_request(p: Principal, r: ShareRequest) -> bool:
+    return can_decide(p, r) or r.requester_id == p.user_id
+
+
+@dataclass
+class InMemoryShareRequestStore:
+    _requests: dict[str, ShareRequest] = field(default_factory=dict)
+
+    def create(self, agent: Agent, requester: Principal, approver_id: str, scope: SharedScope, comment: str) -> ShareRequest:
+        r = ShareRequest(str(uuid.uuid4()), agent.agent_id, requester.user_id, approver_id, scope, comment)
+        self._requests[r.request_id] = r
+        return r
+
+    def get(self, request_id: str) -> ShareRequest | None:
+        return self._requests.get(request_id)
+
+    def pending_for_agent(self, agent_id: str) -> ShareRequest | None:
+        return next((r for r in self._requests.values() if r.agent_id == agent_id and r.status == "pending"), None)
+
+    def visible_to(self, p: Principal) -> list[ShareRequest]:
+        items = [r for r in self._requests.values() if can_see_request(p, r)]
+        return sorted(items, key=lambda r: r.requested_at, reverse=True)
+
+    def decide(self, r: ShareRequest, by: Principal, approved: bool, comment: str = "") -> ShareRequest:
+        r = replace(
+            r, status="approved" if approved else "rejected", decided_by=by.user_id,
+            decision_comment=comment, decided_at=_now(),
+        )
+        self._requests[r.request_id] = r
+        return r
+
+    def cancel_pending(self, agent_id: str, by: Principal, reason: str) -> None:
+        """에이전트가 지워지거나 공유를 거두면 대기 중인 요청은 반려 처리한다."""
+        r = self.pending_for_agent(agent_id)
+        if r is not None:
+            self.decide(r, by, approved=False, comment=reason)

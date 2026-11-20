@@ -13,7 +13,7 @@ from permission import create_checker
 from permission.approval import FutureApprovalHandler
 from permission.audit import JsonlAuditLogger
 from permission.policy import load_policy
-from services.agents import InMemoryAgentStore
+from services.agents import InMemoryAgentStore, InMemoryShareRequestStore
 from services.sessions import InMemorySessionStore
 from services.users import UserDirectory
 from tools.arithmetic import arithmetic_tools
@@ -35,6 +35,7 @@ class AppServices:
     users: UserDirectory
     sessions: InMemorySessionStore = field(default_factory=InMemorySessionStore)
     agents: InMemoryAgentStore = field(default_factory=InMemoryAgentStore)
+    share_requests: InMemoryShareRequestStore = field(default_factory=InMemoryShareRequestStore)
     max_turns: int = 10
     tool_timeout: float | None = 30.0
     system_prompt: str = DEFAULT_SYSTEM_PROMPT

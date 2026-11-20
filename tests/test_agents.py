@@ -169,3 +169,129 @@ async def test_chat_rejects_hidden_or_disabled_agent(tmp_path):
     await client.post(f"/api/agents/{aid}/disable", headers=h(LEE))
     r = await client.post("/api/chat/messages", json={"content": "y", "session_id": sid}, headers=h(KIM))
     assert r.status_code == 409
+
+
+# ── 공유 요청 ───────────────────────────────────────────────
+
+def test_superior_is_dept_head_then_admin():
+    users = UserDirectory(USERS)
+    assert users.superior_of(KIM).user_id == "lee"
+    assert users.superior_of(PARK).user_id == "han"
+    assert users.superior_of(LEE).user_id == "admin"
+    assert users.superior_of(ADMIN) is None
+    lonely = Principal("solo", ("member",), {"department_id": 99})  # 부서장 없는 부서
+    assert users.superior_of(lonely).user_id == "admin"
+
+
+async def _new_agent(client, who=KIM):
+    return (await client.post("/api/agents", json=BODY, headers=h(who))).json()["agent_id"]
+
+
+async def test_share_to_dept_needs_dept_head_approval(tmp_path):
+    client, _ = make(tmp_path=tmp_path)
+    aid = await _new_agent(client)
+
+    r = await client.post(f"/api/agents/{aid}/share-requests", json={"scope": "dept", "comment": "팀 공용"}, headers=h(KIM))
+    assert r.status_code == 201
+    req = r.json()
+    assert (req["approver_id"], req["status"], req["can_decide"]) == ("lee", "pending", False)
+
+    # 승인 전에는 동료에게 안 보인다, 중복 요청은 막힌다
+    assert (await client.get("/api/agents", headers=h(CHOI))).json() == []
+    again = await client.post(f"/api/agents/{aid}/share-requests", json={"scope": "company"}, headers=h(KIM))
+    assert again.status_code == 409
+    agent = (await client.get(f"/api/agents/{aid}", headers=h(KIM))).json()
+    assert agent["pending_share_scope"] == "dept" and agent["can_request_share"] is False
+
+    # 받은 사람만 inbox 에 보이고 결정할 수 있다
+    rid = req["request_id"]
+    assert [x["request_id"] for x in (await client.get("/api/share-requests?box=inbox", headers=h(LEE))).json()] == [rid]
+    assert (await client.get("/api/share-requests?box=inbox", headers=h(KIM))).json() == []
+    assert (await client.post(f"/api/share-requests/{rid}/approve", headers=h(CHOI))).status_code == 404
+    assert (await client.post(f"/api/share-requests/{rid}/approve", headers=h(HAN))).status_code == 404
+    assert (await client.post(f"/api/share-requests/{rid}/approve", headers=h(KIM))).status_code == 403  # 셀프 승인 불가
+
+    done = await client.post(f"/api/share-requests/{rid}/approve", json={"comment": "좋아요"}, headers=h(LEE))
+    assert done.json()["status"] == "approved" and done.json()["decided_by"] == "lee"
+    assert (await client.post(f"/api/share-requests/{rid}/approve", headers=h(LEE))).status_code == 409
+
+    # 같은 부서 동료는 보고 쓸 수 있고, 다른 부서는 못 본다
+    assert [a["scope"] for a in (await client.get("/api/agents", headers=h(CHOI))).json()] == ["dept"]
+    assert (await client.get("/api/agents", headers=h(PARK))).json() == []
+    assert [x["status"] for x in (await client.get("/api/share-requests?box=outbox", headers=h(KIM))).json()] == ["approved"]
+
+
+async def test_reject_keeps_personal_and_admin_can_decide(tmp_path):
+    client, _ = make(tmp_path=tmp_path)
+    aid = await _new_agent(client)
+    rid = (await client.post(f"/api/agents/{aid}/share-requests", json={"scope": "company"}, headers=h(KIM))).json()["request_id"]
+    r = await client.post(f"/api/share-requests/{rid}/reject", json={"comment": "전사는 과함"}, headers=h(ADMIN))
+    assert r.json()["status"] == "rejected" and r.json()["decision_comment"] == "전사는 과함"
+    assert (await client.get(f"/api/agents/{aid}", headers=h(KIM))).json()["scope"] == "personal"
+
+
+async def test_dept_head_request_goes_to_admin_and_admin_applies_directly(tmp_path):
+    client, _ = make(tmp_path=tmp_path)
+    lee_agent = await _new_agent(client, LEE)
+    r = (await client.post(f"/api/agents/{lee_agent}/share-requests", json={"scope": "company"}, headers=h(LEE))).json()
+    assert r["approver_id"] == "admin" and r["status"] == "pending"
+
+    admin_agent = await _new_agent(client, ADMIN)
+    r = (await client.post(f"/api/agents/{admin_agent}/share-requests", json={"scope": "company"}, headers=h(ADMIN))).json()
+    assert r["status"] == "approved"
+    assert any(a["agent_id"] == admin_agent for a in (await client.get("/api/agents", headers=h(PARK))).json())
+
+
+async def test_share_request_rules(tmp_path):
+    client, _ = make(tmp_path=tmp_path)
+    aid = await _new_agent(client)
+    url = f"/api/agents/{aid}/share-requests"
+    assert (await client.post(url, json={"scope": "dept"}, headers=h(LEE))).status_code == 403  # 주인만 요청
+    assert (await client.post(url, json={"scope": "personal"}, headers=h(KIM))).status_code == 422
+    await client.post(f"/api/agents/{aid}/disable", headers=h(KIM))
+    assert (await client.post(url, json={"scope": "dept"}, headers=h(KIM))).status_code == 409
+
+
+async def test_unshare_and_delete_cancel_pending(tmp_path):
+    client, _ = make(tmp_path=tmp_path)
+    aid = await _new_agent(client)
+    rid = (await client.post(f"/api/agents/{aid}/share-requests", json={"scope": "dept"}, headers=h(KIM))).json()["request_id"]
+    await client.post(f"/api/share-requests/{rid}/approve", headers=h(LEE))
+    rid2 = (await client.post(f"/api/agents/{aid}/share-requests", json={"scope": "company"}, headers=h(KIM))).json()["request_id"]
+
+    assert (await client.post(f"/api/agents/{aid}/unshare", headers=h(CHOI))).status_code == 403
+    r = await client.post(f"/api/agents/{aid}/unshare", headers=h(KIM))
+    assert r.json()["scope"] == "personal" and r.json()["pending_share_scope"] is None
+    assert (await client.get("/api/agents", headers=h(CHOI))).json() == []
+    pending = [x for x in (await client.get("/api/share-requests", headers=h(KIM))).json() if x["request_id"] == rid2]
+    assert pending[0]["status"] == "rejected"
+
+    rid3 = (await client.post(f"/api/agents/{aid}/share-requests", json={"scope": "dept"}, headers=h(KIM))).json()["request_id"]
+    await client.delete(f"/api/agents/{aid}", headers=h(KIM))
+    gone = [x for x in (await client.get("/api/share-requests", headers=h(LEE))).json() if x["request_id"] == rid3]
+    assert gone[0]["status"] == "rejected" and gone[0]["agent_name"] == "(삭제된 에이전트)"
+
+
+async def test_shared_or_pending_agent_cannot_be_edited(tmp_path):
+    client, _ = make(tmp_path=tmp_path)
+    aid = await _new_agent(client)
+    url = f"/api/agents/{aid}"
+    rid = (await client.post(f"{url}/share-requests", json={"scope": "dept"}, headers=h(KIM))).json()["request_id"]
+
+    # 승인 대기 중: 수정 불가
+    r = await client.patch(url, json={"system_prompt": "몰래 바꿈"}, headers=h(KIM))
+    assert r.status_code == 409 and "승인 대기" in r.json()["detail"]
+    assert (await client.get(url, headers=h(KIM))).json()["can_edit"] is False
+
+    # 공유 중: 주인도 admin 도 수정 불가, 비활성화·삭제 버튼은 그대로
+    await client.post(f"/api/share-requests/{rid}/approve", headers=h(LEE))
+    for who in (KIM, ADMIN):
+        r = await client.patch(url, json={"name": "새 이름"}, headers=h(who))
+        assert r.status_code == 409 and "공유를 해제한 뒤" in r.json()["detail"]
+    a = (await client.get(url, headers=h(KIM))).json()
+    assert (a["can_edit"], a["can_delete"], a["can_disable"], a["can_unshare"]) == (False, True, True, True)
+
+    # 공유를 해제하면 다시 고칠 수 있다
+    await client.post(f"{url}/unshare", headers=h(KIM))
+    r = await client.patch(url, json={"system_prompt": "고친 역할"}, headers=h(KIM))
+    assert r.status_code == 200 and r.json()["can_edit"] is True
