@@ -7,10 +7,20 @@ from contracts.permission import Principal, ToolCall
 
 from tools.read_doc import can_read_chunk, load_doc_chunks
 
+PREVIEW_LENGTH = 200
+
 SEARCH_DOC_SPEC = ToolSpec(
     name="search_doc",
     display_name="사내 문서 검색",
-    description="검색어와 관련된 사내 문서와 내규를 찾습니다.",
+    effect="read",
+    domain="문서",
+    description=(
+        "검색어와 관련된 사내 문서와 내규를 찾고 문단 앞부분 최대 200자를 preview로 반환합니다. "
+        "환율·금리 같은 시장 수치나 고객·대출 데이터는 없고, 문서와 내규 문장만 찾습니다. "
+        "is_truncated가 false이면 preview는 해당 문단 전체입니다. "
+        "미리보기로 답할 수 있으면 제목과 위치를 근거로 바로 답하세요. "
+        "긴 문단의 나머지 내용이 필요하면 chunk_id로 get_doc_chunk를 호출하세요."
+    ),
     parameters={
         "type" : "object",
         "properties" : {
@@ -41,6 +51,8 @@ def search_chunks(chunks: list[dict], query:str, principal: Principal) -> list[d
             "chunk_id": chunk["chunk_id"],
             "title": chunk["title"],
             "location": chunk["location"],
+            "preview": chunk["text"][:PREVIEW_LENGTH],
+            "is_truncated": len(chunk["text"]) > PREVIEW_LENGTH,
         })
 
     return matches

@@ -47,6 +47,8 @@ def can_read_chunk(chunk: dict, principal: Principal) -> bool:
 READ_DOC_SPEC = ToolSpec(
     name="get_doc_chunk",
     display_name="문서 원문 열람",
+    effect="read",
+    domain="문서",
     description="검색 결과의 chunk_id로 열람 가능한 문단 원문을 가져옵니다.",
     parameters={
         "type" : "object",
