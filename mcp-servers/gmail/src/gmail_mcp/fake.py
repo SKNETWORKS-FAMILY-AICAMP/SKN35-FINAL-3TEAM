@@ -1,7 +1,6 @@
-"""가상 메일함 — Gmail API 응답 형태를 흉내낸다. 테스트와 팀 계정 없이 하는 로컬 시연에 사용한다.
+"""가상 메일함 — 직원 한 명의 Gmail 을 흉내낸다. 테스트와 실제 계정 없이 하는 로컬 시연에 사용한다.
 
-검색어는 이 프로젝트가 실제로 만드는 형태만 지원한다:
-  after:<epoch>  before:<epoch>  {from:a to:a cc:a bcc:a}  일반 단어(제목·본문 포함 여부)
+검색어는 동기화가 실제로 만드는 형태만 지원한다:  after:<epoch>  before:<epoch>
 """
 
 from __future__ import annotations
@@ -12,13 +11,11 @@ from datetime import datetime, timezone
 from email.utils import format_datetime
 from typing import Any
 
-TEAM_ACCOUNT = "team@acme.example"
-
-# 가상 회사 직원 메일 주소 (hr 서버의 가상 데이터와 같은 사람들)
-KIM = "sky.kim@acme.example"
-LEE = "doyun.lee@acme.example"
-PARK = "seoyeon.park@acme.example"
-CHOI = "minjun.choi@acme.example"
+# 가상 회사 직원 (사번 ↔ 메일 주소). 실제 인물이 아니다.
+KIM, KIM_ID = "sky.kim@acme.example", "E1001"
+LEE, LEE_ID = "doyun.lee@acme.example", "E1002"
+PARK, PARK_ID = "seoyeon.park@acme.example", "E2001"
+CHOI, CHOI_ID = "minjun.choi@acme.example", "E2002"
 
 
 def ts(day: int, hour: int = 0) -> datetime:
@@ -33,14 +30,19 @@ def _b64(text: str) -> str:
 def make_message(
     message_id: str,
     *,
+    thread_id: str,
     sender: str,
     to: list[str],
     subject: str,
     body: str,
     sent_at: datetime,
     cc: list[str] | None = None,
+    bcc: list[str] | None = None,
     html: bool = False,
+    labels: list[str] | None = None,
+    size: int | None = None,
 ) -> dict[str, Any]:
+    """Gmail messages.get(format=full) 와 같은 모양."""
     headers = [
         {"name": "From", "value": sender},
         {"name": "To", "value": ", ".join(to)},
@@ -49,15 +51,18 @@ def make_message(
     ]
     if cc:
         headers.append({"name": "Cc", "value": ", ".join(cc)})
-    mime = "text/html" if html else "text/plain"
+    if bcc:  # 내가 보낸 메일에만 남는 헤더
+        headers.append({"name": "Bcc", "value": ", ".join(bcc)})
     return {
         "id": message_id,
+        "threadId": thread_id,
         "internalDate": str(int(sent_at.timestamp() * 1000)),
-        "labelIds": ["INBOX"],
+        "labelIds": labels or ["INBOX"],
+        "sizeEstimate": size if size is not None else 500 + len(body.encode("utf-8")),
         "payload": {
             "mimeType": "multipart/alternative",
             "headers": headers,
-            "parts": [{"mimeType": mime, "body": {"data": _b64(body)}}],
+            "parts": [{"mimeType": "text/html" if html else "text/plain", "body": {"data": _b64(body)}}],
         },
     }
 
@@ -65,63 +70,45 @@ def make_message(
 class FakeGmailClient:
     simulated = True  # 서버·결과에 "가상 메일함" 임을 표시하는 데 쓴다
 
-    def __init__(self, owner: str = TEAM_ACCOUNT) -> None:
-        self.owner = owner
-        self.threads: dict[str, list[dict[str, Any]]] = {}
+    def __init__(self, owner_email: str) -> None:
+        self.owner_email = owner_email
+        self.messages: dict[str, dict[str, Any]] = {}
         self.sent: list[str] = []
-        self.fail_threads: set[str] = set()
+        self.fail_ids: set[str] = set()  # 이 메일을 가져오면 오류
+        self.vanish_ids: set[str] = set()  # 목록에는 나오지만 가져오면 사라진 메일
         self.list_calls: list[tuple[str | None, str | None]] = []
 
-    def add_thread(self, thread_id: str, *messages: dict[str, Any]) -> None:
-        self.threads.setdefault(thread_id, []).extend(messages)
+    def add(self, *messages: dict[str, Any]) -> FakeGmailClient:
+        for m in messages:
+            self.messages[m["id"]] = m
+        return self
+
+    def remove(self, message_id: str) -> None:
+        self.messages.pop(message_id, None)
 
     async def get_profile_email(self) -> str:
-        return self.owner
+        return self.owner_email
 
-    def _matches(self, messages: list[dict[str, Any]], query: str | None) -> bool:
-        if not query:
-            return True
-        latest = max(int(m["internalDate"]) for m in messages) / 1000
-        q = query
-        if m := re.search(r"after:(\d+)", q):
-            if latest <= int(m.group(1)):
-                return False
-        if m := re.search(r"before:(\d+)", q):
-            if latest >= int(m.group(1)):
-                return False
-        if m := re.search(r"\{([^}]*)\}", q):
-            emails = set(re.findall(r"(?:from|to|cc|bcc):(\S+)", m.group(1)))
-            headers = " ".join(h["value"].lower() for msg in messages for h in msg["payload"]["headers"]
-                               if h["name"] in ("From", "To", "Cc", "Bcc"))
-            if not any(e.lower() in headers for e in emails):
-                return False
-        words = re.sub(r"after:\d+|before:\d+|\{[^}]*\}|[()]", " ", q).split()
-        text = " ".join(
-            h["value"] for msg in messages for h in msg["payload"]["headers"] if h["name"] == "Subject"
-        ) + " " + " ".join(base64.urlsafe_b64decode(p["body"]["data"] + "==").decode("utf-8", "replace")
-                           for msg in messages for p in msg["payload"]["parts"])
-        return all(w.lower() in text.lower() for w in words)
-
-    async def list_threads(self, query, page_token, max_results=100):
+    async def list_messages(self, query, page_token, max_results=100):
         self.list_calls.append((query, page_token))
-        ids = sorted(
-            (tid for tid, msgs in self.threads.items() if self._matches(msgs, query)),
-            key=lambda t: -max(int(m["internalDate"]) for m in self.threads[t]),  # 최신순 (Gmail 과 같게)
-        )
+        after = int(m.group(1)) if query and (m := re.search(r"after:(\d+)", query)) else None
+        before = int(m.group(1)) if query and (m := re.search(r"before:(\d+)", query)) else None
+        ids = [mid for mid, msg in sorted(self.messages.items(), key=lambda kv: -int(kv[1]["internalDate"]))
+               if (after is None or int(msg["internalDate"]) / 1000 > after)
+               and (before is None or int(msg["internalDate"]) / 1000 < before)]
         offset = int(page_token or 0)
-        page = ids[offset : offset + max_results]
         nxt = offset + max_results
-        return page, (str(nxt) if nxt < len(ids) else None)
+        return ids[offset:nxt], (str(nxt) if nxt < len(ids) else None)
 
-    async def get_thread(self, thread_id, *, metadata_only=False):
-        if thread_id in self.fail_threads:
+    async def get_message(self, message_id, *, format="full"):
+        if message_id in self.fail_ids:
             raise ConnectionError("가상 오류")
-        messages = self.threads.get(thread_id)
-        if messages is None:
+        if message_id in self.vanish_ids or message_id not in self.messages:
             return None
-        if metadata_only:
-            messages = [{**m, "payload": {"headers": m["payload"]["headers"]}} for m in messages]
-        return {"id": thread_id, "messages": messages}
+        msg = self.messages[message_id]
+        if format == "metadata":
+            return {**msg, "payload": {"headers": msg["payload"]["headers"]}}
+        return msg
 
     async def send_message(self, raw):
         self.sent.append(raw)
@@ -129,14 +116,18 @@ class FakeGmailClient:
         return {"id": f"sent-{n}", "threadId": f"sent-thread-{n}", "simulated": True}
 
 
-def sample_mailbox(client: FakeGmailClient) -> FakeGmailClient:
-    """가상 회사 메일 몇 통 (로컬 시연용). 실제 인물·사내 정보가 아니다."""
-    t = lambda d, h: datetime(2026, 11, d, h, 0, tzinfo=timezone.utc)  # noqa: E731
-    client.add_thread("18c1a0000000a001", make_message(
-        "m1", sender="김하늘 <sky.kim@acme.example>", to=["doyun.lee@acme.example"],
-        subject="12월 인사평가 일정 안내", body="12월 8일부터 인사평가가 시작됩니다.", sent_at=t(17, 1)))
-    client.add_thread("18c1a0000000a002", make_message(
-        "m2", sender="박서연 <seoyeon.park@acme.example>", to=["minjun.choi@acme.example"],
-        cc=["sky.kim@acme.example"], subject="11월 경비 정산 마감", body="경비 정산은 11월 28일까지입니다.",
-        sent_at=t(18, 2)))
-    return client
+def sample_mailboxes() -> dict[str, FakeGmailClient]:
+    """직원별 가상 메일함 (로컬 시연용)."""
+    kim = FakeGmailClient(KIM).add(
+        make_message("k1", thread_id="kt1", sender=f"김하늘 <{KIM}>", to=[LEE], subject="12월 인사평가 일정 안내",
+                     body="12월 8일부터 인사평가가 시작됩니다.", sent_at=ts(17, 1), labels=["SENT"]),
+        make_message("k2", thread_id="kt2", sender=PARK, to=[CHOI], cc=[KIM], subject="11월 경비 정산 마감",
+                     body="경비 정산은 11월 28일까지입니다.", sent_at=ts(18, 2)),
+    )
+    choi = FakeGmailClient(CHOI).add(
+        make_message("c1", thread_id="ct1", sender=PARK, to=[CHOI], cc=[KIM], subject="11월 경비 정산 마감",
+                     body="경비 정산은 11월 28일까지입니다.", sent_at=ts(18, 2)),
+        make_message("c2", thread_id="ct2", sender=PARK, to=[CHOI], subject="연봉 상한 확정",
+                     body="올해 연봉 상한은 5% 입니다.", sent_at=ts(19, 3)),
+    )
+    return {KIM_ID: kim, CHOI_ID: choi, LEE_ID: FakeGmailClient(LEE), PARK_ID: FakeGmailClient(PARK)}

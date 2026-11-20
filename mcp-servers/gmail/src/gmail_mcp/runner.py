@@ -1,14 +1,13 @@
-"""동기화 실행기 — 스케줄러(cron 등)가 주기적으로 실행한다. LLM 툴이 아니다.
+"""동기화 실행기 — 직원별 메일함을 관계형 DB 로 가져온다. 스케줄러(cron 등)가 주기적으로 실행한다.
 
-  uv run gmail-sync                 # 증분 동기화 (마지막 성공 시각 이후)
-  uv run gmail-sync --full          # 처음부터 전체 동기화
-  uv run gmail-sync --perm-sync     # 권한 동기화 (전체 슬림 목록으로 권한 다시 계산)
+  uv run gmail-sync --user E1001                 # 증분 동기화 (마지막 성공 이후 메일)
+  uv run gmail-sync --all                        # 계정을 연결한 모든 직원
+  uv run gmail-sync --user E1001 --full          # 처음부터 전체 다시 확인 (바뀐 것만 DB 에 씀)
+  uv run gmail-sync --user E1001 --prune         # 삭제 감지 (원본에서 사라진 메일을 DB 에서 삭제)
+  uv run gmail-sync --user E1001 --prune --force # 삭제 비율 가드를 넘어도 반영 (사람이 확인한 뒤에만)
 
-결과 (GMAIL_SYNC_DIR, 기본 data/sync/gmail/)
-  state.json                         마지막 성공 시각 + 진행 중 체크포인트 (중단 시 이어서)
-  documents/<job_id>.jsonl           MailDocument (문서 처리 파트가 파싱·청킹)
-  failures/<job_id>.jsonl            문서 단위 실패
-  permissions/<job_id>.jsonl         DocAccessUpdate (권한 동기화 결과)
+모든 결과는 DB 에 남는다: mail_message(메일) · mail_sync_state(재개 지점) · mail_sync_failure(사유 코드) ·
+mail_sync_run(실행마다 건수). 벡터DB · 청킹에는 넣지 않는다.
 """
 
 from __future__ import annotations
@@ -18,122 +17,169 @@ import json
 import sys
 import time
 import uuid
-from dataclasses import dataclass
-from pathlib import Path
+from collections import Counter
+from dataclasses import dataclass, field
 
-from pydantic import BaseModel
-
-from .client import GmailClient, build_client
+from .client import GmailClient
 from .config import Settings
-from .models import MailCheckpoint, MailDocument, SyncFailure
-from .perm_sync import gmail_doc_sync
+from .models import ChangeKind, DeletedCandidate, MailCheckpoint, SyncFailure
+from .store import MailStore
 from .sync import GmailSyncConnector
 
 
-class SyncState(BaseModel):
-    last_sync_end: float | None = None  # 마지막으로 끝까지 성공한 창의 끝 시각 (다음 창의 시작)
-    window_start: float | None = None  # 진행 중인 창 (중단됐을 때만 값이 있음)
-    window_end: float | None = None
-    checkpoint: MailCheckpoint | None = None
-    job_id: str | None = None
-
-
-def load_state(path: Path) -> SyncState:
-    return SyncState.model_validate_json(path.read_text(encoding="utf-8")) if path.exists() else SyncState()
-
-
-def save_state(path: Path, state: SyncState) -> None:
-    """임시 파일에 쓴 뒤 교체 — 저장 도중 멈춰도 state.json 이 깨지지 않게."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(state.model_dump_json(indent=2), encoding="utf-8")
-    tmp.replace(path)
+class PruneGuardError(RuntimeError):
+    """삭제 판정이 너무 많아 반영하지 않고 멈췄다 (목록 오류 · 계정 착오 방지)."""
 
 
 def new_job_id(prefix: str) -> str:
-    """같은 초에 여러 번 실행돼도 결과 파일이 섞이지 않도록 무작위 접미사를 붙인다."""
+    """같은 초에 여러 번 실행돼도 섞이지 않도록 무작위 접미사를 붙인다."""
     return f"{prefix}-{time.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
-
-
-def _append(path: Path, items: list[BaseModel]) -> None:
-    if not items:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8", newline="\n") as f:
-        for item in items:
-            f.write(item.model_dump_json() + "\n")
 
 
 @dataclass
 class SyncStats:
+    owner_user_id: str
     job_id: str
-    documents: int = 0
-    failures: int = 0
+    mode: str
     pages: int = 0
     resumed: bool = False
+    completed: bool = True  # 페이지 제한으로 중간에 멈췄으면 False (다음 실행이 이어서 진행)
+    changes: Counter = field(default_factory=Counter)  # new / updated / deleted
+    unchanged: int = 0
+    failures: Counter = field(default_factory=Counter)  # 사유 코드별
+    skipped: Counter = field(default_factory=Counter)
+
+    def as_dict(self) -> dict:
+        return {"owner_user_id": self.owner_user_id, "job_id": self.job_id, "mode": self.mode, "pages": self.pages,
+                "resumed": self.resumed, "completed": self.completed, "changes": dict(self.changes),
+                "unchanged": self.unchanged, "failures": dict(self.failures), "skipped": dict(self.skipped)}
 
 
 async def run_incremental(
-    connector: GmailSyncConnector, sync_dir: Path, *, now: float | None = None, full: bool = False
+    connector: GmailSyncConnector,
+    store: MailStore,
+    *,
+    now: float | None = None,
+    full: bool = False,
+    max_pages: int | None = None,
 ) -> SyncStats:
-    state_path = sync_dir / "state.json"
-    state = load_state(state_path)
-    resumed = state.checkpoint is not None and not full
+    owner = connector.owner_user_id
+    state = await store.get_sync_state(owner)
+    resumed = state.in_progress and not full
+    if resumed:
+        job_id, start, end = state.job_id or new_job_id("gmail"), state.window_start, state.window_end
+        checkpoint = MailCheckpoint(has_more=state.has_more, page_token=state.page_token)
+    else:
+        job_id, start, end = new_job_id("gmail"), (None if full else state.last_sync_end), (now or time.time())
+        checkpoint = MailCheckpoint()
+        await store.save_sync_state(owner, last_sync_end=state.last_sync_end, window_start=start, window_end=end,
+                                    checkpoint=checkpoint, job_id=job_id)
 
-    if not resumed:
-        state = SyncState(
-            last_sync_end=None if full else state.last_sync_end,
-            window_start=None if full else state.last_sync_end,
-            window_end=now or time.time(),
-            checkpoint=MailCheckpoint(),
-            job_id=new_job_id("gmail"),
-        )
-        save_state(state_path, state)
-
-    stats = SyncStats(job_id=state.job_id or "gmail", resumed=resumed)
-    checkpoint = state.checkpoint or MailCheckpoint()
+    stats = SyncStats(owner_user_id=owner, job_id=job_id, mode="full" if full else "incremental", resumed=resumed)
     while checkpoint.has_more:
-        results, checkpoint = await connector.load_from_checkpoint(state.window_start, state.window_end, checkpoint)
-        docs = [r for r in results if isinstance(r, MailDocument)]
-        failures = [r for r in results if isinstance(r, SyncFailure)]
-        _append(sync_dir / "documents" / f"{stats.job_id}.jsonl", docs)
-        _append(sync_dir / "failures" / f"{stats.job_id}.jsonl", failures)
-        stats.documents += len(docs)
-        stats.failures += len(failures)
+        if max_pages is not None and stats.pages >= max_pages:
+            stats.completed = False
+            break
+        results, checkpoint = await connector.load_from_checkpoint(start, end, checkpoint)
+        failures: list[SyncFailure] = []
+        deleted: list[str] = []
+        for r in results:
+            if isinstance(r, SyncFailure):
+                failures.append(r)
+                stats.failures[str(r.reason)] += 1
+            elif isinstance(r, DeletedCandidate):  # 실패가 아니라 삭제 후보
+                deleted.append(r.message_id)
+            else:
+                kind = await store.upsert(r)  # 같으면 쓰지 않음
+                if kind is None:
+                    stats.unchanged += 1
+                else:
+                    stats.changes[str(kind)] += 1
+        if deleted:
+            removed = await store.delete(owner, deleted)
+            stats.changes[str(ChangeKind.DELETED)] += removed
+            stats.skipped["deleted_during_fetch"] += len(deleted) - removed
+        await store.record_failures(owner, job_id, failures)
         stats.pages += 1
-        state.checkpoint = checkpoint
-        save_state(state_path, state)  # 페이지마다 저장 → 중단돼도 이 페이지 다음부터
+        await store.save_sync_state(owner, last_sync_end=state.last_sync_end, window_start=start, window_end=end,
+                                    checkpoint=checkpoint, job_id=job_id)
 
-    save_state(state_path, SyncState(last_sync_end=state.window_end))
+    if stats.completed:
+        await store.save_sync_state(owner, last_sync_end=end, window_start=None, window_end=None,
+                                    checkpoint=None, job_id=None)
+    await store.record_run(owner, job_id, stats.mode, stats.as_dict())
     return stats
 
 
-async def run_perm_sync(connector: GmailSyncConnector, sync_dir: Path) -> int:
-    job_id = new_job_id("gmail-perm")
-    out = sync_dir / "permissions" / f"{job_id}.jsonl"
-    batch, count = [], 0
-    async for update in gmail_doc_sync(connector):
-        batch.append(update)
-        if len(batch) >= 500:
-            _append(out, batch)
-            count, batch = count + len(batch), []
-    _append(out, batch)
-    return count + len(batch)
+async def run_prune(
+    connector: GmailSyncConnector, store: MailStore, *, max_ratio: float = 0.3, min_docs: int = 20, force: bool = False
+) -> SyncStats:
+    """원본에서 사라진 메일을 DB 에서 지운다.
+
+    - 메일 목록이 불완전하면(페이지 토큰 반복 등) 예외 → 아무것도 지우지 않음
+    - 삭제 판정이 저장된 메일의 max_ratio 를 넘으면 반영하지 않고 PruneGuardError (계정 착오 · API 오류 방지)
+    """
+    owner = connector.owner_user_id
+    stats = SyncStats(owner_user_id=owner, job_id=new_job_id("gmail-prune"), mode="prune")
+    stored = await store.message_ids(owner)
+    deleted = sorted(stored - await connector.list_all_message_ids())
+    total = len(stored)
+    if not force and total >= min_docs and deleted and len(deleted) / total > max_ratio:
+        stats.skipped["prune_guard"] = len(deleted)
+        await store.record_run(owner, stats.job_id, stats.mode, stats.as_dict())
+        raise PruneGuardError(
+            f"삭제 판정 {len(deleted)}건 / 저장 {total}건 ({len(deleted) / total:.0%}) — "
+            f"기준 {max_ratio:.0%} 초과로 반영하지 않았습니다. 확인 후 --prune --force 로 실행하세요."
+        )
+    stats.changes[str(ChangeKind.DELETED)] = await store.delete(owner, deleted)
+    stats.unchanged = total - len(deleted)
+    await store.record_run(owner, stats.job_id, stats.mode, stats.as_dict())
+    return stats
 
 
-async def _main(argv: list[str]) -> None:
+# ── CLI ───────────────────────────────────────────────────
+
+
+def _arg(argv: list[str], name: str) -> str | None:
+    return argv[argv.index(name) + 1] if name in argv and argv.index(name) + 1 < len(argv) else None
+
+
+async def _sync_user(settings: Settings, store: MailStore, user_id: str, argv: list[str]) -> dict:
+    from .accounts import client_for
+
+    client: GmailClient = client_for(settings, user_id)
+    connector = GmailSyncConnector(client, user_id, max_message_bytes=settings.max_message_bytes)
+    try:
+        if "--prune" in argv:
+            stats = await run_prune(connector, store, max_ratio=settings.prune_max_ratio,
+                                    min_docs=settings.prune_min_docs, force="--force" in argv)
+        else:
+            stats = await run_incremental(connector, store, full="--full" in argv)
+    except PruneGuardError as exc:
+        return {"owner_user_id": user_id, "error": "prune_guard", "message": str(exc)}
+    return stats.as_dict()
+
+
+async def _main(argv: list[str]) -> int:
     settings = Settings.from_env()
-    client: GmailClient = build_client(settings)
-    connector = GmailSyncConnector(client, await client.get_profile_email())
-    if "--perm-sync" in argv:
-        print(json.dumps({"permissions": await run_perm_sync(connector, settings.sync_dir)}))
-        return
-    stats = await run_incremental(connector, settings.sync_dir, full="--full" in argv)
-    print(json.dumps(stats.__dict__, ensure_ascii=False))
+    store = MailStore(settings.db_path)
+    if "--all" in argv:
+        users = await store.connected_users()
+    elif user := _arg(argv, "--user"):
+        users = [user]
+    else:
+        print("사용법: uv run gmail-sync --user <사번> [--full | --prune [--force]]  또는  --all")
+        return 2
+    code = 0
+    for user_id in users:
+        result = await _sync_user(settings, store, user_id, argv)
+        code = code or (2 if "error" in result else 0)
+        print(json.dumps(result, ensure_ascii=False))
+    return code
 
 
 def main() -> None:
-    asyncio.run(_main(sys.argv[1:]))
+    sys.exit(asyncio.run(_main(sys.argv[1:])))
 
 
 if __name__ == "__main__":

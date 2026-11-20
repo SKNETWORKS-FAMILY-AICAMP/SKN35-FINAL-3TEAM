@@ -1,93 +1,63 @@
-"""메일 동기화 · 권한 동기화 · 툴 입출력 모델.
+"""메일 저장 · 동기화 · 툴 입출력 모델.
 
-용어는 Onyx 커넥터 구조를 따른다 (Document / SlimDocument / Checkpoint / ConnectorFailure / ExternalAccess).
+권한 원칙 (개인 계정 방식)
+- 직원마다 **자기 Google 계정**으로 로그인한다. 메일함 주인 = 그 메일을 볼 수 있는 유일한 사람.
+- 메일은 **관계형 DB(mail_message)에만** 저장한다. 벡터DB · 청킹 대상이 아니다.
+- 모든 조회는 owner_user_id(로그인 사용자) 조건이 붙는다. 저장소(store.py)는 주인 없이 조회하는 함수를 두지 않는다.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, Field
 
-SCHEMA_VERSION = "1.0"
-
-
-class MailAccess(BaseModel):
-    """메일 문서를 볼 수 있는 사람 (Onyx 의 ExternalAccess 에 해당).
-
-    팀 공용 메일함 하나를 쓰므로, 메일함 소유자(팀 계정)만이 아니라
-    **메일 참여자(From·To·Cc·Bcc)** 를 열람 가능자로 둔다. 플랫폼은 이 이메일을 users 표의 직원과 매칭한다.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    user_emails: tuple[str, ...]
-    group_ids: tuple[str, ...] = ()
-    is_public: bool = False
-
-    @field_validator("user_emails", "group_ids", mode="before")
-    @classmethod
-    def _normalize(cls, values):
-        return tuple(sorted({v.strip().lower() for v in values if v and v.strip()}))
-
-    def allows(self, email: str | None) -> bool:
-        return self.is_public or (email is not None and email.strip().lower() in self.user_emails)
+SCHEMA_VERSION = "3.0"  # 2.0(공용 메일함 · 변경 이벤트) → 3.0(개인 메일함 · 관계형 DB 저장)
 
 
 class MailMessage(BaseModel):
     message_id: str
-    sender: str = Field(description="From 주소")
+    thread_id: str = ""
+    sender: str = Field(default="", description="From 주소")
     to: list[str] = []
     cc: list[str] = []
-    bcc: list[str] = []
+    bcc: list[str] = Field(default_factory=list, description="숨은참조 (내가 보낸 메일에만 있음)")
     subject: str = ""
     sent_at: datetime | None = None
     labels: list[str] = []
     body: str = ""
-
-    @property
-    def participants(self) -> set[str]:
-        return {a for a in [self.sender, *self.to, *self.cc, *self.bcc] if a}
+    body_omitted: bool = Field(default=False, description="본문 일부가 너무 커서 생략됨")
 
 
-class MailDocument(BaseModel):
-    """동기화 결과 1건 = 스레드 1개 (Onyx 와 같이 스레드 단위 문서). doc_id 가 같으면 덮어쓴다(멱등)."""
+class MailRecord(MailMessage):
+    """mail_message 테이블의 한 행 = 한 직원 메일함의 메일 한 통."""
 
-    schema_version: str = SCHEMA_VERSION
-    doc_id: str = Field(description="'gmail:<thread_id>'")
-    thread_id: str
-    source: str = "gmail"
-    title: str
-    link: str
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-    primary_owners: list[str] = Field(default_factory=list, description="보낸 사람")
-    secondary_owners: list[str] = Field(default_factory=list, description="받는 사람 (To·Cc·Bcc)")
-    messages: list[MailMessage]
-    access: MailAccess
-
-    def to_text(self) -> str:
-        """파서·청커에 넘길 본문 텍스트 (메시지 순서대로)."""
-        parts = []
-        for m in self.messages:
-            header = f"From: {m.sender}\nTo: {', '.join(m.to)}\nDate: {m.sent_at or ''}\nSubject: {m.subject}"
-            parts.append(f"{header}\n\n{m.body}".strip())
-        return "\n\n---\n\n".join(parts)
+    owner_user_id: str
+    size_bytes: int = 0
+    content_hash: str = Field(description="저장 내용의 해시 — 같으면 다시 쓰지 않는다")
 
 
-class SlimMailDocument(BaseModel):
-    """본문 없이 ID + 권한만 (권한 동기화 · 삭제 감지용)."""
+class FailureReason(StrEnum):
+    """수집 단계 실패 사유 코드."""
 
-    doc_id: str
-    access: MailAccess
+    FETCH_ERROR = "fetch_error"  # Gmail API 호출 실패 (네트워크 · 권한 · 서버 오류)
+    TOO_LARGE = "too_large"  # 크기 제한 초과 — 건너뛰지 않고 기록
+    INVALID_MESSAGE = "invalid_message"  # ID 없음 등 원본이 비정상
 
 
 class SyncFailure(BaseModel):
-    """문서 하나의 실패. 전체 동기화를 멈추지 않고 기록만 한다 (Onyx 의 ConnectorFailure)."""
+    """메일 한 통의 실패. 전체 동기화를 멈추지 않고 기록만 한다 (Onyx 의 ConnectorFailure)."""
 
-    doc_id: str | None
-    link: str | None = None
-    error: str
+    message_id: str | None
+    reason: FailureReason
+    detail: str = ""
+
+
+class DeletedCandidate(BaseModel):
+    """목록에는 있었지만 가져오려 할 때 사라진 메일 — 실패가 아니라 삭제 후보."""
+
+    message_id: str
 
 
 class MailCheckpoint(BaseModel):
@@ -97,11 +67,10 @@ class MailCheckpoint(BaseModel):
     page_token: str | None = None
 
 
-class DocAccessUpdate(BaseModel):
-    """권한 동기화 결과 1건 (Onyx 의 DocExternalAccess)."""
-
-    doc_id: str
-    access: MailAccess
+class ChangeKind(StrEnum):
+    NEW = "new"
+    UPDATED = "updated"  # 라벨 등 저장 내용이 바뀜
+    DELETED = "deleted"
 
 
 # ── MCP 툴 입출력 ──────────────────────────────────────────
@@ -118,6 +87,7 @@ class MailSummary(BaseModel):
 class MailSearchResult(BaseModel):
     query: str
     threads: list[MailSummary]
+    synced: bool = Field(description="검색 전에 최신 메일을 가져왔는지 (실패하면 저장된 메일로만 검색)")
 
 
 class MailThread(BaseModel):
@@ -125,7 +95,7 @@ class MailThread(BaseModel):
     subject: str
     link: str
     messages: list[MailMessage]
-    truncated: bool = Field(description="본문 일부가 길이 제한으로 잘렸는지")
+    truncated: bool = Field(description="본문 일부가 길이 제한으로 잘렸거나 생략됐는지")
 
 
 class SendResult(BaseModel):

@@ -50,4 +50,5 @@ media/
 .env_old
 
 # 미업로드 파일
-*.txt
+presentations/
+runbooks/
