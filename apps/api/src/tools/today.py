@@ -15,7 +15,13 @@ WEEKDAYS = (
 TODAY_SPEC = ToolSpec(
     name="today",
     display_name="날짜 확인",
-    description="한국 시간 기준 오늘 날짜와 요일을 확인하거나 날짜를 계산합니다. weekday는 오늘, base_weekday는 기준일, target_weekday는 계산 결과의 요일입니다.",
+    effect="read",
+    domain="날짜",
+    description=(
+        "한국 시간 기준 오늘 날짜와 요일을 확인하고, 기준일에서 N일 뒤 날짜를 계산합니다. "
+        "달력일 계산과 영업일 계산(주말과 휴일 제외)을 모두 할 수 있습니다. "
+        "weekday는 오늘, base_weekday는 기준일, target_weekday는 계산 결과의 요일입니다."
+    ),
     parameters={
         "type": "object",
         "properties": {

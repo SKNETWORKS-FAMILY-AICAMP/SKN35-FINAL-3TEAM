@@ -10,6 +10,7 @@ from typing import Any
 from contracts.harness import Denial, Message, RunResult
 from contracts.permission import Principal
 from harness import create_harness
+from harness.grounding import strip_empty_citation
 from services.agents import Agent
 from services.container import AppServices
 from services.sessions import ChatSession
@@ -116,6 +117,7 @@ async def send_message(
     harness = create_harness(
         llm=svc.llm, tools=tools, checker=svc.checker, approver=svc.approvals,
         audit=svc.audit, max_turns=svc.max_turns, tool_timeout=svc.tool_timeout,
+        require_search=svc.require_search,
     )
     run_id = str(uuid.uuid4())
     async with session.lock:
@@ -129,7 +131,7 @@ async def send_message(
         session.messages = list(result.messages[1:])
 
     if result.final_message is not None:
-        text = result.final_message.content
+        text = strip_empty_citation(result.final_message.content)
     else:
         text = "요청을 처리하는 데 단계가 너무 많아 중단했습니다. 요청을 나눠서 다시 시도해 주세요."
     labels = {s.name: s.label for s in await tools.specs()}

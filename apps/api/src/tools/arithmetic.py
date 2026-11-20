@@ -20,7 +20,10 @@ class ArithmeticTool:
     def __init__(
         self, name: str, display_name: str, description: str, op: Callable[[float, float], float]
     ) -> None:
-        self.spec = ToolSpec(name=name, description=description, parameters=_PARAMS, display_name=display_name)
+        self.spec = ToolSpec(
+            name=name, description=description, parameters=_PARAMS, display_name=display_name,
+            effect="read", domain="계산",
+        )
         self._op = op
 
     async def run(self, call: ToolCall) -> ToolResult:

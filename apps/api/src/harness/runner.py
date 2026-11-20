@@ -28,6 +28,7 @@ from contracts.permission import (
     ToolCall,
 )
 from harness.denial import DoneTool, template_reply, wrapup_instruction
+from harness.grounding import RequireSearch
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ class AgentRunner:
         audit: AuditLogger,
         max_turns: int,
         tool_timeout: float | None = DEFAULT_TOOL_TIMEOUT,
+        require_search: RequireSearch | None = None,
     ) -> None:
         self.llm = llm
         self.tools = tools
@@ -67,6 +69,7 @@ class AgentRunner:
         self.audit = audit
         self.max_turns = max_turns
         self.tool_timeout = tool_timeout  # None 이면 제한 없음
+        self.require_search = require_search  # 문서 질문이면 검색 강제 (harness/grounding.py)
 
     async def run(
         self,
@@ -83,13 +86,29 @@ class AgentRunner:
         specs = await self.tools.specs()
 
         done: list[DoneTool] = []  # 이번 run 에서 성공한 툴 실행 (거부 시 마무리 답변에 씀)
+        rs = self.require_search
+        search_spec = next((s for s in specs if rs and s.name == rs.search_tool), None)
+        grounded = False  # 이번 run 에서 문서 툴이 성공했는가
+        force_search = False  # 다음 호출은 검색 강제
+        forced = False  # run 당 한 번만
 
         for turn in range(1, self.max_turns + 1):
-            reply = (await self.llm.chat(list(messages), specs)).message
-            messages.append(reply)
+            if force_search:
+                force_search = False
+                reply = rs.forced_call(await self._ask_search(messages, rs, search_spec), user_input)
+            else:
+                reply = (await self.llm.chat(list(messages), specs)).message
 
             if not reply.tool_calls:
+                # 문서 근거 없이 규정을 답했으면 그 답은 버리고 검색부터 시킨다 (강제 검색 + 답 쓰기 2회가 남아 있을 때만)
+                if (search_spec and not grounded and not forced and turn + 2 <= self.max_turns
+                        and rs.needed(user_input, reply.content, used_other_tools=bool(done))):
+                    forced = force_search = True
+                    log.info("문서 근거 없는 답이라 검색을 강제합니다 (run %s)", run_id)
+                    continue
+                messages.append(reply)
                 return RunResult(reply, messages, turn, "completed")
+            messages.append(reply)
             if turn == self.max_turns:
                 break
 
@@ -111,12 +130,21 @@ class AgentRunner:
                 messages.append(outcome.message)
                 if outcome.ok:
                     done.append(DoneTool(outcome.label, outcome.message.content))
+                    grounded = grounded or bool(rs and call.tool_name in rs.grounded_tools)
                 denial = outcome.denial
 
             if denial is not None:
                 return await self._stop_denied(messages, denial, done, llm_calls=turn)
 
         return RunResult(None, messages, self.max_turns, "max_turns")
+
+    async def _ask_search(self, messages: list[Message], rs: RequireSearch, search_spec) -> Message | None:
+        """검색 툴 하나만 주고 다시 묻는다. 안내 문구는 기록에 남기지 않는다. 실패하면 None (하네스가 직접 검색)."""
+        try:
+            return (await self.llm.chat([*messages, rs.nudge()], [search_spec])).message
+        except Exception:
+            log.warning("검색 강제 LLM 호출 실패, 질문으로 직접 검색", exc_info=True)
+            return None
 
     async def _stop_denied(
         self, messages: list[Message], denial: Denial, done: list[DoneTool], llm_calls: int
@@ -191,9 +219,10 @@ def create_harness(
     audit: AuditLogger,
     max_turns: int,
     tool_timeout: float | None = DEFAULT_TOOL_TIMEOUT,
+    require_search: RequireSearch | None = None,
 ) -> AgentRunner:
     return AgentRunner(
         llm=llm, tools=tools, checker=checker,
         approver=approver, audit=audit, max_turns=max_turns,
-        tool_timeout=tool_timeout,
+        tool_timeout=tool_timeout, require_search=require_search,
     )

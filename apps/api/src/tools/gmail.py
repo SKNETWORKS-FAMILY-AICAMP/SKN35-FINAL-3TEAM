@@ -74,6 +74,7 @@ class GmailTool:
     def __init__(self, name: str, connection: GmailMCPConnection) -> None:
         display_name, description, model = MAIL_TOOLS[name]
         self.spec = ToolSpec(name=name, display_name=display_name, description=description,
+                             effect="send" if name == "send_mail" else "read", domain="메일",
                              parameters=model.model_json_schema())
         self._model = model
         self.connection = connection

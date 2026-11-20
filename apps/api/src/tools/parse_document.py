@@ -25,6 +25,8 @@ DEFAULT_TIMEOUT = 600.0  # 이 툴만의 실행 제한시간(초). 러너가 too
 PARSE_DOCUMENT_SPEC = ToolSpec(
     name="parse_document",
     display_name="업로드 문서 읽기",
+    effect="read",
+    domain="문서",
     description=(
         "사용자가 첨부한 파일 목록의 file_id로 문서를 읽어 본문을 마크다운으로 돌려줍니다. 표는 마크다운 표로 들어 있습니다. "
         "문서가 길면 앞부분만 돌려주고 truncated=true 로 알려주므로, 필요하면 pages 로 쪽 범위를 좁혀 다시 부르세요."

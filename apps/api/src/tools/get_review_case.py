@@ -19,6 +19,8 @@ class ReviewLookupInput(BaseModel):
 GET_REVIEW_CASE_SPEC = ToolSpec(
     name="get_review_case",
     display_name="심사 건 조회",
+    effect="read",
+    domain="심사",
     description="가상 심사시스템에서 요청자의 부서와 보안등급으로 열람 가능한 심사 건의 상태, 제출·누락 서류와 등록 요청을 조회합니다.",
     parameters=ReviewLookupInput.model_json_schema(),
 )

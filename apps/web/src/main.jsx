@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   ArrowUp, Bot, Braces, Check, ChevronRight, CircleAlert, FileText, Inbox, LayoutTemplate, ListChecks,
-  LoaderCircle, Lock, MessageSquare, Paperclip, Plus, Power, PowerOff, Search, Settings2, Share2, ShieldCheck,
+  LoaderCircle, Lock, Pencil, MessageSquare, Paperclip, Plus, Power, PowerOff, Search, Settings2, Share2, ShieldCheck,
   Sparkles, Trash2, Undo2, UserRound, Workflow, Wrench, X,
 } from 'lucide-react';
 import './style.css';
@@ -47,7 +47,8 @@ const navigation = [
   { id: 'tools', name: '도구 목록', detail: '등록된 도구 보기', icon: Wrench, color: '#74d5e4' },
 ];
 
-const templates = [
+// 채팅 첫 화면의 빠른 예시 (시나리오 템플릿은 서버의 /api/templates)
+const quickExamples = [
   { name: '회의록 정리', description: '회의 메모에서 결정 사항과 후속 작업을 정리합니다.', system_prompt: '회의 메모를 읽고 핵심 논의, 결정 사항, 담당자와 기한이 포함된 후속 작업을 정리하세요.', tools: [], icon: FileText, example: '신규 기능 회의\n결정: 다음 배포에 검색 필터 추가\n후속 작업: 지민이 금요일까지 시안 작성' },
   { name: '코드 리뷰', description: '공유한 코드를 검토하는 흐름으로 시작합니다.', system_prompt: '코드의 정확성, 예외 처리, 가독성을 검토하고 수정 우선순위를 제시하세요.', tools: [], icon: Braces, example: 'function divide(a, b) { return a / b; }' },
   { name: '계산 도우미', description: '사칙연산 도구로 숫자를 계산합니다.', system_prompt: '숫자 계산은 반드시 도구로 하고, 계산식과 결과를 짧게 답하세요.', tools: ['add', 'subtract', 'multiply'], icon: ListChecks, example: '123 곱하기 45 계산해줘' },
@@ -58,6 +59,17 @@ const STATUS = { active: '사용 중', disabled: '비활성' };
 const REQUEST_STATUS = { pending: '대기', approved: '승인', rejected: '반려' };
 const ROLE = { admin: '관리자', dept_head: '부서장', member: '팀원' };
 const blank = { name: '', description: '', system_prompt: '', tools: [] };
+const EFFECT = { read: '조회', write: '등록·변경', send: '발송' };
+
+// 업무 분류(domain)별로 묶는다. 분류가 없는 툴은 '기타'.
+function groupTools(tools) {
+  const groups = new Map();
+  for (const tool of tools) {
+    const key = tool.domain || '기타';
+    groups.set(key, [...(groups.get(key) ?? []), tool]);
+  }
+  return [...groups];
+}
 const DEFAULT_AGENT = { agent_id: null, name: '기본 에이전트', description: '모든 도구를 쓰는 기본 에이전트' };
 const userKey = 'agent-workspace.user.v1';
 
@@ -114,7 +126,7 @@ function Badge({ children, tone = '' }) {
 
 // ── 에이전트 편집 폼 ────────────────────────────────────────
 
-function AgentEditor({ draft, tools, onSave, submitLabel, disabled = false, busy = false }) {
+function AgentEditor({ draft, tools, onSave, submitLabel, disabled = false, busy = false, suggested = [], withExample = false, onCancel }) {
   const [form, setForm] = useState(draft);
   const set = (key, value) => setForm(previous => ({ ...previous, [key]: value }));
   const ready = form.name.trim() && form.system_prompt.trim();
@@ -128,19 +140,32 @@ function AgentEditor({ draft, tools, onSave, submitLabel, disabled = false, busy
         <label>설명<input maxLength={1000} value={form.description} onChange={event => set('description', event.target.value)} /></label>
       </div>
       <label>시스템 프롬프트<textarea required maxLength={4000} rows={6} value={form.system_prompt} onChange={event => set('system_prompt', event.target.value)} /></label>
+      {withExample && <label>요청 예시 <small className="muted">· 이 템플릿으로 만든 에이전트에게 보낼 만한 요청</small><input maxLength={500} value={form.example ?? ''} onChange={event => set('example', event.target.value)} /></label>}
       <fieldset>
         <legend>도구 <small className="muted">· 관리자가 등록한 도구 중에서 고릅니다. 실제 실행 여부는 실행할 때 권한 정책이 판정합니다.</small></legend>
-        <div className="tool-row">
-          {tools.map(({ name, display_name, description }) => <label key={name} className={'tool ' + (form.tools.includes(name) ? 'checked' : '')}>
-            <input type="checkbox" checked={form.tools.includes(name)} onChange={event =>
-              set('tools', event.target.checked ? [...form.tools, name] : form.tools.filter(tool => tool !== name))
-            } /><Wrench size={16} /><span>{display_name}<code> {name}</code><small>{description}</small></span>
-          </label>)}
-          {!tools.length && <p className="muted">등록된 도구가 없습니다.</p>}
-        </div>
+        {suggested.some(name => !form.tools.includes(name)) && <p className="suggest-note">
+          <CircleAlert size={15} /> <b>추천</b> 표시된 도구는 데이터를 등록·변경하거나 무언가를 보냅니다. 이 에이전트에 정말 필요한지 확인하고 직접 체크하세요.
+        </p>}
+        {groupTools(tools).map(([domain, items]) => <div key={domain} className="tool-group">
+          <h4>{domain}</h4>
+          <div className="tool-row">
+            {items.map(({ name, display_name, description, effect }) => <label key={name}
+              className={'tool ' + (form.tools.includes(name) ? 'checked ' : '') + (suggested.includes(name) && !form.tools.includes(name) ? 'suggested' : '')}>
+              <input type="checkbox" checked={form.tools.includes(name)} onChange={event =>
+                set('tools', event.target.checked ? [...form.tools, name] : form.tools.filter(tool => tool !== name))
+              } /><Wrench size={16} /><span>{display_name}<code> {name}</code>
+                <span className="tool-badges">
+                  <Badge tone={'effect-' + effect}>{EFFECT[effect] ?? effect}</Badge>
+                  {suggested.includes(name) && <Badge tone="suggest">추천</Badge>}
+                </span>
+                <small>{description}</small></span>
+            </label>)}
+          </div>
+        </div>)}
+        {!tools.length && <p className="muted">등록된 도구가 없습니다.</p>}
       </fieldset>
     </fieldset>
-    {!disabled && <div className="actions"><button className="primary" disabled={!ready || busy}>
+    {!disabled && <div className="actions">{onCancel && <button type="button" className="quiet" onClick={onCancel}>취소</button>}<button className="primary" disabled={!ready || busy}>
       {busy ? <LoaderCircle size={16} className="spin" /> : <Check size={16} />}{submitLabel}
     </button></div>}
   </form>;
@@ -355,7 +380,7 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, conversations, s
         <h1>무엇을 함께 작업할까요?</h1>
         <p>{active.name} · {active.description || '설명 없음'}</p>
         <div className="quick-grid">
-          {templates.map(({ name, icon: Icon, example }) => <button key={name} className="quick" onClick={() => setInput(example)}><Icon size={17} /><span>{name} 예시</span><ChevronRight size={15} /></button>)}
+          {quickExamples.map(({ name, icon: Icon, example }) => <button key={name} className="quick" onClick={() => setInput(example)}><Icon size={17} /><span>{name} 예시</span><ChevronRight size={15} /></button>)}
         </div>
       </div>}
     </div>
@@ -391,18 +416,20 @@ function CreatePage({ user, tools, draft, setDraft, onCreated, notify }) {
   const [drafting, setDrafting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [info, setInfo] = useState('');
+  const [missing, setMissing] = useState([]);
 
   async function makeDraft(event) {
     event.preventDefault();
     if (!brief.trim() || drafting) return;
-    setDrafting(true); setInfo('');
+    setDrafting(true); setInfo(''); setMissing([]);
     try {
       const d = await api(user, '/api/agents/draft', { method: 'POST', body: { description: brief.trim() } });
-      setDraft({ value: { name: d.name, description: d.description, system_prompt: d.system_prompt, tools: d.tools }, version: Date.now() });
+      setDraft({ value: { name: d.name, description: d.description, system_prompt: d.system_prompt, tools: d.tools }, suggested: d.suggested_tools || [], version: Date.now() });
       const notes = [];
       if (d.source === 'fallback') notes.push('LLM 답을 쓸 수 없어 기본 초안을 만들었습니다. 내용을 직접 다듬어 주세요.');
       if (d.dropped_tools.length) notes.push('등록되지 않은 도구는 뺐습니다: ' + d.dropped_tools.join(', '));
       setInfo(notes.join(' '));
+      setMissing(d.missing || []);
     } catch (error) {
       notify(error.message);
     } finally {
@@ -414,7 +441,7 @@ function CreatePage({ user, tools, draft, setDraft, onCreated, notify }) {
     setSaving(true);
     try {
       const agent = await api(user, '/api/agents', { method: 'POST', body: value });
-      setDraft(null); setBrief(''); setInfo('');
+      setDraft(null); setBrief(''); setInfo(''); setMissing([]);
       onCreated(agent);
     } catch (error) {
       notify(error.message);
@@ -432,8 +459,13 @@ function CreatePage({ user, tools, draft, setDraft, onCreated, notify }) {
       </div>
     </form>
     {info && <p className="notice" role="status">{info}</p>}
+    {missing.length > 0 && <div className="missing-tools" role="status">
+      <strong>등록된 도구로는 아직 할 수 없는 일</strong>
+      <ul>{missing.map(item => <li key={item}>{item}</li>)}</ul>
+      <p className="muted">이 일은 에이전트가 할 수 없다고 안내합니다. 필요하면 관리자에게 도구 등록을 요청하세요.</p>
+    </div>}
     {draft && <><h2>에이전트 설정</h2><p className="muted">저장하면 개인용으로 만들어집니다. 부서·전사 공유는 저장 후 상사 승인을 받아야 합니다.</p>
-      <AgentEditor key={draft.version} draft={draft.value} tools={tools} onSave={save} submitLabel="에이전트 저장" busy={saving} /></>}
+      <AgentEditor key={draft.version} draft={draft.value} suggested={draft.suggested || []} tools={tools} onSave={save} submitLabel="에이전트 저장" busy={saving} /></>}
   </>;
 }
 
@@ -511,6 +543,74 @@ function AgentsPage({ user, agents, tools, editingId, setEditingId, refresh, ope
 }
 
 // ── 공유 요청 ───────────────────────────────────────────────
+
+// ── 시나리오 템플릿 ─────────────────────────────────────────
+// 관리자가 만든 템플릿을 골라 내 에이전트로 시작한다. 툴이 아직 없는 템플릿은 '준비 중'.
+
+const emptyTemplate = { ...blank, example: '' };
+
+function TemplatesPage({ user, me, tools, setDraft, notify }) {
+  const [items, setItems] = useState([]);
+  const [editing, setEditing] = useState(null); // null | 'new' | 템플릿
+  const [busy, setBusy] = useState(false);
+  const isAdmin = me?.roles.includes('admin');
+  const label = name => tools.find(tool => tool.name === name)?.display_name ?? name;
+
+  const refresh = useCallback(async () => {
+    try { setItems(await api(user, '/api/templates')); } catch (error) { notify(error.message); }
+  }, [user, notify]);
+  useEffect(() => { refresh(); setEditing(null); }, [refresh]);
+
+  function use(template) {
+    setDraft({ value: { name: template.name, description: template.description, system_prompt: template.system_prompt, tools: template.tools }, version: Date.now() });
+    location.hash = 'create';
+  }
+
+  async function save(value) {
+    setBusy(true);
+    const body = { name: value.name, description: value.description, system_prompt: value.system_prompt, tools: value.tools, example: (value.example ?? '').trim() };
+    try {
+      if (editing === 'new') await api(user, '/api/templates', { method: 'POST', body });
+      else await api(user, '/api/templates/' + editing.template_id, { method: 'PATCH', body });
+      setEditing(null); await refresh(); notify(`'${body.name}' 템플릿을 저장했습니다.`, 'ok');
+    } catch (error) { notify(error.message); } finally { setBusy(false); }
+  }
+
+  async function remove(template) {
+    if (!confirm(`'${template.name}' 템플릿을 지울까요? 이미 이 템플릿으로 만든 에이전트는 그대로 남습니다.`)) return;
+    try { await api(user, '/api/templates/' + template.template_id, { method: 'DELETE' }); await refresh(); }
+    catch (error) { notify(error.message); }
+  }
+
+  if (editing) return <>
+    <h2>{editing === 'new' ? '새 템플릿' : '템플릿 수정'}</h2>
+    <p className="muted">화면에서 만든 템플릿은 등록된 도구만 넣을 수 있습니다. 서버를 다시 켜면 기본 템플릿(config/agent_templates.yaml)으로 돌아갑니다.</p>
+    <AgentEditor key={editing === 'new' ? 'new' : editing.template_id} draft={editing === 'new' ? emptyTemplate : editing}
+      tools={tools} onSave={save} submitLabel="템플릿 저장" busy={busy} withExample onCancel={() => setEditing(null)} />
+  </>;
+
+  return <>
+    {isAdmin && <div className="actions start"><button className="primary" onClick={() => setEditing('new')}><Plus size={16} />새 템플릿</button></div>}
+    <div className="template-grid">{items.map(template => <article className={'panel template' + (template.available ? '' : ' unavailable')} key={template.template_id}>
+      <div className="template-head">
+        <div className="hero-icon small"><LayoutTemplate size={21} /></div>
+        {!template.available && <Badge tone="wait">준비 중</Badge>}
+      </div>
+      <h2>{template.name}</h2><p>{template.description}</p>
+      {template.example && <p className="template-example">예: {template.example}</p>}
+      <div className="tool-tags">{template.tools.map(name => <span key={name} className={template.missing_tools.includes(name) ? 'missing' : ''}>
+        {template.missing_tools.includes(name) ? name + ' (없음)' : label(name)}</span>)}</div>
+      <div className="actions">
+        {isAdmin && <>
+          <button className="quiet" title="수정" onClick={() => setEditing(template)}><Pencil size={15} />수정</button>
+          <button className="quiet danger" title="삭제" onClick={() => remove(template)}><Trash2 size={15} />삭제</button>
+        </>}
+        <button className="primary" disabled={!template.available} onClick={() => use(template)}><Plus size={16} />{template.available ? '템플릿 사용' : '도구 준비 중'}</button>
+      </div>
+    </article>)}</div>
+    {!items.length && <p className="muted">등록된 템플릿이 없습니다.</p>}
+  </>;
+}
 
 function SharesPage({ user, notify, refreshAgents }) {
   const [items, setItems] = useState([]);
@@ -620,7 +720,7 @@ function App() {
             create: '필요한 역할을 설명하면 LLM이 이름, 프롬프트, 도구를 골라 초안을 만듭니다.',
             agents: '내가 만든 에이전트와 공유받은 에이전트를 관리하세요. 부서장은 부서원의 에이전트를 비활성화할 수 있습니다.',
             shares: '부서·전사 공유는 바로 위 관리자가 승인해야 적용됩니다.',
-            templates: '자주 하는 작업을 미리 구성된 시나리오로 시작하세요.',
+            templates: '관리자가 미리 만든 업무 에이전트로 시작하세요. 고른 뒤 내용을 고쳐 내 에이전트로 저장합니다.',
             tools: '관리자가 등록한 도구입니다. 에이전트를 만들 때 이 중에서 고릅니다.',
           }[page]}</p>
         </div>
@@ -637,14 +737,7 @@ function App() {
           </li>)}
           {me?.roles.includes('admin') && <p className="muted">도구 등록(MCP 연결)은 관리자 기능으로 준비 중입니다.</p>}
         </ul>}
-        {page === 'templates' && <div className="template-grid">{templates.map(({ icon: Icon, example, ...template }) => <article className="panel template" key={template.name}>
-          <div className="hero-icon small"><Icon size={21} /></div><h2>{template.name}</h2><p>{template.description}</p>
-          <div className="tool-tags">{tools.filter(({ name }) => template.tools.includes(name)).map(({ name, display_name }) => <span key={name}>{display_name}</span>)}</div>
-          <button className="primary" onClick={() => {
-            setDraft({ value: { ...template, tools: template.tools.filter(name => tools.some(tool => tool.name === name)) }, version: Date.now() });
-            location.hash = 'create';
-          }}><Plus size={16} />템플릿 사용</button>
-        </article>)}</div>}
+        {page === 'templates' && <TemplatesPage user={user} me={me} tools={tools} setDraft={setDraft} notify={notify} />}
       </div>}
     </main>
   </div>;

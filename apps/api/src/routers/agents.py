@@ -30,6 +30,8 @@ class ToolOut(BaseModel):
     name: str
     display_name: str
     description: str
+    effect: str  # read(조회) | write(등록·변경) | send(발송)
+    domain: str  # 화면에서 묶어 보여 주는 업무 분류
 
 
 class AgentIn(BaseModel):
@@ -124,7 +126,10 @@ async def list_tools(
     _: Principal = Depends(current_user), svc: AppServices = Depends(get_services),
 ) -> list[ToolOut]:
     """에이전트를 만들 때 고를 수 있는 툴. 실제 실행 가능 여부는 실행 때 권한 정책이 다시 판정한다."""
-    return [ToolOut(name=s.name, display_name=s.label, description=s.description) for s in await svc.tools.specs()]
+    return [
+        ToolOut(name=s.name, display_name=s.label, description=s.description, effect=s.effect, domain=s.domain)
+        for s in await svc.tools.specs()
+    ]
 
 
 class DraftIn(BaseModel):
@@ -142,6 +147,8 @@ class DraftOut(BaseModel):
     tools: list[str]
     source: str  # llm | fallback (LLM 답을 못 써서 키워드로 만든 초안)
     dropped_tools: list[str]  # LLM 이 골랐지만 등록되지 않아 뺀 툴
+    suggested_tools: list[str]  # LLM 이 고른 등록·발송 툴. 체크하지 않고 추천으로만 보여 준다
+    missing: list[str]  # 필요하지만 등록된 툴로는 못 하는 일 (관리자에게 툴 요청할 때 근거)
 
 
 @router.post("/api/agents/draft", response_model=DraftOut)
@@ -150,7 +157,7 @@ async def make_draft(
 ) -> DraftOut:
     """자연어 설명으로 에이전트 초안을 만든다. 저장하지 않는다 (확인 후 POST /api/agents)."""
     try:
-        d = await draft_agent(svc.llm, body.description, await svc.tools.specs())
+        d = await draft_agent(svc.draft_llm or svc.llm, body.description, await svc.tools.specs())
     except (APITimeoutError, APIConnectionError, APIError) as e:
         raise HTTPException(502, "LLM 서버 응답이 없습니다. 잠시 후 다시 시도해 주세요.") from e
     return DraftOut(**d.__dict__)

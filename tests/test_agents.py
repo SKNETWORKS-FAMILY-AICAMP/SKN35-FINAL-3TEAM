@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -307,7 +309,7 @@ async def test_draft_uses_llm_json_and_drops_unknown_tools(tmp_path):
     assert r.status_code == 200
     assert (d["name"], d["tools"], d["dropped_tools"], d["source"]) == ("덧셈봇", ["add"], ["send_rocket"], "llm")
     messages, tools = svc.llm.calls[0]
-    assert tools == [] and "add (덧셈)" in messages[0].content
+    assert tools == [] and "add (덧셈, 조회)" in messages[0].content
     assert (await client.get("/api/agents", headers=h(KIM))).json() == []  # 저장하지 않는다
 
 
@@ -348,3 +350,85 @@ def test_base_prompt_hides_internals_and_comes_first(tmp_path):
     _, svc = make(tmp_path=tmp_path)
     text = system_prompt(svc, Agent("a", "kim", 10, "규정봇", "get_doc_chunk 툴을 쓰세요"))
     assert text.index("위 규칙을 따른다") < text.index("규정봇")
+
+
+async def test_draft_replaces_tool_names_and_returns_missing(tmp_path):
+    reply = json.dumps({
+        "name": "곱셈봇", "description": "곱한다",
+        "system_prompt": "숫자를 받으면 `multiply` 툴로 곱하고, add 로 더한다. chunk_id 는 쓰지 않는다.",
+        "tools": ["multiply"], "missing": ["만기 대출 조회", "만기 대출 조회", " "],
+    }, ensure_ascii=False)
+    client, _ = make([{"content": reply}], tmp_path)
+    d = (await client.post("/api/agents/draft", json={"description": "곱셈 에이전트"}, headers=h(KIM))).json()
+    assert "multiply" not in d["system_prompt"] and "'곱셈' 툴로" in d["system_prompt"]
+    assert "'덧셈' 로" in d["system_prompt"] and "문단 번호" in d["system_prompt"]
+    assert d["missing"] == ["만기 대출 조회"]
+
+
+def test_draft_instruction_forbids_lookalike_tools():
+    from services.agent_draft import SYSTEM
+
+    assert "정확히 같을 때만" in SYSTEM and '"missing"' in SYSTEM
+
+
+async def test_draft_only_suggests_write_and_send_tools():
+    from contracts.harness import ToolSpec
+    from services.agent_draft import draft_agent
+
+    specs = [
+        ToolSpec("lookup", "조회", display_name="심사 건 조회", effect="read"),
+        ToolSpec("register", "등록", display_name="심사 요청 등록", effect="write"),
+        ToolSpec("mail", "발송", display_name="메일 발송", effect="send"),
+        ToolSpec("legacy", "effect 를 안 정한 툴"),  # 기본값 write: 모르는 툴은 추천만
+    ]
+    llm = ScriptedLLM([{"content": json.dumps(
+        {"name": "봇", "system_prompt": "돕는다", "tools": ["lookup", "register", "mail", "legacy"]})}])
+    d = await draft_agent(llm, "심사 건 보고 등록하고 메일도 보내는 에이전트", specs)
+    assert d.tools == ["lookup"] and d.suggested_tools == ["register", "mail", "legacy"]
+    assert "register (심사 요청 등록, 등록·변경)" in llm.calls[0][0][0].content
+
+
+async def test_tools_api_exposes_effect_and_domain(tmp_path):
+    client, _ = make(tmp_path=tmp_path)
+    tools = {t["name"]: t for t in (await client.get("/api/tools", headers=h(KIM))).json()}
+    assert (tools["add"]["effect"], tools["add"]["domain"]) == ("read", "계산")
+
+
+async def test_draft_uses_draft_llm_and_falls_back_when_model_missing(tmp_path):
+    from openai import NotFoundError
+
+    from services.container import FallbackLLM
+
+    reply = {"content": json.dumps({"name": "큰모델봇", "system_prompt": "돕는다", "tools": []})}
+    client, svc = make([{"content": "chat 모델은 초안에 안 쓴다"}], tmp_path)
+    svc.draft_llm = ScriptedLLM([reply])
+    d = (await client.post("/api/agents/draft", json={"description": "아무거나"}, headers=h(KIM))).json()
+    assert d["name"] == "큰모델봇" and svc.llm.calls == []
+
+    class Missing:
+        model = "qwen3:14b"
+        calls = 0
+
+        async def chat(self, messages, tools):
+            Missing.calls += 1
+            raise NotFoundError("model not found", response=httpx.Response(404, request=httpx.Request("POST", "http://x")), body=None)
+
+    fallback = ScriptedLLM([reply, reply])
+    llm = FallbackLLM(Missing(), fallback)
+    await llm.chat([], [])
+    await llm.chat([], [])
+    assert Missing.calls == 1 and len(fallback.calls) == 2  # 한 번 없으면 다시 시도하지 않는다
+
+
+def test_draft_llm_from_env(monkeypatch):
+    from services.container import FallbackLLM, draft_llm_from_env
+
+    chat = object()
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.setenv("DRAFT_LLM_MODEL", "")
+    assert draft_llm_from_env(chat) is chat  # 비우면 채팅 모델
+    monkeypatch.setenv("DRAFT_LLM_MODEL", "qwen3:14b")
+    llm = draft_llm_from_env(chat)
+    assert isinstance(llm, FallbackLLM) and llm.primary.model == "qwen3:14b" and llm.fallback is chat
+    monkeypatch.setenv("LLM_PROVIDER", "local_math")
+    assert draft_llm_from_env(chat) is chat
