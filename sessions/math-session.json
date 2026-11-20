@@ -1,0 +1,116 @@
+[
+    {
+        "role": "system",
+        "content": "당신은 수학 Agent입니다. 계산에는 반드시 해당하는 Tool을 사용하세요.",
+        "tool_calls": [],
+        "tool_call_id": null
+    },
+    {
+        "role": "user",
+        "content": "10과 5를 add 도구로 더해줘. add 도구 결과를 받은 다음, 그 값을 multiply 도구의 첫 번째 인자로 넣고 2를 곱해줘. 두 도구를 한 번에 호출하지 말고 순서대로 호출해줘.",
+        "tool_calls": [],
+        "tool_call_id": null
+    },
+    {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "call_id": "demo-add",
+                "tool_name": "add",
+                "arguments": {
+                    "a": 10,
+                    "b": 5
+                }
+            }
+        ],
+        "tool_call_id": null
+    },
+    {
+        "role": "tool",
+        "content": "15",
+        "tool_calls": [],
+        "tool_call_id": "demo-add"
+    },
+    {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "call_id": "demo-multiply",
+                "tool_name": "multiply",
+                "arguments": {
+                    "a": 15,
+                    "b": 2
+                }
+            }
+        ],
+        "tool_call_id": null
+    },
+    {
+        "role": "tool",
+        "content": "Rejected by user: 곱하기는 사용자 승인이 필요합니다.",
+        "tool_calls": [],
+        "tool_call_id": "demo-multiply"
+    },
+    {
+        "role": "assistant",
+        "content": "작업을 중단했습니다. Rejected by user: 곱하기는 사용자 승인이 필요합니다.",
+        "tool_calls": [],
+        "tool_call_id": null
+    },
+    {
+        "role": "user",
+        "content": "7과 8을 multiply 도구로 곱해줘",
+        "tool_calls": [],
+        "tool_call_id": null
+    },
+    {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "call_id": "demo-add",
+                "tool_name": "add",
+                "arguments": {
+                    "a": 10,
+                    "b": 5
+                }
+            }
+        ],
+        "tool_call_id": null
+    },
+    {
+        "role": "tool",
+        "content": "15",
+        "tool_calls": [],
+        "tool_call_id": "demo-add"
+    },
+    {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "call_id": "demo-multiply",
+                "tool_name": "multiply",
+                "arguments": {
+                    "a": 15,
+                    "b": 2
+                }
+            }
+        ],
+        "tool_call_id": null
+    },
+    {
+        "role": "tool",
+        "content": "30",
+        "tool_calls": [],
+        "tool_call_id": "demo-multiply"
+    },
+    {
+        "role": "assistant",
+        "content": "계산 결과는 30입니다.",
+        "tool_calls": [],
+        "tool_call_id": null
+    }
+]
