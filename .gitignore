@@ -49,3 +49,8 @@ media/
 .env_old
 # 런타임 로그 (감사 로그 등)
 logs/
+
+# 로컬 PostgreSQL 데이터 폴더
+data/pgdata/
+# 원본 파일 저장소 (문서·작업 파일·산출물)
+data/storage/

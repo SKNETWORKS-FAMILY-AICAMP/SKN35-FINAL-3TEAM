@@ -10,6 +10,11 @@ dependencies = [
     "pyyaml>=6.0.3",
     "tzdata>=2026.6",
     "uvicorn>=0.54.0",
+    # db: PostgreSQL 16 + pgvector. 비동기 ORM(SQLAlchemy) · 드라이버 asyncpg · 마이그레이션 alembic
+    "sqlalchemy[asyncio]>=2.1.9",
+    "asyncpg>=0.32.0",
+    "alembic>=1.20.1",
+    "pgvector>=0.5.1",
 ]
 
 [dependency-groups]
