@@ -64,6 +64,19 @@ async def test_tools_own_timeout_error_is_not_reported_as_harness_timeout():
     assert "raised TimeoutError: upstream timeout" in msg.content
 
 
+async def test_tool_own_timeout_attribute_overrides_harness_default():
+    # 오래 걸리는 툴(문서 파싱 등)은 timeout 속성으로 하네스 기본 제한시간을 바꾼다
+    patient = SlowTool("patient", 0.1)
+    patient.timeout = 5
+    impatient = SlowTool("impatient", 5)
+    impatient.timeout = 0.02
+    harness, _ = build([patient, impatient], tool_timeout=0.05)
+    result = await harness.run("go", Principal("u"), "s1")
+    tool_msgs = [m for m in result.messages if m.role == "tool"]
+    assert tool_msgs[0].content == "done"
+    assert "timed out after 0.02s" in tool_msgs[1].content
+
+
 async def test_no_timeout_when_none():
     harness, _ = build([SlowTool("t", 0.01)], tool_timeout=None)
     result = await harness.run("go", Principal("u"), "s1")

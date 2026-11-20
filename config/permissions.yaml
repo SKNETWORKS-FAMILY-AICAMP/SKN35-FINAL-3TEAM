@@ -64,3 +64,8 @@ rules:
   - id: today
     tool: today
     decision: allow
+
+  # 업로드 문서 읽기: 업로드 폴더 안 파일만 읽는다 (경로 제한은 툴 안에서 강제)
+  - id: parse-document
+    tool: parse_document
+    decision: allow

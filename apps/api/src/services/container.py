@@ -18,6 +18,8 @@ from services.agents import InMemoryAgentStore, InMemoryShareRequestStore
 from services.sessions import InMemorySessionStore
 from services.users import UserDirectory
 from tools.arithmetic import arithmetic_tools
+from tools.parse_document import DEFAULT_TIMEOUT as DEFAULT_PARSE_TIMEOUT
+from tools.parse_document import ParseDocumentTool
 from tools.read_doc import ReadDocumentTool
 from tools.registry import SimpleToolRegistry
 from tools.search_doc import SearchDocumentsTool
@@ -68,10 +70,13 @@ def llm_from_env() -> LLMClient:
     return OpenAICompatLLM.from_env()
 
 
-def build_tools(document_path: str | Path) -> list:
+def build_tools(document_path: str | Path, upload_dir: str | Path | None = None,
+                parse_timeout: float | None = DEFAULT_PARSE_TIMEOUT) -> list:
     """관리자가 등록한 툴 목록. 에이전트는 이 중에서 고른다 (MCP 연결 전까지는 코드로 등록)."""
     doc = Path(document_path)
-    return [*arithmetic_tools(), SearchDocumentsTool(doc), ReadDocumentTool(doc), TodayTool()]
+    uploads = Path(upload_dir) if upload_dir else REPO_ROOT / "data/uploads"
+    return [*arithmetic_tools(), SearchDocumentsTool(doc), ReadDocumentTool(doc), TodayTool(),
+            ParseDocumentTool(uploads, timeout=parse_timeout)]
 
 
 def build_from_env() -> AppServices:
@@ -82,7 +87,11 @@ def build_from_env() -> AppServices:
     )
     return AppServices(
         llm=llm_from_env(),
-        tools=SimpleToolRegistry(build_tools(env("DOCUMENT_CHUNKS_PATH", str(REPO_ROOT / "data/fixtures/document_chunks.json")))),
+        tools=SimpleToolRegistry(build_tools(
+            env("DOCUMENT_CHUNKS_PATH", str(REPO_ROOT / "data/fixtures/document_chunks.json")),
+            upload_dir=env("UPLOAD_DIR"),  # 비어 있으면 data/uploads
+            parse_timeout=float(env("PARSE_TOOL_TIMEOUT_SECONDS", str(DEFAULT_PARSE_TIMEOUT))),
+        )),
         checker=create_checker(rules=rules, default=default),
         approvals=FutureApprovalHandler(float(env("PERMISSION_APPROVAL_TIMEOUT_SECONDS", "120"))),
         audit=JsonlAuditLogger(env("PERMISSION_AUDIT_LOG_PATH", "logs/permission_audit.jsonl")),
