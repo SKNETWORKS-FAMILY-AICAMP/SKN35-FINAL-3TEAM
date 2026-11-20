@@ -5,6 +5,20 @@
 default: ask
 
 rules:
+  # 메일 발송은 관리자도 요청 내용을 확인하고 승인한다.
+  - id: gmail-send-confirm
+    tool: send_mail
+    decision: ask
+    reason: 연결된 본인 메일 계정으로 메일이 발송됩니다. 수신자·제목·본문을 확인해 주세요.
+
+  - id: gmail-search
+    tool: search_mail
+    decision: allow
+
+  - id: gmail-read
+    tool: read_mail
+    decision: allow
+
   # 등록은 관리자도 기존 승인 흐름을 거친다.
   - id: review-submit-confirm
     tool: submit_review_request

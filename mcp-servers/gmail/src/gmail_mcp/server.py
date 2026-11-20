@@ -11,6 +11,8 @@
 from __future__ import annotations
 
 import sys
+import os
+import secrets
 from typing import Annotated
 
 from mcp.server.mcpserver import MCPServer
@@ -18,6 +20,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from .accounts import factory
 from .config import Settings
@@ -101,6 +104,26 @@ def build_server(service: MailService) -> MCPServer:
     return mcp
 
 
+class BearerTokenMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, token: str) -> None:
+        super().__init__(app)
+        self.expected = "Bearer " + token
+
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path.startswith("/mcp") and not secrets.compare_digest(
+            request.headers.get("authorization", "").encode(), self.expected.encode()
+        ):
+            return JSONResponse({"detail": "MCP 인증 토큰이 필요합니다"}, status_code=401)
+        return await call_next(request)
+
+
+def build_http_app(service: MailService, token: str | None = None):
+    app = build_server(service).streamable_http_app(host=service.settings.host)
+    if token:
+        app.add_middleware(BearerTokenMiddleware, token=token)
+    return app
+
+
 def main() -> None:
     settings = Settings.from_env()
     service = MailService(MailStore(settings.db_path), factory(settings), settings)
@@ -108,8 +131,10 @@ def main() -> None:
     print(f"[gmail-mcp] 모드: {mode_label(service)}  (GMAIL_ADAPTER={settings.adapter})", file=sys.stderr, flush=True)
     print(f"[gmail-mcp] 메일 DB: {settings.db_path}", file=sys.stderr, flush=True)
     print(f"[gmail-mcp] 주소: http://{settings.host}:{settings.port}/mcp", file=sys.stderr, flush=True)
-    server = build_server(service)
-    server.run("streamable-http", host=settings.host, port=settings.port)
+    import uvicorn
+
+    app = build_http_app(service, token=os.environ.get("GMAIL_MCP_TOKEN"))
+    uvicorn.run(app, host=settings.host, port=settings.port)
 
 
 if __name__ == "__main__":

@@ -74,3 +74,91 @@ def test_page_range_keeps_only_overlapping_elements():
     assert out["text"] == "| 이어진 표 |" and out["tables"] == 1
     out = pd.build_payload("a.pdf", d, (1, 2), cached=True)
     assert out["text"].startswith("## 1쪽 제목") and "2쪽 본문" in out["text"]
+
+
+@pytest.mark.parametrize("content", ["[]", "null", '{"status":"ok","parser_version":"wrong"}'])
+async def test_malformed_cache_is_reparsed(uploads, content):
+    parsed = uploads / "parsed"
+    parsed.mkdir()
+    (parsed / "규정.hwpx.json").write_text(content, encoding="utf-8")
+    result = await ParseDocumentTool(uploads).run(call({"file_id": "규정.hwpx"}))
+    assert result.ok and not result.data["cached"]
+
+
+async def test_parser_stays_serialized_after_waiter_is_cancelled(uploads):
+    import asyncio
+    import threading
+    from knowledge.ingestion.parsers import ParseResult
+
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingParser:
+        active = 0
+        peak = 0
+
+        def parse(self, path):
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            started.set()
+            try:
+                assert release.wait(5)
+                return ParseResult("ok", file_name=path.name, markdown="본문")
+            finally:
+                self.active -= 1
+
+    parser = BlockingParser()
+    tool = ParseDocumentTool(uploads, parser=parser)
+    first = asyncio.create_task(tool.run(call({"file_id": "규정.hwpx"})))
+    try:
+        assert await asyncio.to_thread(started.wait, 3)
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        second = asyncio.create_task(tool.run(call({"file_id": "규정.hwpx"})))
+        await asyncio.sleep(.05)
+    finally:
+        release.set()
+    assert (await second).ok
+    assert parser.peak == 1
+
+
+async def test_parser_via_agent_chat_api(uploads, tmp_path):
+    import httpx
+    from main import create_app
+    from permission import create_checker
+    from permission.approval import FutureApprovalHandler
+    from permission.audit import JsonlAuditLogger
+    from permission.policy import load_policy
+    from services.container import AppServices
+    from services.users import UserDirectory
+    from tests.fakes import ScriptedLLM
+    from tools.registry import SimpleToolRegistry
+
+    rules, default = load_policy("config/permissions.yaml")
+    svc = AppServices(
+        llm=ScriptedLLM([
+            {"tool_calls": [{"id": "parse-1", "name": "parse_document", "arguments": {"file_id": "규정.hwpx"}}]},
+            {"content": "표와 본문을 읽었습니다."},
+        ]),
+        tools=SimpleToolRegistry([ParseDocumentTool(uploads)]),
+        checker=create_checker(rules=rules, default=default),
+        approvals=FutureApprovalHandler(1), audit=JsonlAuditLogger(tmp_path / "audit.jsonl"),
+        users=UserDirectory({"kim": KIM}),
+    )
+    app = create_app(build=lambda: svc)
+    app.state.services = svc
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        headers = {"X-User-Id": "kim"}
+        agent = await client.post("/api/agents", headers=headers, json={
+            "name": "문서 읽기", "system_prompt": "첨부 문서를 읽으세요.", "tools": ["parse_document"],
+        })
+        assert agent.status_code == 201
+        response = await client.post("/api/chat/messages", headers=headers, json={
+            "content": "규정.hwpx를 읽어줘", "agent_id": agent.json()["agent_id"],
+        })
+    assert response.status_code == 200
+    event = response.json()["tool_events"][0]
+    assert event["ok"] and event["tool_name"] == "parse_document"
+    parsed = json.loads(event["result"])
+    assert parsed["tables"] == 1 and "제1장 총칙" in parsed["text"]

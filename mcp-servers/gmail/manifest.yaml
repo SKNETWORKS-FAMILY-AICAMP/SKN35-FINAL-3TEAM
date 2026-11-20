@@ -9,7 +9,7 @@ name: gmail
 version: 0.2.0
 description: 직원 개인 Gmail 연동 (내 메일 검색 · 읽기, 내 계정으로 발송)
 owner: connector
-endpoint: http://mcp-gmail:8000/mcp
+endpoint: http://mcp-gmail:8001/mcp
 auth_token_env: GMAIL_MCP_TOKEN
 
 tools:

@@ -17,19 +17,18 @@ from permission.policy import load_policy
 from services.agents import InMemoryAgentStore, InMemoryShareRequestStore
 from services.sessions import InMemorySessionStore
 from services.users import UserDirectory
+from services.uploads import UploadStore
 from tools.arithmetic import arithmetic_tools
 from tools.parse_document import DEFAULT_TIMEOUT as DEFAULT_PARSE_TIMEOUT
 from tools.parse_document import ParseDocumentTool
-from tools.read_doc import ReadDocumentTool
 from tools.registry import SimpleToolRegistry
-from tools.search_doc import SearchDocumentsTool, search_chunks
-from tools.read_doc import can_read_chunk, load_doc_chunks , ReadDocumentTool
-from tools.today import TodayTool
+from tools.read_doc import ReadDocumentTool
 from tools.get_review_case import GetReviewCaseTool
 from tools.submit_review_request import SubmitReviewRequestTool
 from tools.review_store import ReviewStore
 from tools.search_doc import SearchDocumentsTool
 from tools.today import TodayTool
+from tools.gmail import build_gmail_tools
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
@@ -61,6 +60,7 @@ class AppServices:
     sessions: InMemorySessionStore = field(default_factory=InMemorySessionStore)
     agents: InMemoryAgentStore = field(default_factory=InMemoryAgentStore)
     share_requests: InMemoryShareRequestStore = field(default_factory=InMemoryShareRequestStore)
+    uploads: UploadStore = field(default_factory=lambda: UploadStore(REPO_ROOT / "data/uploads"))
     max_turns: int = 10
     tool_timeout: float | None = 30.0
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
@@ -77,12 +77,23 @@ def llm_from_env() -> LLMClient:
 
 
 def build_tools(document_path: str | Path, upload_dir: str | Path | None = None,
-                parse_timeout: float | None = DEFAULT_PARSE_TIMEOUT) -> list:
-    """관리자가 등록한 툴 목록. 에이전트는 이 중에서 고른다 (MCP 연결 전까지는 코드로 등록)."""
+                parse_timeout: float | None = DEFAULT_PARSE_TIMEOUT,
+                holiday_path: Path | None = None, review_store: ReviewStore | None = None,
+                upload_store: UploadStore | None = None) -> list:
+    """로컬 도구와 환경변수로 활성화한 Gmail MCP 도구를 함께 등록한다."""
     doc = Path(document_path)
     uploads = Path(upload_dir) if upload_dir else REPO_ROOT / "data/uploads"
-    return [*arithmetic_tools(), SearchDocumentsTool(doc), ReadDocumentTool(doc), TodayTool(),
-            ParseDocumentTool(uploads, timeout=parse_timeout)]
+    upload_store = upload_store or UploadStore(uploads)
+    review_store = review_store or ReviewStore(
+        REPO_ROOT / "data/fixtures/review_cases.json",
+        Path(os.environ.get("REVIEW_REQUEST_DB_PATH", str(REPO_ROOT / "data/review_requests.sqlite3"))),
+    )
+    return [
+        *arithmetic_tools(), SearchDocumentsTool(doc), ReadDocumentTool(doc), TodayTool(holiday_path),
+        ParseDocumentTool(uploads, timeout=parse_timeout, uploads=upload_store),
+        GetReviewCaseTool(review_store), SubmitReviewRequestTool(review_store),
+        *build_gmail_tools(),
+    ]
 
 
 def build_from_env() -> AppServices:
@@ -92,28 +103,21 @@ def build_from_env() -> AppServices:
         default=Decision(env("PERMISSION_DEFAULT_DECISION", "ask")),
     )
     repository_root = Path(__file__).resolve().parents[4]
-    document_path = repository_root / "data" / "fixtures" / "document_chunks.json"
+    document_path = env("DOCUMENT_CHUNKS_PATH", str(repository_root / "data/fixtures/document_chunks.json"))
     holiday_path = repository_root / "data" / "fixtures" / "business_holidays_demo.json"
+    uploads = UploadStore(Path(env("UPLOAD_DIR", str(REPO_ROOT / "data/uploads"))))
     review_store = ReviewStore(
         repository_root / "data" / "fixtures" / "review_cases.json",
         Path(env("REVIEW_REQUEST_DB_PATH", str(repository_root / "data" / "review_requests.sqlite3"))),
     )
     return AppServices(
         llm=llm_from_env(),
-        tools=SimpleToolRegistry(
-            arithmetic_tools() + [
-                SearchDocumentsTool(document_path),
-                ReadDocumentTool(document_path),
-                TodayTool(holiday_path),
-                GetReviewCaseTool(review_store),
-                SubmitReviewRequestTool(review_store),
-            ]
-        ),
-        # tools=SimpleToolRegistry(build_tools(
-        #     env("DOCUMENT_CHUNKS_PATH", str(REPO_ROOT / "data/fixtures/document_chunks.json")),
-        #     upload_dir=env("UPLOAD_DIR"),  # 비어 있으면 data/uploads
-        #     parse_timeout=float(env("PARSE_TOOL_TIMEOUT_SECONDS", str(DEFAULT_PARSE_TIMEOUT))),
-        # )),
+        tools=SimpleToolRegistry(build_tools(
+            document_path, upload_dir=env("UPLOAD_DIR"),
+            parse_timeout=float(env("PARSE_TOOL_TIMEOUT_SECONDS", str(DEFAULT_PARSE_TIMEOUT))),
+            holiday_path=holiday_path, review_store=review_store, upload_store=uploads,
+        )),
+        uploads=uploads,
         checker=create_checker(rules=rules, default=default),
         approvals=FutureApprovalHandler(float(env("PERMISSION_APPROVAL_TIMEOUT_SECONDS", "120"))),
         audit=JsonlAuditLogger(env("PERMISSION_AUDIT_LOG_PATH", "logs/permission_audit.jsonl")),

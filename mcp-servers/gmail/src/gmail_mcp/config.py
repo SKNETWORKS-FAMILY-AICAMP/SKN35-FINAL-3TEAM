@@ -26,7 +26,7 @@ class Settings:
     tokens_dir: Path = DEFAULT_SECRETS_DIR / "tokens"  # 직원별 토큰 <user_id>.json
     db_path: Path = Path("data/db/mail.sqlite3")  # 메일 저장 관계형 DB (개발용 SQLite)
     host: str = "127.0.0.1"
-    port: int = 8000
+    port: int = 8001  # FastAPI 플랫폼(8000)과 동시에 실행
     max_search_results: int = 20
     max_recipients: int = 10
     max_subject_chars: int = 200

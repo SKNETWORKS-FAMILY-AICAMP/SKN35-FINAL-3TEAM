@@ -92,8 +92,10 @@ def calculate_business_date(base_date: str, days: int, holidays: set[date],) -> 
 class TodayTool:
     spec = TODAY_SPEC
 
-    def __init__(self, holiday_path: Path) -> None:
-        self.holiday_path = holiday_path
+    def __init__(self, holiday_path: Path | None = None) -> None:
+        self.holiday_path = holiday_path if holiday_path is not None else (
+            Path(__file__).resolve().parents[4] / "data/fixtures/business_holidays_demo.json"
+        )
 
     async def run(self, call: ToolCall) -> ToolResult:
         payload = get_today()

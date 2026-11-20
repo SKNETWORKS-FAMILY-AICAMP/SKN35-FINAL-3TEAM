@@ -225,3 +225,9 @@ h2 { font-size: 1.12rem; letter-spacing: -.03em; }
 .answer-markdown th, .answer-markdown td { padding: 10px 13px; border-bottom: 1px solid #30343b; text-align: left; min-width: 100px; }
 .answer-markdown tr:last-child td { border-bottom: 0; }
 .answer-markdown input[type=checkbox] { accent-color: #8ab6ff; }
+.attach-button { display: grid; place-items: center; width: 36px; height: 36px; flex: none; border: 1px solid var(--line); border-radius: 9px; background: #191919; color: var(--accent); }
+.attachment-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.attachment-chip { display: inline-flex; align-items: center; gap: 7px; min-width: 0; max-width: 100%; border: 1px solid #344258; border-radius: 9px; padding: 7px 10px; background: #141c28; color: #c8daff; font-size: .85rem; white-space: normal; overflow-wrap: anywhere; }
+.attachment-chip svg { flex: none; }
+.attachment-chip button { display: grid; place-items: center; background: transparent; border: 0; color: inherit; padding: 3px; }
+.attachment-help { color: var(--muted); font-size: .85rem; margin-bottom: 8px; }
