@@ -16,6 +16,11 @@ dependencies = [
     # parsers: 후처리가 DoclingDocument 표·칸 구조를 직접 고치므로 docling-core 도 고정. pypdf 는 PDF 만든 프로그램(한컴) 판별.
     "docling-core==2.107.0",
     "pypdf==7.1.0",
+    # db: PostgreSQL 16 + pgvector. 비동기 ORM(SQLAlchemy) · 드라이버 asyncpg · 마이그레이션 alembic
+    "sqlalchemy[asyncio]>=2.1.9",
+    "asyncpg>=0.32.0",
+    "alembic>=1.20.1",
+    "pgvector>=0.5.1",
 ]
 
 [project.optional-dependencies]

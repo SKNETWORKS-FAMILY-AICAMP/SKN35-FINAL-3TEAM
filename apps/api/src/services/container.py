@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from openai import NotFoundError
 
 from contracts.harness import LLMClient
 from contracts.permission import AuditLogger, Decision, PermissionChecker
@@ -16,16 +19,21 @@ from permission.audit import JsonlAuditLogger
 from permission.policy import load_policy
 from services.agents import InMemoryAgentStore, InMemoryShareRequestStore
 from services.sessions import InMemorySessionStore
+from services.templates import InMemoryTemplateStore, load_templates
 from services.users import UserDirectory
 from tools.arithmetic import arithmetic_tools
 from tools.parse_document import DEFAULT_TIMEOUT as DEFAULT_PARSE_TIMEOUT
 from tools.parse_document import ParseDocumentTool
+from tools.get_review_case import GetReviewCaseTool
 from tools.read_doc import ReadDocumentTool
 from tools.registry import SimpleToolRegistry
+from tools.review_store import ReviewStore
 from tools.search_doc import SearchDocumentsTool
+from tools.submit_review_request import SubmitReviewRequestTool
 from tools.today import TodayTool
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
+log = logging.getLogger("uvicorn.error")
 
 # 모든 에이전트 앞에 붙는 공통 규칙. 에이전트별 역할 지시는 services/chat.py 에서 뒤에 붙인다.
 DEFAULT_SYSTEM_PROMPT = """너는 은행 직원의 업무를 돕는 사내 에이전트다. 답을 읽는 사람은 일반 직원이다.
@@ -55,6 +63,8 @@ class AppServices:
     sessions: InMemorySessionStore = field(default_factory=InMemorySessionStore)
     agents: InMemoryAgentStore = field(default_factory=InMemoryAgentStore)
     share_requests: InMemoryShareRequestStore = field(default_factory=InMemoryShareRequestStore)
+    templates: InMemoryTemplateStore = field(default_factory=InMemoryTemplateStore)
+    draft_llm: LLMClient | None = None  # 에이전트 초안 전용 (더 큰 모델). 없으면 llm 을 쓴다
     max_turns: int = 10
     tool_timeout: float | None = 30.0
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
@@ -70,13 +80,63 @@ def llm_from_env() -> LLMClient:
     return OpenAICompatLLM.from_env()
 
 
-def build_tools(document_path: str | Path, upload_dir: str | Path | None = None,
-                parse_timeout: float | None = DEFAULT_PARSE_TIMEOUT) -> list:
+class FallbackLLM:
+    """먼저 primary 를 부르고, 그 모델이 서버에 없으면(404) fallback 으로 대신한다.
+
+    초안 전용 큰 모델을 아직 받지 않은 팀원도 그대로 돌릴 수 있게 하려는 것.
+    연결 실패·타임아웃은 대신하지 않고 그대로 올린다 (느린 것과 없는 것은 다르다).
+    """
+
+    def __init__(self, primary: LLMClient, fallback: LLMClient) -> None:
+        self.primary, self.fallback = primary, fallback
+        self._missing = False
+
+    async def chat(self, messages, tools):
+        if not self._missing:
+            try:
+                return await self.primary.chat(messages, tools)
+            except NotFoundError:
+                self._missing = True
+                log.warning("초안 모델 %s 이 없어 채팅 모델로 초안을 만듭니다 (ollama pull 로 받으면 됩니다)",
+                            getattr(self.primary, "model", "?"))
+        return await self.fallback.chat(messages, tools)
+
+
+def draft_llm_from_env(chat_llm: LLMClient) -> LLMClient:
+    """DRAFT_LLM_MODEL (기본 qwen3:14b) 로 초안 전용 LLM 을 만든다. 비우면 채팅 모델을 그대로 쓴다."""
+    env = os.environ.get
+    model = env("DRAFT_LLM_MODEL", "qwen3:14b").strip()
+    if env("LLM_PROVIDER", "openai") != "openai" or not model or model == env("LLM_MODEL", "qwen3:8b"):
+        return chat_llm
+    primary = OpenAICompatLLM(
+        base_url=env("DRAFT_LLM_BASE_URL") or env("LLM_BASE_URL", "http://localhost:11434/v1"),
+        model=model,
+        api_key=env("DRAFT_LLM_API_KEY") or env("LLM_API_KEY", "ollama"),
+        timeout=float(env("DRAFT_LLM_TIMEOUT_SECONDS", "300")),
+    )
+    return FallbackLLM(primary, chat_llm)
+
+
+FIXTURES = REPO_ROOT / "data/fixtures"
+
+
+def build_tools(
+    document_path: str | Path = FIXTURES / "document_chunks.json",
+    holiday_path: str | Path = FIXTURES / "business_holidays_demo.json",
+    review_store: ReviewStore | None = None,
+    upload_dir: str | Path | None = None,
+    parse_timeout: float | None = DEFAULT_PARSE_TIMEOUT,
+) -> list:
     """관리자가 등록한 툴 목록. 에이전트는 이 중에서 고른다 (MCP 연결 전까지는 코드로 등록)."""
     doc = Path(document_path)
     uploads = Path(upload_dir) if upload_dir else REPO_ROOT / "data/uploads"
-    return [*arithmetic_tools(), SearchDocumentsTool(doc), ReadDocumentTool(doc), TodayTool(),
-            ParseDocumentTool(uploads, timeout=parse_timeout)]
+    store = review_store or ReviewStore(FIXTURES / "review_cases.json", REPO_ROOT / "data/review_requests.sqlite3")
+    return [
+        *arithmetic_tools(),
+        SearchDocumentsTool(doc), ReadDocumentTool(doc), TodayTool(Path(holiday_path)),
+        GetReviewCaseTool(store), SubmitReviewRequestTool(store),
+        ParseDocumentTool(uploads, timeout=parse_timeout),
+    ]
 
 
 def build_from_env() -> AppServices:
@@ -85,10 +145,17 @@ def build_from_env() -> AppServices:
         env("PERMISSION_POLICY_PATH", "config/permissions.yaml"),
         default=Decision(env("PERMISSION_DEFAULT_DECISION", "ask")),
     )
+    llm = llm_from_env()
     return AppServices(
-        llm=llm_from_env(),
+        llm=llm,
+        draft_llm=draft_llm_from_env(llm),
         tools=SimpleToolRegistry(build_tools(
-            env("DOCUMENT_CHUNKS_PATH", str(REPO_ROOT / "data/fixtures/document_chunks.json")),
+            env("DOCUMENT_CHUNKS_PATH", str(FIXTURES / "document_chunks.json")),
+            env("BUSINESS_HOLIDAYS_PATH", str(FIXTURES / "business_holidays_demo.json")),
+            ReviewStore(
+                Path(env("REVIEW_CASES_PATH", str(FIXTURES / "review_cases.json"))),
+                Path(env("REVIEW_REQUEST_DB_PATH", str(REPO_ROOT / "data/review_requests.sqlite3"))),
+            ),
             upload_dir=env("UPLOAD_DIR"),  # 비어 있으면 data/uploads
             parse_timeout=float(env("PARSE_TOOL_TIMEOUT_SECONDS", str(DEFAULT_PARSE_TIMEOUT))),
         )),
@@ -96,6 +163,7 @@ def build_from_env() -> AppServices:
         approvals=FutureApprovalHandler(float(env("PERMISSION_APPROVAL_TIMEOUT_SECONDS", "120"))),
         audit=JsonlAuditLogger(env("PERMISSION_AUDIT_LOG_PATH", "logs/permission_audit.jsonl")),
         users=UserDirectory.from_yaml(env("DEV_USERS_PATH", "config/dev_users.yaml")),
+        templates=InMemoryTemplateStore(load_templates(env("AGENT_TEMPLATES_PATH", "config/agent_templates.yaml"))),
         max_turns=int(env("HARNESS_MAX_TURNS", "10")),
         tool_timeout=float(env("HARNESS_TOOL_TIMEOUT_SECONDS", "30")),
     )

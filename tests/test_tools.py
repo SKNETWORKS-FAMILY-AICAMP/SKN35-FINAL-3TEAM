@@ -54,7 +54,7 @@ async def test_bad_arguments_are_errors_not_crashes():
 
 
 async def test_today_returns_korean_date():
-    r = await TodayTool().run(call("today", {}, KIM))
+    r = await TodayTool(Path(__file__).parent.parent / "data/fixtures/business_holidays_demo.json").run(call("today", {}, KIM))
     data = json.loads(r.content)
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", data["date"]) and data["weekday"].endswith("요일")
 
@@ -63,5 +63,17 @@ def test_all_tools_registered_with_display_names():
     from services.container import build_tools
 
     tools = build_tools(DOCS)
-    assert {t.spec.name for t in tools} >= {"search_doc", "get_doc_chunk", "today", "add"}
+    assert {t.spec.name for t in tools} >= {"search_doc", "get_doc_chunk", "today", "add", "get_review_case", "submit_review_request"}
     assert all(t.spec.display_name for t in tools)
+
+
+async def test_today_counts_business_days_skipping_weekend_and_holiday():
+    tool = TodayTool(Path(__file__).parent.parent / "data/fixtures/business_holidays_demo.json")
+    # 2026-11-20(금) + 1영업일: 토·일 건너뛰고 11-23(월)은 테스트 휴일이라 11-24(화)
+    r = await tool.run(call("today", {"base_date": "2026-11-20", "days": 1, "mode": "business"}, KIM))
+    data = json.loads(r.content)
+    assert (data["target_date"], data["target_weekday"]) == ("2026-11-24", "화요일")
+    r = await tool.run(call("today", {"base_date": "2026-11-20", "days": 3}, KIM))  # 달력일
+    assert json.loads(r.content)["target_date"] == "2026-11-23"
+    bad = await tool.run(call("today", {"days": -1, "mode": "business"}, KIM))
+    assert not bad.ok

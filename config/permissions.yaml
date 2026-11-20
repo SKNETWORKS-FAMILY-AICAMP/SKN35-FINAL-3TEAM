@@ -5,6 +5,17 @@
 default: ask
 
 rules:
+  # 심사 요청 등록은 관리자도 승인을 거친다 (admin-all 보다 위에 둔다).
+  - id: review-submit-confirm
+    tool: submit_review_request
+    decision: ask
+    reason: 로컬 가상 심사시스템에 요청이 등록됩니다. 심사 건과 메모를 확인해 주세요.
+
+  # 심사 건 조회. 부서·보안등급 필터는 툴 안에서 강제한다.
+  - id: review-case-read
+    tool: get_review_case
+    decision: allow
+
   - id: admin-all
     tool: "*"
     decision: allow
