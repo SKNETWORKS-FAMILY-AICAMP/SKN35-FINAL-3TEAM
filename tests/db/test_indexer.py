@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from agent_platform.knowledge.ingestion.indexer import chunk_rows, index_document_version
+from knowledge.ingestion.indexer import chunk_rows, index_document_version
 from db.models import EMBEDDING_DIM, Chunk, Document, DocumentVersion
 from tests.db.test_schema import _user, conn  # noqa: F401  (conn 은 pytest fixture)
 

@@ -8,8 +8,8 @@ import os
 
 import pytest
 
-from agent_platform.knowledge.ingestion.chunkers import chunk_document, token_counter
-from agent_platform.knowledge.ingestion.chunkers.document import Doc, norm
+from knowledge.ingestion.chunkers import chunk_document, token_counter
+from knowledge.ingestion.chunkers.document import Doc, norm
 
 REAL = bool(os.environ.get("CHUNKER_TOKENIZER_PATH"))
 COUNT = token_counter() if REAL else (lambda t: len(t) if t else 0)

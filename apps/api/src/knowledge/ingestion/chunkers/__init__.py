@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """구조 기반 청킹: 파서 결과(parsed/{id}.json) → 청크 목록 → 원본 옆 chunks/{document_version_id}.jsonl.
 
-    from agent_platform.knowledge.ingestion.chunkers import chunk_document, save_chunks_beside
+    from knowledge.ingestion.chunkers import chunk_document, save_chunks_beside
     chunks = chunk_document(parsed_dict, tokenizer_path="models/KURE-v3/tokenizer.json")
     save_chunks_beside("원본.hwpx", 123, chunks)
 

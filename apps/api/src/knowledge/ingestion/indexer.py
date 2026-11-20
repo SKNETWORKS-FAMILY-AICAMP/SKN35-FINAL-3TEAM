@@ -2,8 +2,8 @@
 """색인: 파서 결과 → 청크 → 임베딩 → 팀 DB chunk 표 (db/models.py, PostgreSQL + pgvector).
 
     from db.engine import get_session
-    from agent_platform.knowledge.ingestion.embedders import KureEmbedder
-    from agent_platform.knowledge.ingestion.indexer import index_document_version
+    from knowledge.ingestion.embedders import KureEmbedder
+    from knowledge.ingestion.indexer import index_document_version
 
     embedder = KureEmbedder("models/KURE-v3")                 # 배포·운영은 CPU 기본
     n = await index_document_version(session, doc_version_id, parsed, embedder=embedder,
