@@ -11,6 +11,7 @@ from openai import NotFoundError
 
 from contracts.harness import LLMClient
 from contracts.permission import AuditLogger, Decision, PermissionChecker
+from harness.grounding import RequireSearch
 from harness.llm import OpenAICompatLLM
 from harness.local_math import LocalMathClient
 from permission import create_checker
@@ -69,6 +70,7 @@ class AppServices:
     max_turns: int = 10
     tool_timeout: float | None = 30.0
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
+    require_search: RequireSearch | None = field(default_factory=RequireSearch)  # 문서 질문 검색 강제. None 이면 끔
 
 
 def llm_from_env() -> LLMClient:
