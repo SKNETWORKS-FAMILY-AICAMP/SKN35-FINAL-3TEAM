@@ -29,6 +29,7 @@ from contracts.permission import (
 )
 
 Role = Literal["system", "user", "assistant", "tool"]
+ToolEffect = Literal["read", "write", "send"]  # ToolSpec.effect 참고
 
 
 @dataclass(frozen=True)
@@ -75,6 +76,16 @@ class ToolSpec:
 
     display_name 은 사용자 화면·안내 문구에 쓰는 이름이다 (예: "메일 발송").
     LLM 에게는 넘기지 않는다. 비어 있으면 name 을 쓴다 (label).
+
+    effect 는 툴이 하는 일의 종류다. 툴을 만드는 사람이 정한다.
+      read  조회만 한다 (문서 검색, 날짜 확인)
+      write 사내 시스템의 데이터를 만들거나 바꾼다 (심사 요청 등록)
+      send  사람이나 바깥으로 무언가를 보낸다 (메일·알림 발송)
+    정하지 않으면 write 로 본다 (모르는 툴은 위험한 쪽으로).
+    에이전트 초안을 만들 때 LLM 은 read 툴만 바로 넣고, write·send 툴은 추천만 한다 (사용자가 직접 체크).
+    실행 권한은 이것과 별개로 ABAC 정책이 판정한다.
+
+    domain 은 화면에서 툴을 묶어 보여 주는 업무 분류다 (예: "문서", "심사"). 비어 있어도 된다.
     """
 
     name: str
@@ -83,6 +94,8 @@ class ToolSpec:
         default_factory=lambda: {"type": "object", "properties": {}}
     )
     display_name: str = ""
+    effect: ToolEffect = "write"
+    domain: str = ""
 
     @property
     def label(self) -> str:

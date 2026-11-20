@@ -33,3 +33,21 @@ class UserDirectory:
 
     def get(self, user_id: str) -> Principal | None:
         return self._users.get(user_id)
+
+    def ids(self) -> list[str]:
+        return list(self._users)
+
+    def superior_of(self, p: Principal) -> Principal | None:
+        """바로 위 관리자: 팀원 → 소속 부서장, 부서장 → admin. admin 은 위가 없다 (None).
+
+        부서장이 없는 부서의 팀원은 admin 에게 올라간다.
+        DB 가 붙으면 department.head_user_id 와 user_role 로 찾는다.
+        """
+        if "admin" in p.roles:
+            return None
+        dept = p.attributes.get("dept_id")
+        if "dept_head" not in p.roles:
+            for u in self._users.values():
+                if "dept_head" in u.roles and u.user_id != p.user_id and u.attributes.get("dept_id") == dept:
+                    return u
+        return next((u for u in self._users.values() if "admin" in u.roles), None)

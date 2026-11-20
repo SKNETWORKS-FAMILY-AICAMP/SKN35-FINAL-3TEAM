@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from routers import agents, approvals, chat
+from routers import agents, approvals, chat, templates, users, uploads
 from services.container import AppServices, build_from_env
 
 
@@ -25,6 +25,9 @@ def create_app(build: Callable[[], AppServices] = build_from_env) -> FastAPI:
     app.include_router(chat.router)
     app.include_router(approvals.router)
     app.include_router(agents.router)
+    app.include_router(users.router)
+    app.include_router(uploads.router)
+    app.include_router(templates.router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

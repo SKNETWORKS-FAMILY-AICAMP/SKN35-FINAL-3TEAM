@@ -5,6 +5,31 @@
 default: ask
 
 rules:
+  # 메일 발송은 관리자도 요청 내용을 확인하고 승인한다.
+  - id: gmail-send-confirm
+    tool: send_mail
+    decision: ask
+    reason: 연결된 본인 메일 계정으로 메일이 발송됩니다. 수신자·제목·본문을 확인해 주세요.
+
+  - id: gmail-search
+    tool: search_mail
+    decision: allow
+
+  - id: gmail-read
+    tool: read_mail
+    decision: allow
+
+  # 등록은 관리자도 기존 승인 흐름을 거친다.
+  - id: review-submit-confirm
+    tool: submit_review_request
+    decision: ask
+    reason: 로컬 가상 심사시스템에 요청이 등록됩니다. 심사 건과 메모를 확인해 주세요.
+
+  # 심사 건 조회. 부서·보안등급 필터는 툴 안에서 강제한다.
+  - id: review-case-read
+    tool: get_review_case
+    decision: allow
+
   - id: admin-all
     tool: "*"
     decision: allow
@@ -56,6 +81,7 @@ rules:
     decision: deny
     reason: 파일 삭제는 보안등급 3 이상 부서장만 가능합니다
 
+  # 문서 원문 열람: 검색과 같은 필터를 툴 안에서 다시 적용한다
   - id: read-document-chunk
     tool: get_doc_chunk
     decision: allow
@@ -63,3 +89,8 @@ rules:
   - id : today
     tool : today
     decision : allow
+
+  # 업로드 문서 읽기: 업로드 폴더 안 파일만 읽는다 (경로 제한은 툴 안에서 강제)
+  - id: parse-document
+    tool: parse_document
+    decision: allow

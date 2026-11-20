@@ -193,3 +193,88 @@ h2 { font-size: 1.12rem; letter-spacing: -.03em; }
 }
 .tool-drafts > summary { padding: 13px 16px; cursor: pointer; }
 .draft-list { padding: 0 16px 16px; }
+
+.message.assistant { width: 100%; max-width: 100%; }
+.answer-markdown { white-space: normal; line-height: 1.8; color: #dedede; }
+.answer-markdown > :first-child { margin-top: 0; }
+.answer-markdown > :last-child { margin-bottom: 0; }
+.answer-markdown p { margin: 0 0 14px; }
+.answer-markdown h1, .answer-markdown h2, .answer-markdown h3,
+.answer-markdown h4, .answer-markdown h5, .answer-markdown h6 {
+  color: #f3f3f3; line-height: 1.45; letter-spacing: -.025em; margin: 26px 0 12px;
+}
+.answer-markdown h1 { font-size: 1.45rem; }
+.answer-markdown h2 { font-size: 1.22rem; }
+.answer-markdown h3 { font-size: 1.08rem; }
+.answer-markdown h4, .answer-markdown h5, .answer-markdown h6 { font-size: 1rem; }
+.answer-markdown strong { color: #f5f5f5; font-weight: 700; }
+.answer-markdown ul, .answer-markdown ol { margin: 8px 0 18px; padding-left: 24px; }
+.answer-markdown li { padding-left: 3px; margin: 7px 0; }
+.answer-markdown li::marker { color: #8ab6ff; }
+.answer-markdown li > p { margin-bottom: 7px; }
+.answer-markdown blockquote { margin: 16px 0; padding: 12px 16px; border-left: 3px solid #8ab6ff; border-radius: 0 8px 8px 0; background: #131820; color: #cbd5e3; }
+.answer-markdown blockquote > :last-child { margin-bottom: 0; }
+.answer-markdown a { color: #a6c5ff; text-underline-offset: 3px; }
+.answer-markdown code { font-family: Consolas, monospace; font-size: .9em; background: #20232a; color: #d7e5ff; border-radius: 5px; padding: 2px 5px; }
+.answer-markdown pre { margin: 16px 0; padding: 16px; border: 1px solid #30343b; border-radius: 10px; background: #101215; overflow-x: auto; white-space: pre; }
+.answer-markdown pre code { background: none; padding: 0; color: #e1e5eb; }
+.answer-markdown hr { border: 0; border-top: 1px solid #303030; margin: 24px 0; }
+.answer-table { overflow-x: auto; margin: 16px 0; border: 1px solid #30343b; border-radius: 10px; }
+.answer-markdown table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+.answer-markdown th { background: #191d24; color: #f0f0f0; font-weight: 650; }
+.answer-markdown th, .answer-markdown td { padding: 10px 13px; border-bottom: 1px solid #30343b; text-align: left; min-width: 100px; }
+.answer-markdown tr:last-child td { border-bottom: 0; }
+.answer-markdown input[type=checkbox] { accent-color: #8ab6ff; }
+.attach-button { display: grid; place-items: center; width: 36px; height: 36px; flex: none; border: 1px solid var(--line); border-radius: 9px; background: #191919; color: var(--accent); }
+.attachment-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.attachment-chip { display: inline-flex; align-items: center; gap: 7px; min-width: 0; max-width: 100%; border: 1px solid #344258; border-radius: 9px; padding: 7px 10px; background: #141c28; color: #c8daff; font-size: .85rem; white-space: normal; overflow-wrap: anywhere; }
+.attachment-chip svg { flex: none; }
+.attachment-chip button { display: grid; place-items: center; background: transparent; border: 0; color: inherit; padding: 3px; }
+.attachment-help { color: var(--muted); font-size: .85rem; margin-bottom: 8px; }
+/* 답 서식·툴 요약·참고 문서 */
+.message.agent { white-space: normal; }
+.formatted { display: grid; gap: 6px; }
+.formatted ul, .formatted ol { margin: 0; padding-left: 20px; display: grid; gap: 3px; }
+.formatted code { background: #1c1c1c; padding: 1px 5px; border-radius: 5px; font-size: .88em; }
+.cite-line { color: var(--muted); font-size: .86rem; margin-top: 4px; }
+details.tool-events { display: block; margin-bottom: 9px; }
+details.tool-events summary { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; cursor: pointer; }
+details.tool-events summary::-webkit-details-marker { display: none; }
+.event strong { font-weight: 650; margin-right: 2px; }
+.event { gap: 6px; color: #d6d6d6; }
+.event.ok svg { color: #65ddb0; }
+.event.fail svg { color: #f08a8a; }
+.more { font-size: .74rem; color: var(--muted); text-decoration: underline; text-underline-offset: 3px; }
+details[open] .more { display: none; }
+.event-raw { margin-top: 8px; display: grid; gap: 8px; font-size: .78rem; }
+.event-raw code { color: var(--muted); }
+.event-raw pre { margin: 4px 0 0; padding: 8px 10px; border-radius: 8px; background: #0b0b0b; border: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); max-height: 220px; overflow: auto; }
+.sources { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); font-size: .86rem; }
+.sources-title { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); font-weight: 650; font-size: .8rem; }
+.sources ul { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 3px; }
+.sources .loc { color: var(--muted); }
+.unread-warning { display: flex; gap: 6px; align-items: flex-start; color: #f6b273; font-size: .82rem; margin-bottom: 8px; }
+.unread-warning svg { flex: none; margin-top: 2px; }
+
+/* 초안: 등록된 도구로는 못 하는 일 */
+.missing-tools { background: var(--surface); border: 1px solid #f6b27355; border-radius: 8px; padding: 12px 14px; color: #f6b273; }
+.missing-tools ul { margin: 6px 0; padding-left: 20px; color: var(--text, #dedede); }
+.missing-tools p { margin: 0; }
+
+/* 도구 고르기: 업무 분류별 묶음, 하는 일 종류, 추천 */
+.tool-group + .tool-group { margin-top: 12px; }
+.tool-group h4 { margin: 0 0 6px; font-size: .8rem; font-weight: 600; color: var(--muted); }
+.tool-badges { display: inline-flex; gap: 4px; margin-left: 6px; vertical-align: middle; }
+.badge.effect-read { color: #9ec1ff; border-color: #2c3f5e; }
+.badge.effect-write, .badge.effect-send { color: #f6b273; border-color: #5a4126; }
+.badge.suggest { color: #111; background: #f6b273; border-color: #f6b273; font-weight: 600; }
+.tool.suggested { border-color: #f6b273; border-style: dashed; }
+.suggest-note { display: flex; align-items: center; gap: 6px; margin: 4px 0 10px; color: #f6b273; font-size: .86rem; }
+
+/* 시나리오 템플릿 */
+.actions.start { justify-content: flex-start; margin-bottom: 12px; }
+.template-head { display: flex; width: 100%; justify-content: space-between; align-items: flex-start; }
+.template-example { font-size: .84rem; color: var(--muted); font-style: italic; }
+.template .actions { width: 100%; justify-content: flex-end; flex-wrap: wrap; }
+.template.unavailable { opacity: .82; }
+.tool-tags span.missing { color: #f6b273; border-style: dashed; }

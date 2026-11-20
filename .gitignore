@@ -8,6 +8,7 @@ __pycache__/
 *.pyc
 # pytest 캐시 
 .pytest_cache/ 
+
 # 환경변수 및 비밀정보 
 .env 
 .env.* 
@@ -54,3 +55,9 @@ logs/
 data/pgdata/
 # 원본 파일 저장소 (문서·작업 파일·산출물)
 data/storage/
+# 미업로드 파일
+presentations/
+runbooks/
+
+# 업로드 문서와 파싱 결과 (사용자 문서라 git 에 넣지 않는다)
+data/uploads/
