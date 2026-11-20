@@ -162,7 +162,9 @@ class AgentRunner:
             )
 
         ok = False
-        limit = asyncio.timeout(self.tool_timeout)
+        # 툴이 자기 제한시간(timeout 속성)을 갖고 있으면 그걸 쓴다 (예: 문서 파싱은 오래 걸림). 없으면 하네스 기본값
+        seconds = getattr(tool, "timeout", self.tool_timeout)
+        limit = asyncio.timeout(seconds)
         try:
             async with limit:
                 out = await tool.run(call)
@@ -170,7 +172,7 @@ class AgentRunner:
             content = out.content if out.ok else f"error: {out.content}"
         except TimeoutError as e:
             if limit.expired():  # 하네스 제한에 걸림. 툴이 스스로 던진 TimeoutError 와 구분한다
-                content = f"error: tool '{call.tool_name}' timed out after {self.tool_timeout:g}s"
+                content = f"error: tool '{call.tool_name}' timed out after {seconds:g}s"
             else:
                 content = f"error: tool '{call.tool_name}' raised {type(e).__name__}: {e}"
         except Exception as e:  # 툴이 죽어도 루프는 계속 돈다 (CancelledError 는 BaseException 이라 그대로 전파)

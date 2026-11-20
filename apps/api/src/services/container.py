@@ -14,10 +14,13 @@ from permission import create_checker
 from permission.approval import FutureApprovalHandler
 from permission.audit import JsonlAuditLogger
 from permission.policy import load_policy
-from services.agents import InMemoryAgentStore
+from services.agents import InMemoryAgentStore, InMemoryShareRequestStore
 from services.sessions import InMemorySessionStore
 from services.users import UserDirectory
 from tools.arithmetic import arithmetic_tools
+from tools.parse_document import DEFAULT_TIMEOUT as DEFAULT_PARSE_TIMEOUT
+from tools.parse_document import ParseDocumentTool
+from tools.read_doc import ReadDocumentTool
 from tools.registry import SimpleToolRegistry
 from tools.search_doc import SearchDocumentsTool, search_chunks
 from tools.read_doc import can_read_chunk, load_doc_chunks , ReadDocumentTool
@@ -25,11 +28,26 @@ from tools.today import TodayTool
 from tools.get_review_case import GetReviewCaseTool
 from tools.submit_review_request import SubmitReviewRequestTool
 from tools.review_store import ReviewStore
+from tools.search_doc import SearchDocumentsTool
+from tools.today import TodayTool
 
-DEFAULT_SYSTEM_PROMPT = (
-    "너는 사내 업무를 돕는 에이전트다. 한국어로 간결하게 답한다. "
-    "필요하면 제공된 툴을 쓰고, 권한이 없다는 결과를 받으면 우회하지 말고 사용자에게 이유를 알려준다."
-)
+REPO_ROOT = Path(__file__).resolve().parents[4]
+
+# 모든 에이전트 앞에 붙는 공통 규칙. 에이전트별 역할 지시는 services/chat.py 에서 뒤에 붙인다.
+DEFAULT_SYSTEM_PROMPT = """너는 은행 직원의 업무를 돕는 사내 에이전트다. 답을 읽는 사람은 일반 직원이다.
+
+[답하는 방식]
+- 한국어 존댓말로, 결론부터 한두 문장으로 말한다. 그다음 지켜야 할 내용을 짧은 목록으로 정리한다.
+- 문서를 근거로 답했으면 마지막 줄에 "근거:" 다음에 문서 이름과 조항을 쓴다. 예) 근거: 영업점 서류 처리 공통 지침 제2절 1항
+- 툴 이름, 문서 ID, 문단 ID(chunk_id), JSON 같은 내부 값은 답에 절대 쓰지 않는다.
+
+[툴 쓰는 법]
+- 사용자는 툴을 직접 쓸 수 없다. "툴을 사용해 주세요" 같은 말로 넘기지 말고, 더 확인할 게 있으면 네가 직접 툴을 불러 확인한 뒤 답한다.
+- 사내 문서를 검색했는데 결과에 본문이 없으면, 관련 있어 보이는 문단의 원문을 직접 열어 읽고 나서 답한다.
+- 문서에 없는 내용은 지어내지 않는다. 찾지 못했으면 찾지 못했다고 말한다.
+- 권한이 없다는 결과를 받으면 다른 방법으로 우회하지 말고 이유를 알려 준다.
+
+아래에 이 에이전트의 역할 지시가 이어질 수 있다. 역할 지시와 위 규칙이 부딪히면 위 규칙을 따른다."""
 
 
 @dataclass
@@ -42,6 +60,7 @@ class AppServices:
     users: UserDirectory
     sessions: InMemorySessionStore = field(default_factory=InMemorySessionStore)
     agents: InMemoryAgentStore = field(default_factory=InMemoryAgentStore)
+    share_requests: InMemoryShareRequestStore = field(default_factory=InMemoryShareRequestStore)
     max_turns: int = 10
     tool_timeout: float | None = 30.0
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
@@ -55,6 +74,15 @@ def llm_from_env() -> LLMClient:
     if provider != "openai":
         raise ValueError(f"알 수 없는 LLM_PROVIDER: {provider}")
     return OpenAICompatLLM.from_env()
+
+
+def build_tools(document_path: str | Path, upload_dir: str | Path | None = None,
+                parse_timeout: float | None = DEFAULT_PARSE_TIMEOUT) -> list:
+    """관리자가 등록한 툴 목록. 에이전트는 이 중에서 고른다 (MCP 연결 전까지는 코드로 등록)."""
+    doc = Path(document_path)
+    uploads = Path(upload_dir) if upload_dir else REPO_ROOT / "data/uploads"
+    return [*arithmetic_tools(), SearchDocumentsTool(doc), ReadDocumentTool(doc), TodayTool(),
+            ParseDocumentTool(uploads, timeout=parse_timeout)]
 
 
 def build_from_env() -> AppServices:
@@ -81,6 +109,11 @@ def build_from_env() -> AppServices:
                 SubmitReviewRequestTool(review_store),
             ]
         ),
+        # tools=SimpleToolRegistry(build_tools(
+        #     env("DOCUMENT_CHUNKS_PATH", str(REPO_ROOT / "data/fixtures/document_chunks.json")),
+        #     upload_dir=env("UPLOAD_DIR"),  # 비어 있으면 data/uploads
+        #     parse_timeout=float(env("PARSE_TOOL_TIMEOUT_SECONDS", str(DEFAULT_PARSE_TIMEOUT))),
+        # )),
         checker=create_checker(rules=rules, default=default),
         approvals=FutureApprovalHandler(float(env("PERMISSION_APPROVAL_TIMEOUT_SECONDS", "120"))),
         audit=JsonlAuditLogger(env("PERMISSION_AUDIT_LOG_PATH", "logs/permission_audit.jsonl")),

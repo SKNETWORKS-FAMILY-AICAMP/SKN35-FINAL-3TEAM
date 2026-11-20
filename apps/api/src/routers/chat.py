@@ -49,6 +49,12 @@ class DenialOut(BaseModel):
     reason: str
 
 
+class SourceOut(BaseModel):
+    title: str  # 문서명
+    location: str  # 조항·페이지
+    opened: bool  # 원문을 열어 읽었는지
+
+
 class ChatResponse(BaseModel):
     session_id: str
     run_id: str
@@ -56,6 +62,7 @@ class ChatResponse(BaseModel):
     message: str
     tool_events: list[ToolEventOut]
     denial: DenialOut | None = None
+    sources: list[SourceOut] = []  # COM-04: 이번 답에 쓰인 문서
 
 
 class MessageOut(BaseModel):
@@ -107,6 +114,7 @@ async def post_message(
             call_id=turn.denial.call_id, tool_name=turn.denial.tool_name, display_name=turn.denial.label,
             kind=turn.denial.kind, reason=turn.denial.reason,
         ) if turn.denial else None,
+        sources=[SourceOut(**s.__dict__) for s in turn.sources],
     )
 
 

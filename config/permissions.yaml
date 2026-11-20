@@ -66,6 +66,7 @@ rules:
     decision: deny
     reason: 파일 삭제는 보안등급 3 이상 부서장만 가능합니다
 
+  # 문서 원문 열람: 검색과 같은 필터를 툴 안에서 다시 적용한다
   - id: read-document-chunk
     tool: get_doc_chunk
     decision: allow
@@ -73,3 +74,8 @@ rules:
   - id : today
     tool : today
     decision : allow
+
+  # 업로드 문서 읽기: 업로드 폴더 안 파일만 읽는다 (경로 제한은 툴 안에서 강제)
+  - id: parse-document
+    tool: parse_document
+    decision: allow

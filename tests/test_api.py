@@ -185,3 +185,19 @@ async def test_llm_outage_returns_502(tmp_path):
     svc.llm = DownLLM()
     r = await client.post("/api/chat/messages", json={"content": "hi"}, headers=KIM)
     assert r.status_code == 502
+
+
+async def test_sources_come_from_document_tools(tmp_path):
+    from services.chat import sources
+    from contracts.harness import Message
+
+    search = '{"query": "반려", "matches": [{"doc_id": "d1", "chunk_id": "c1", "title": "공통 지침", "location": "제2절"}, {"doc_id": "d2", "chunk_id": "c2", "title": "부서 지침", "location": "제3절"}]}'
+    read = '{"doc_id": "d2", "chunk_id": "c2", "title": "부서 지침", "location": "제3절", "text": "..."}'
+    msgs = [Message("tool", search, tool_call_id="a"), Message("tool", read, tool_call_id="b"),
+            Message("tool", "7", tool_call_id="c"), Message("tool", "error: 문단을 찾을 수 없습니다.", tool_call_id="d")]
+    got = [(s.title, s.location, s.opened) for s in sources(msgs)]
+    assert got == [("부서 지침", "제3절", True), ("공통 지침", "제2절", False)]
+
+    client, _ = make([tool_call("c1", "add", a=1, b=2), {"content": "3"}], tmp_path)
+    body = (await client.post("/api/chat/messages", json={"content": "1+2"}, headers=KIM)).json()
+    assert body["sources"] == []  # 문서 툴이 아니면 근거 없음

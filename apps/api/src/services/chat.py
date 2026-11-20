@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -27,6 +28,40 @@ class ToolEvent:
 
 
 @dataclass(frozen=True)
+class Source:
+    """COM-04: 이번 답에 쓰인 문서. 툴 결과에서 모은다 (LLM 이 근거를 빠뜨려도 화면에는 나온다)."""
+
+    title: str
+    location: str
+    opened: bool  # True = 원문을 열어 읽음, False = 검색 결과에만 나옴
+
+
+MAX_SOURCES = 5
+
+
+def sources(new_messages: list[Message]) -> list[Source]:
+    """문서 툴 결과(JSON)에서 문서명·위치를 모은다. 원문을 연 문서가 앞에 온다."""
+    opened: dict[tuple[str, str], Source] = {}
+    found: dict[tuple[str, str], Source] = {}
+    for m in new_messages:
+        if m.role != "tool" or m.content.startswith("error:"):
+            continue
+        try:
+            data = json.loads(m.content)
+        except ValueError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        items = [(data, True)] if "title" in data else [(d, False) for d in data.get("matches", []) if isinstance(d, dict)]
+        for item, was_opened in items:
+            title, location = str(item.get("title") or ""), str(item.get("location") or "")
+            if title:
+                (opened if was_opened else found)[(title, location)] = Source(title, location, was_opened)
+    merged = list(opened.values()) + [s for k, s in found.items() if k not in opened]
+    return merged[:MAX_SOURCES]
+
+
+@dataclass(frozen=True)
 class ChatTurn:
     session_id: str
     run_id: str
@@ -34,6 +69,7 @@ class ChatTurn:
     message: str
     tool_events: list[ToolEvent]
     denial: Denial | None = None
+    sources: list[Source] = ()
 
 
 def tool_events(new_messages: list[Message], labels: dict[str, str]) -> list[ToolEvent]:
@@ -85,4 +121,6 @@ async def send_message(
     else:
         text = "요청을 처리하는 데 단계가 너무 많아 중단했습니다. 요청을 나눠서 다시 시도해 주세요."
     labels = {s.name: s.label for s in await tools.specs()}
-    return ChatTurn(session.session_id, run_id, result.stop_reason, text, tool_events(new, labels), result.denial)
+    return ChatTurn(
+        session.session_id, run_id, result.stop_reason, text, tool_events(new, labels), result.denial, sources(new),
+    )
