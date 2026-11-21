@@ -6,6 +6,11 @@ import {
   Sparkles, Trash2, Undo2, UserRound, Workflow, Wrench, X,
 } from 'lucide-react';
 import './style.css';
+import { failedToolSummary } from './tool-status';
+import {
+  emptyChatHistory, currentConversation, updateConversation,
+  startNewConversation, openConversation, conversationTitle, recentConversations,
+} from './chat-history';
 
 // ── 백엔드 API ──────────────────────────────────────────────
 // /api 는 vite.config.js 의 프록시가 FastAPI 서버(기본 http://localhost:8000)로 넘긴다.
@@ -180,13 +185,8 @@ function parseJson(text) {
   try { return JSON.parse(text); } catch { return null; }
 }
 
-function summarize(event) {
-  if (!event.ok) {
-    const reason = event.result.replace(/^error:\s*/, '');
-    if (/not executed|실행하지 않았/.test(reason)) return '앞선 작업이 막혀 실행하지 않음';
-    if (/^permission/.test(reason)) return '권한 때문에 실행하지 않음';
-    return reason.length > 60 ? reason.slice(0, 60) + '…' : reason;
-  }
+function summarize(event, denial) {
+  if (!event.ok) return failedToolSummary(event, denial);
   const data = parseJson(event.result);
   const args = event.arguments ?? {};
   if (event.tool_name === 'parse_document' && data?.filename) {
@@ -206,7 +206,7 @@ function ToolEvents({ events, denial }) {
   return <details className="tool-events">
     <summary>
       {events?.map(event => <span key={event.call_id} className={'event ' + (event.ok ? 'ok' : 'fail')}>
-        {event.ok ? <Check size={13} /> : <X size={13} />}<strong>{event.display_name}</strong>{summarize(event)}
+        {event.ok ? <Check size={13} /> : <X size={13} />}<strong>{event.display_name}</strong>{summarize(event, denial)}
       </span>)}
       {denial && <span className="event fail"><CircleAlert size={13} />{{ deny: '권한 없음', rejected: '승인 거절', timeout: '승인 시간 초과' }[denial.kind] ?? denial.kind} · {denial.display_name}</span>}
       <span className="more">자세히</span>
@@ -255,7 +255,7 @@ function ApprovalCards({ user, approvals, onAnswered }) {
   </div>);
 }
 
-function ChatPage({ user, tools, agents, activeId, setActiveId, conversations, setConversations, notify, onBusyChange }) {
+function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, changeConversation, newConversation, notify, onBusyChange }) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [approvals, setApprovals] = useState([]);
@@ -270,8 +270,7 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, conversations, s
   const canParse = tools.some(tool => tool.name === 'parse_document') &&
     (active.agent_id === null || active.tools?.includes('parse_document'));
   const busy = sending || uploading;
-  const key = active.agent_id ?? 'default';
-  const conversation = conversations[key] ?? { sessionId: null, messages: [] };
+  const conversation = currentConversation(chatHistory, active.agent_id);
 
   useEffect(() => {
     onBusyChange(busy);
@@ -294,7 +293,7 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, conversations, s
     return () => clearInterval(timer);
   }, [sending, pollApprovals]);
 
-  function update(fn) { setConversations(previous => ({ ...previous, [key]: fn(previous[key] ?? { sessionId: null, messages: [] }) })); }
+  function update(fn) { changeConversation(active.agent_id, fn); }
 
   async function attachFiles(event) {
     const files = Array.from(event.target.files || []);
@@ -357,7 +356,7 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, conversations, s
       <label className="agent-picker"><Bot size={17} /><select aria-label="작업 에이전트" disabled={busy} value={active.agent_id ?? ''} onChange={event => { setActiveId(event.target.value || null); setInput(''); setAttachments([]); }}>
         {usable.map(agent => <option key={agent.agent_id ?? 'default'} value={agent.agent_id ?? ''}>{agent.name}{agent.agent_id && agent.owner_user_id !== user ? ` (${agent.owner_user_id})` : ''}</option>)}
       </select></label>
-      <button className="quiet" disabled={busy} onClick={() => { update(() => ({ sessionId: null, messages: [] })); setInput(''); setAttachments([]); }}><Plus size={17} />새 대화</button>
+      <button className="quiet" disabled={busy} onClick={() => { newConversation(active.agent_id); setInput(''); setAttachments([]); }}><Plus size={17} />새 대화</button>
     </div>
     <div className="chat-body">
       {conversation.messages.length ? <div className="thread" aria-live="polite">
@@ -505,7 +504,7 @@ function AgentsPage({ user, agents, tools, editingId, setEditingId, refresh, ope
 
   async function save(value) {
     setSaving(true);
-    await run('/api/agents/' + editing.agent_id, { method: 'PATCH', body: value }, '변경사항을 저장했습니다.');
+    await run('/api/agents/' + editing.agent_id, { method: 'PATCH', body: value }, '변경사항을 저장했습니다. 변경된 설정은 새 대화에서 테스트해 주세요');
     setSaving(false);
   }
 
@@ -663,7 +662,8 @@ function App() {
   const [activeId, setActiveId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState(null);
-  const [conversations, setConversations] = useState({});
+  const [chatHistory, setChatHistory] = useState(emptyChatHistory);
+  const [chatView, setChatView] = useState(0);
   const [notice, setNotice] = useState(null);
   const route = navigation.find(({ id }) => id === page);
 
@@ -679,7 +679,7 @@ function App() {
 
   useEffect(() => {
     try { localStorage.setItem(userKey, user); } catch { /* 저장 못 해도 동작 */ }
-    setConversations({}); setActiveId(null); setEditingId(null); setNotice(null);
+    setChatHistory(emptyChatHistory()); setActiveId(null); setEditingId(null); setNotice(null);
     api(user, '/api/me').then(setMe).catch(error => { setMe(null); notify(error.message); });
     api(user, '/api/tools').then(setTools).catch(() => setTools([]));
     refreshAgents();
@@ -693,12 +693,54 @@ function App() {
 
   function openChat(id) { setActiveId(id); location.hash = 'chat'; }
 
+  function changeConversation(agentId, change) {
+    setChatHistory(previous => updateConversation(previous, agentId, change));
+  }
+
+  function newConversation(agentId) {
+    if (chatBusy) return;
+    setChatHistory(previous => startNewConversation(previous, agentId));
+    setChatView(previous => previous + 1);
+  }
+
+  function openSavedConversation(thread) {
+    if (chatBusy) return;
+    const agent = agents.find(item => item.agent_id === thread.agentId);
+    if (thread.agentId !== null && (!agent || agent.status !== 'active')) {
+      notify('이 대화의 에이전트가 삭제·비활성화되었거나 사용 권한이 없습니다.');
+      return;
+    }
+    setChatHistory(previous => openConversation(previous, thread.id));
+    setChatView(previous => previous + 1);
+    setActiveId(thread.agentId);
+    location.hash = 'chat';
+  }
+
+  const recent = recentConversations(chatHistory);
+  const currentThreadId = currentConversation(chatHistory, activeId).id;
+
   return <div className="shell" style={{ '--accent': route.color }}>
     <aside className="sidebar">
       <div className="sidebar-heading"><span className="sidebar-mark"><Workflow size={19} /></span><strong>워크스페이스</strong></div>
       <nav aria-label="워크스페이스 메뉴">{navigation.map(({ id, name, detail, icon: Icon, color }) => <a key={id} href={'#' + id} aria-current={page === id ? 'page' : undefined} style={{ '--item-accent': color }}>
         <span className="nav-icon"><Icon size={19} /></span><span><strong>{name}</strong><small>{detail}</small></span><ChevronRight size={15} className="nav-chevron" />
       </a>)}</nav>
+      <section className="sidebar-history" aria-label="최근 대화">
+        <h2>최근 대화</h2>
+        {!recent.length && <p className="history-empty">시작한 대화가 여기에 표시됩니다.</p>}
+        {recent.map(thread => {
+          const title = conversationTitle(thread);
+          const agentName = thread.agentId === null ? DEFAULT_AGENT.name : agents.find(item => item.agent_id === thread.agentId)?.name ?? '사용할 수 없는 에이전트';
+          const selected = page === 'chat' && currentThreadId === thread.id;
+          return <button type="button" key={thread.id} disabled={chatBusy}
+            className={selected ? 'selected' : ''} aria-current={selected ? 'true' : undefined}
+            aria-label={`대화 열기: ${title}`} title={`${title} · ${agentName}`}
+            onClick={() => openSavedConversation(thread)}>
+            <MessageSquare size={15} />
+            <span><strong>{title}</strong><small>{agentName}</small></span>
+          </button>;
+        })}
+      </section>
       <div className="sidebar-bottom user-switch">
         <UserRound size={16} />
         <select aria-label="개발용 사용자" disabled={chatBusy} value={user} onChange={event => setUser(event.target.value)}>
@@ -712,8 +754,8 @@ function App() {
       <header className="topbar"><span className="mark"><Workflow size={19} /></span><strong>Agent Workspace</strong><span className="top-divider" /><span className="breadcrumb">{route.name}</span>
         {me && <span className="whoami"><span className="status-dot" />{me.user_id} · {me.roles.map(role => ROLE[role] ?? role).join(', ')}</span>}</header>
       {notice && page === 'chat' && <p role="status" className={'notice floating ' + notice.tone}>{notice.text}<button className="icon" onClick={() => setNotice(null)} aria-label="닫기"><X size={14} /></button></p>}
-      {page === 'chat' ? <ChatPage key={user} user={user} tools={tools} agents={agents} activeId={activeId} setActiveId={setActiveId} onBusyChange={setChatBusy}
-        conversations={conversations} setConversations={setConversations} notify={notify} />
+      {page === 'chat' ? <ChatPage key={`${user}:${chatView}`} user={user} tools={tools} agents={agents} activeId={activeId} setActiveId={setActiveId} onBusyChange={setChatBusy}
+        chatHistory={chatHistory} changeConversation={changeConversation} newConversation={newConversation} notify={notify} />
       : <div className="page">
         <div className="page-heading"><div className="hero-icon small"><route.icon size={25} /></div><h1>{route.name}</h1>
           <p>{{

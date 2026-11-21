@@ -175,6 +175,9 @@ class ParseDocumentTool:
                                   data={"file_id": file_id, "status": result.status, "reason": result.reason})
             d = result.to_dict(include_docling=False)
 
+        if page_range is not None and d.get("pages") is None:
+            return ToolResult(call.call_id, False, "이 문서는 페이지 구분 정보가 없어 지정한 쪽만 읽을 수 없습니다." "pages 인자를 생략하고 문서 전체를 다시 읽어주세요",)
+
         payload = build_payload(file_id, d, page_range, cached)
         if attachment is not None:
             payload["filename"] = attachment["filename"]

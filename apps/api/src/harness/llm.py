@@ -83,6 +83,12 @@ class OpenAICompatLLM:
         )
 
     async def chat(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
+        return await self._chat(messages, tools)
+
+    async def chat_required_tool(self, messages: list[Message], tool: ToolSpec) -> LLMResponse:
+        return await self._chat(messages, [tool], tool_choice={"type": "function", "function": {"name": tool.name}})
+
+    async def _chat(self, messages: list[Message], tools: list[ToolSpec], *, tool_choice: dict | None = None) -> LLMResponse:
         kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": [message_to_openai(m) for m in messages],
@@ -90,6 +96,8 @@ class OpenAICompatLLM:
         }
         if tools:
             kwargs["tools"] = [spec_to_openai(t) for t in tools]
+        if tool_choice is not None:
+            kwargs["tool_choice"] = tool_choice
         resp = await self._client.chat.completions.create(**kwargs)
         choice = resp.choices[0]
         msg = choice.message

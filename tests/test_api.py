@@ -98,7 +98,7 @@ async def test_denied_tool_stops_with_template(tmp_path):
     assert len(svc.llm.calls) == 1  # 성공한 툴이 없으니 LLM 을 다시 부르지 않는다
 
 
-async def test_denied_after_success_gets_llm_wrapup(tmp_path):
+async def test_denied_after_success_uses_server_summary(tmp_path):
     client, svc = make([
         {"tool_calls": [{"id": "c1", "name": "add", "arguments": {"a": 1, "b": 2}},
                         {"id": "c2", "name": "multiply", "arguments": {"a": 3, "b": 4}}]},
@@ -106,11 +106,13 @@ async def test_denied_after_success_gets_llm_wrapup(tmp_path):
     ], tmp_path)
     body = (await client.post("/api/chat/messages", json={"content": "계산"}, headers=KIM)).json()
     assert body["stop_reason"] == "denied"
-    assert body["message"] == "1+2=3 이에요. 곱셈은 권한이 없어 못 했어요."
-    assert svc.llm.calls[-1][1] == []  # 마무리 호출은 툴 없이
-    # 마무리 지시문은 대화 기록에 남지 않는다
+    assert "'곱셈' 작업은 권한이 없어 실행하지 않았습니다" in body["message"]
+    assert "- 덧셈: 3" in body["message"]
+    assert len(svc.llm.calls) == 1  # 거부 뒤 모델의 마무리 답변을 생성하지 않는다.
+    # 서버가 확정한 마무리 답변도 대화 기록에 남는다.
     msgs = (await client.get(f"/api/chat/sessions/{body['session_id']}/messages", headers=KIM)).json()
     assert [m["role"] for m in msgs if m["role"] == "user"] == ["user"]
+    assert msgs[-1]["content"] == body["message"]
 
 
 async def test_history_continues_and_is_private(tmp_path):

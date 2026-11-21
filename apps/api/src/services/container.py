@@ -76,6 +76,7 @@ class AppServices:
     tool_timeout: float | None = 30.0
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
     require_search: RequireSearch | None = field(default_factory=RequireSearch)  # 문서 질문 검색 강제. None 이면 끔
+    require_review_lookup: bool = True  # 심사 건의 상태는 실제 조회 결과로만 안내
 
 
 def llm_from_env() -> LLMClient:

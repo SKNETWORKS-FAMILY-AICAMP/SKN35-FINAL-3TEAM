@@ -71,6 +71,38 @@ async def test_bad_source_data_fails_safely(store, tmp_path):
     assert not store.request_path.exists()
 
 
+@pytest.mark.parametrize("kind,decision,approval", [
+    ("rejected", "ask", "rejected"),
+    ("timeout", "ask", "timeout"),
+    ("deny", "deny", "approved"),
+])
+async def test_lookup_then_blocked_submission_never_generates_success(store, kind, decision, approval):
+    from harness import create_harness
+    from tests.fakes import FixedApprover, MemoryAudit, ScriptedChecker
+
+    llm = ScriptedLLM([
+        {"tool_calls": [{"id": "lookup", "name": "get_review_case", "arguments": {"case_id": "REVIEW-001"}}]},
+        {"tool_calls": [{"id": "submit", "name": "submit_review_request", "arguments": {"case_id": "REVIEW-001", "notes": "실행 승인 거절 테스트"}}]},
+        {"content": "심사 요청이 등록되었습니다. 다만 거절하셨습니다."},
+    ])
+    audit = MemoryAudit()
+    runner = create_harness(
+        llm=llm, tools=SimpleToolRegistry([GetReviewCaseTool(store), SubmitReviewRequestTool(store)]),
+        checker=ScriptedChecker({"submit_review_request": decision}),
+        approver=FixedApprover(approval), audit=audit, max_turns=5,
+    )
+    result = await runner.run("조회 후 등록해줘", KIM, "session")
+    text = result.final_message.content
+    assert result.stop_reason == "denied" and result.denial.kind == kind
+    assert "실행하지 않았습니다" in text and "등록되었습니다" not in text
+    assert "서류 검토 중" in text and "납세증명서" in text
+    assert "REVIEW-001" in text and "get_review_case" not in text
+    assert text.index("실행하지 않았습니다") < text.index("완료된 작업")
+    assert len(llm.calls) == result.llm_calls == 2
+    assert store.get_case("REVIEW-001", KIM)["review_request"] is None
+    assert [(r.executed, r.tool_ok) for r in audit.records] == [(True, True), (False, None)]
+
+
 @pytest.mark.parametrize("approved", [True, False, None])
 async def test_submission_through_api_approval(store, tmp_path, approved):
     rules, default = load_policy(ROOT / "config/permissions.yaml")

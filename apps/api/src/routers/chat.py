@@ -27,7 +27,7 @@ class ChatRequest(BaseModel):
 
     content: str = Field(default="", max_length=4000)
     session_id: str | None = None  # 없으면 새 세션
-    agent_id: str | None = None  # 새 세션을 열 때 쓸 에이전트 (없으면 기본 에이전트). 이어 쓸 때는 무시
+    agent_id: str | None = None  # 새d 세션을 열 때 쓸 에이전트 (없으면 기본 에이전트). 이어 쓸 때는 무시
     file_ids: list[str] = Field(default_factory=list, max_length=MAX_ATTACHMENTS)
 
     @model_validator(mode="after")
