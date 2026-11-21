@@ -126,3 +126,26 @@ def test_empty_citation_lines_are_removed():
     kept = "답\n근거: 공통 지침 제2절 1항"
     assert strip_empty_citation(kept) == kept
     assert not RequireSearch().needed("안녕", "안녕하세요\n근거: 관련 문서 없음")
+
+
+async def test_forced_search_uses_required_tool_when_llm_supports_it():
+    class RequiredToolLLM(ScriptedLLM):
+        def __init__(self, script):
+            super().__init__(script)
+            self.required: list[str] = []
+
+        async def chat_required_tool(self, messages, tool):
+            self.required.append(tool.name)
+            return await self.chat(messages, [tool])
+
+    llm = RequiredToolLLM([
+        {"content": "근거: 지어낸 지침 제5절"},
+        {"tool_calls": [{"id": "s1", "name": "search_doc", "arguments": {"query": "반려"}}]},
+        {"content": "찾지 못했습니다."},
+    ])
+    harness = create_harness(
+        llm=llm, tools=FakeRegistry([FakeTool("search_doc", output=FOUND)]), checker=ScriptedChecker({}),
+        approver=FixedApprover(True), audit=MemoryAudit(), max_turns=5, require_search=RequireSearch(),
+    )
+    result = await harness.run("반려 규정 알려줘", KIM, "s")
+    assert llm.required == ["search_doc"] and result.final_message.content == "찾지 못했습니다."

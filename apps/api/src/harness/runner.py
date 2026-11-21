@@ -222,9 +222,16 @@ class AgentRunner:
         return RunResult(None, messages, self.max_turns, "max_turns")
 
     async def _ask_search(self, messages: list[Message], rs: RequireSearch, search_spec) -> Message | None:
-        """검색 툴 하나만 주고 다시 묻는다. 안내 문구는 기록에 남기지 않는다. 실패하면 None (하네스가 직접 검색)."""
+        """검색 툴 하나만 주고 다시 묻는다. 안내 문구는 기록에 남기지 않는다. 실패하면 None (하네스가 직접 검색).
+
+        LLM 이 특정 툴 호출 강제(tool_choice)를 지원하면 그걸 쓴다 (심사 등록 강제와 같은 방식).
+        지원하지 않거나 그래도 안 부르면 RequireSearch.forced_call 이 질문에서 뽑은 검색어로 직접 부른다.
+        """
+        prompt = [*messages, rs.nudge()]
         try:
-            return (await self.llm.chat([*messages, rs.nudge()], [search_spec])).message
+            if isinstance(self.llm, RequiredToolLLMClient):
+                return (await self.llm.chat_required_tool(prompt, search_spec)).message
+            return (await self.llm.chat(prompt, [search_spec])).message
         except Exception:
             log.warning("검색 강제 LLM 호출 실패, 질문으로 직접 검색", exc_info=True)
             return None
