@@ -20,6 +20,7 @@ from permission.audit import JsonlAuditLogger
 from permission.customer_mail import CustomerMailRule
 from permission.policy import load_policy
 from services.agents import InMemoryAgentStore, InMemoryShareRequestStore
+from services.documents import DocumentStore, load_forms
 from services.inbox import InboxStore
 from services.mail_accounts import GmailAccountResolver
 from services.sessions import InMemorySessionStore
@@ -37,6 +38,7 @@ from tools.search_doc import SearchDocsTool
 from tools.submit_review_request import SubmitReviewRequestTool
 from tools.today import TodayTool
 from tools.gmail import build_gmail_tools
+from tools.fill_document import FillDocumentTool
 from tools.loans import LoanStore, LoansMaturingTool
 from tools.market import build_market_tools
 from tools.maturity_alert import SendMaturityAlertTool
@@ -79,6 +81,7 @@ class AppServices:
     uploads: UploadStore = field(default_factory=lambda: UploadStore(REPO_ROOT / "data/uploads"))
     templates: InMemoryTemplateStore = field(default_factory=InMemoryTemplateStore)
     inbox: InboxStore = field(default_factory=lambda: InboxStore(REPO_ROOT / "data/inbox.sqlite3"))
+    documents: DocumentStore = field(default_factory=lambda: DocumentStore(REPO_ROOT / "data/documents.sqlite3"))
     draft_llm: LLMClient | None = None  # 에이전트 초안 전용 (더 큰 모델). 없으면 llm 을 쓴다
     max_turns: int = 10
     tool_timeout: float | None = 30.0
@@ -152,6 +155,7 @@ def draft_llm_from_env(chat_llm: LLMClient) -> LLMClient:
 
 
 FIXTURES = REPO_ROOT / "data/fixtures"
+DOCUMENT_FORMS = REPO_ROOT / "config/document_forms"
 
 
 def build_tools(doc_path: str | Path = FIXTURES / "doc_chunks.json", upload_dir: str | Path | None = None,
@@ -159,6 +163,7 @@ def build_tools(doc_path: str | Path = FIXTURES / "doc_chunks.json", upload_dir:
                 holiday_path: str | Path | None = FIXTURES / "business_holidays_demo.json", review_store: ReviewStore | None = None,
                 upload_store: UploadStore | None = None, doc_tools: list | None = None,
                 loan_store: LoanStore | None = None, inbox: InboxStore | None = None,
+                documents: DocumentStore | None = None,
                 gmail_account_resolver: GmailAccountResolver | None = None) -> list:
     """로컬 도구와 환경변수로 활성화한 Gmail MCP 도구를 함께 등록한다.
     doc_tools 를 주면 파일 예시 대신 그 문서 검색·열람 도구를 쓴다 (DOC_STORE=db → tools/db_docs.py)."""
@@ -171,6 +176,9 @@ def build_tools(doc_path: str | Path = FIXTURES / "doc_chunks.json", upload_dir:
     )
     loan_store = loan_store or LoanStore(FIXTURES / "loans_demo.json")
     inbox = inbox or InboxStore(REPO_ROOT / "data/inbox.sqlite3")
+    documents = documents or DocumentStore(REPO_ROOT / "data/documents.sqlite3", load_forms(DOCUMENT_FORMS))
+    # 양식(config/document_forms)의 source.provider 이름 → 조회 함수. 새 서류의 데이터는 여기에 한 줄 추가한다
+    providers = {"loans_maturing": lambda principal, params: loan_store.maturing(principal, params["days"])}
     gmail = build_gmail_tools(account_resolver=gmail_account_resolver)
     mailer = next((tool for tool in gmail if tool.spec.name == "send_mail"), None)
     return [
@@ -179,6 +187,7 @@ def build_tools(doc_path: str | Path = FIXTURES / "doc_chunks.json", upload_dir:
         ParseDocTool(uploads, timeout=parse_timeout, uploads=upload_store),
         GetReviewCaseTool(review_store), SubmitReviewRequestTool(review_store),
         LoansMaturingTool(loan_store), SendMaturityAlertTool(loan_store, inbox), PrepareMaturityNoticesTool(loan_store), SendMaturityNoticeTool(loan_store, mailer),
+        FillDocumentTool(documents, providers),
         *gmail,
         *build_market_tools(),
     ]
@@ -212,6 +221,8 @@ def build_from_env(*, gmail_account_resolver: GmailAccountResolver | None = None
     )
     loan_store = LoanStore(Path(env("LOANS_PATH", str(FIXTURES / "loans_demo.json"))))
     inbox = InboxStore(Path(env("INBOX_DB_PATH", str(REPO_ROOT / "data" / "inbox.sqlite3"))))
+    documents = DocumentStore(Path(env("DOCUMENT_DB_PATH", str(REPO_ROOT / "data" / "documents.sqlite3"))),
+                              load_forms(Path(env("DOCUMENT_FORMS_DIR", str(DOCUMENT_FORMS)))))
     llm = llm_from_env()
     return AppServices(
         llm=llm,
@@ -220,10 +231,11 @@ def build_from_env(*, gmail_account_resolver: GmailAccountResolver | None = None
             doc_path, upload_dir=env("UPLOAD_DIR"),
             parse_timeout=float(env("PARSE_TOOL_TIMEOUT_SECONDS", str(DEFAULT_PARSE_TIMEOUT))),
             holiday_path=holiday_path, review_store=review_store, upload_store=uploads,
-            doc_tools=db_doc_tools_from_env(), loan_store=loan_store, inbox=inbox,
+            doc_tools=db_doc_tools_from_env(), loan_store=loan_store, inbox=inbox, documents=documents,
             gmail_account_resolver=gmail_account_resolver,
         )),
         inbox=inbox,
+        documents=documents,
         uploads=uploads,
         checker=CustomerMailRule(create_checker(rules=rules, default=default), loan_store),
         approvals=FutureApprovalHandler(float(env("PERMISSION_APPROVAL_TIMEOUT_SECONDS", "120"))),

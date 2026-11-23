@@ -294,6 +294,11 @@ details[open] .more { display: none; }
 .inbox-summary { margin: 12px 0; padding: 12px 14px; border-left: 3px solid #ffd166; background: #1c1a14; border-radius: 8px; }
 .inbox-item { padding: 14px 16px; list-style: none; margin-bottom: 10px; }
 .approval p.muted { white-space: pre-line; }  /* 만기 안내 메일 미리보기 (받는 사람·제목·본문) */
+/* 문서 내려받기 버튼 (documents.jsx) — 서류가 나오는 모든 작업이 같은 모양을 쓴다 */
+.document-downloads { display: grid; gap: 8px; margin: 12px 0; }
+.document-download { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid #2f4a35; border-radius: 10px; background: #131b15; }
+.document-download .document-title { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+.document-download button { display: inline-flex; align-items: center; gap: 5px; }
 .saved-report { min-width: 0; }
 .saved-report table { display: block; overflow-x: auto; }
 .structured-report .report-table { overflow-x: auto; }

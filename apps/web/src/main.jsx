@@ -1,13 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  ArrowUp, Bell, Bot, Braces, Check, ChevronRight, CircleAlert, FileText, Inbox, LayoutTemplate, ListChecks,
+  ArrowUp, Bell, Bot, FolderOpen, Braces, Check, ChevronRight, CircleAlert, FileText, Inbox, LayoutTemplate, ListChecks,
   LoaderCircle, Lock, Pencil, MessageSquare, Paperclip, Plus, Power, PowerOff, Search, Settings2, Share2, ShieldCheck,
   Sparkles, Trash2, Undo2, UserRound, Workflow, Wrench, X,
 } from 'lucide-react';
 import './style.css';
 import { failedToolSummary } from './tool-status';
 import { InboxPage } from './inbox';
+import { DocumentDownloads, DocumentsPage, documentsFromEvents } from './documents';
 import { savedReports, ReportContent, ReportExport } from './report-export';
 import {
   emptyChatHistory, currentConversation, updateConversation,
@@ -50,6 +51,7 @@ const navigation = [
   { id: 'create', name: '에이전트 만들기', detail: '자연어로 초안 생성', icon: Sparkles, color: '#ba97ff' },
   { id: 'agents', name: '에이전트 관리', detail: '내 것·공유받은 것', icon: Settings2, color: '#65ddb0' },
   { id: 'inbox', name: '알림함', detail: '만기 알림 등 받은 알림', icon: Bell, color: '#ffd166' },
+  { id: 'documents', name: '내 문서', detail: '만든 문서 PDF·DOCX 받기', icon: FolderOpen, color: '#9be38c' },
   { id: 'shares', name: '공유 요청', detail: '승인·요청 내역', icon: Inbox, color: '#f17fa8' },
   { id: 'templates', name: '시나리오 템플릿', detail: '사전 구성으로 시작', icon: LayoutTemplate, color: '#f6b273' },
   { id: 'tools', name: '도구 목록', detail: '등록된 도구 보기', icon: Wrench, color: '#74d5e4' },
@@ -383,6 +385,7 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, cha
               <ReportContent document={report.document} markdown={report.markdown} /><ReportExport report={report} user={user} />
             </section>)
             : message.role === 'agent' ? <Formatted text={message.content} /> : <div>{message.content}</div>}
+          {message.role === 'agent' && <DocumentDownloads user={user} documents={documentsFromEvents(message.events)} notify={notify} />}
           {message.role === 'agent' && <Sources items={message.sources}
             searched={message.events?.some(event => event.tool_name === 'search_doc')}
             cited={/(^|\n)\s*\**근거\**\s*[:：]/.test(message.content)} />}
@@ -778,6 +781,7 @@ function App() {
             create: '필요한 역할을 설명하면 LLM이 이름, 프롬프트, 도구를 골라 초안을 만듭니다.',
             agents: '내가 만든 에이전트와 공유받은 에이전트를 관리하세요. 부서장은 부서원의 에이전트를 비활성화할 수 있습니다.',
             inbox: '에이전트가 보낸 알림입니다. 본인 알림만 보입니다.',
+            documents: '에이전트가 양식으로 만든 문서입니다. 본인 문서만 보이고, PDF·DOCX 중 골라 받습니다.',
             shares: '부서·전사 공유는 바로 위 관리자가 승인해야 적용됩니다.',
             templates: '관리자가 미리 만든 업무 에이전트로 시작하세요. 고른 뒤 내용을 고쳐 내 에이전트로 저장합니다.',
             tools: '관리자가 등록한 도구입니다. 에이전트를 만들 때 이 중에서 고릅니다.',
@@ -789,6 +793,7 @@ function App() {
         {page === 'agents' && <AgentsPage user={user} agents={agents} tools={tools} editingId={editingId} setEditingId={setEditingId}
           refresh={refreshAgents} openChat={openChat} notify={notify} />}
         {page === 'inbox' && <InboxPage user={user} notify={notify} />}
+        {page === 'documents' && <DocumentsPage user={user} notify={notify} />}
         {page === 'shares' && <SharesPage user={user} notify={notify} refreshAgents={refreshAgents} />}
         {page === 'tools' && <ul className="tool-catalog">{tools.map(({ name, display_name, description }) =>
           <li className="panel catalog-tool" key={name}>
