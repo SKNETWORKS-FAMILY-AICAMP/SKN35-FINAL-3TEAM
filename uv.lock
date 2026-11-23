@@ -3336,6 +3336,7 @@ dependencies = [
     { name = "python-multipart" },
     { name = "pyyaml" },
     { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "syhwp" },
     { name = "tzdata" },
     { name = "uvicorn" },
 ]
@@ -3370,6 +3371,7 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.1.9" },
+    { name = "syhwp", specifier = "==0.0.8" },
     { name = "syhwp", marker = "extra == 'hwp'", specifier = "==0.0.8" },
     { name = "tzdata", specifier = ">=2026.6" },
     { name = "uvicorn", specifier = ">=0.54.0" },
