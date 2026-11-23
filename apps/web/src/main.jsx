@@ -3,10 +3,12 @@ import { createRoot } from 'react-dom/client';
 import {
   ArrowUp, Bot, Braces, Check, ChevronRight, CircleAlert, FileText, Inbox, LayoutTemplate, ListChecks,
   LoaderCircle, Lock, Pencil, MessageSquare, Paperclip, Plus, Power, PowerOff, Search, Settings2, Share2, ShieldCheck,
-  Sparkles, Trash2, Undo2, UserRound, Workflow, Wrench, X,
+  LogOut, Moon, Sparkles, Sun, Trash2, Undo2, UserRound, Workflow, Wrench, X,
 } from 'lucide-react';
 import './style.css';
 import LoginScreen from './LoginScreen';
+import { ToolCatalog, ToolPicker } from './tool-visual';
+import AgentSelect from './AgentSelect';
 import { failedToolSummary } from './tool-status';
 import {
   emptyChatHistory, currentConversation, updateConversation,
@@ -80,6 +82,14 @@ function groupTools(tools) {
   return [...groups];
 }
 const DEFAULT_AGENT = { agent_id: null, name: '기본 에이전트', description: '모든 도구를 쓰는 기본 에이전트' };
+const themeKey = 'agent-workspace.theme.v1';
+
+// 라이트·다크: 저장한 값이 없으면 OS 설정을 따른다 (로그인 화면도 같은 테마)
+function readTheme() {
+  try { const saved = localStorage.getItem(themeKey); if (saved === 'light' || saved === 'dark') return saved; } catch { /* 없음 */ }
+  return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+document.documentElement.dataset.theme = readTheme();
 const userKey = 'agent-workspace.user.v2';  // v2: 아이디가 사번(E1001…)으로 바뀜. v1 에 남은 kim 등은 무시
 
 function currentPage() {
@@ -155,23 +165,7 @@ function AgentEditor({ draft, tools, onSave, submitLabel, disabled = false, busy
         {suggested.some(name => !form.tools.includes(name)) && <p className="suggest-note">
           <CircleAlert size={15} /> <b>추천</b> 표시된 도구는 데이터를 등록·변경하거나 무언가를 보냅니다. 이 에이전트에 정말 필요한지 확인하고 직접 체크하세요.
         </p>}
-        {groupTools(tools).map(([domain, items]) => <div key={domain} className="tool-group">
-          <h4>{domain}</h4>
-          <div className="tool-row">
-            {items.map(({ name, display_name, description, effect }) => <label key={name}
-              className={'tool ' + (form.tools.includes(name) ? 'checked ' : '') + (suggested.includes(name) && !form.tools.includes(name) ? 'suggested' : '')}>
-              <input type="checkbox" checked={form.tools.includes(name)} onChange={event =>
-                set('tools', event.target.checked ? [...form.tools, name] : form.tools.filter(tool => tool !== name))
-              } /><Wrench size={16} /><span>{display_name}<code> {name}</code>
-                <span className="tool-badges">
-                  <Badge tone={'effect-' + effect}>{EFFECT[effect] ?? effect}</Badge>
-                  {suggested.includes(name) && <Badge tone="suggest">추천</Badge>}
-                </span>
-                <small>{description}</small></span>
-            </label>)}
-          </div>
-        </div>)}
-        {!tools.length && <p className="muted">등록된 도구가 없습니다.</p>}
+        <ToolPicker tools={tools} selected={form.tools} suggested={suggested} onChange={value => set('tools', value)} effectLabel={EFFECT} Badge={Badge} />
       </fieldset>
     </fieldset>
     {!disabled && <div className="actions">{onCancel && <button type="button" className="quiet" onClick={onCancel}>취소</button>}<button className="primary" disabled={!ready || busy}>
@@ -386,9 +380,9 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, cha
 
   return <>
     <div className="chat-toolbar">
-      <label className="agent-picker"><Bot size={17} /><select aria-label="작업 에이전트" disabled={busy} value={active.agent_id ?? ''} onChange={event => { setActiveId(event.target.value || null); setInput(''); setAttachments([]); }}>
-        {usable.map(agent => <option key={agent.agent_id ?? 'default'} value={agent.agent_id ?? ''}>{agent.name}{agent.agent_id && agent.owner_user_id !== user ? ` (${agent.owner_user_id})` : ''}</option>)}
-      </select></label>
+      <AgentSelect agents={usable} value={active.agent_id} user={user} disabled={busy}
+        recentIds={recentConversations(chatHistory).map(thread => thread.agentId)}
+        onChange={id => { setActiveId(id); setInput(''); setAttachments([]); }} />
       <button className="quiet" disabled={busy} onClick={() => { newConversation(active.agent_id); setInput(''); setAttachments([]); }}><Plus size={17} />새 대화</button>
     </div>
     <div className="chat-body">
@@ -398,11 +392,19 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, cha
         <ApprovalCards user={user} approvals={approvals} onAnswered={pollApprovals} />
         <div ref={chatEnd} />
       </div> : <div className="welcome">
-        <div className="hero-icon"><MessageSquare size={35} strokeWidth={1.5} /></div>
-        <h1>무엇을 함께 작업할까요?</h1>
-        <p>{active.name} · {active.description || '설명 없음'}</p>
+        {/* 첫 화면: 색 면 + 큰 제목 + 은은한 이펙트 */}
+        <section className="welcome-hero">
+          <div className="hero-fx" aria-hidden="true"><span className="glow g1" /><span className="glow g2" /><span className="dots" /></div>
+          <p className="hero-eyebrow"><Bot size={14} />{active.name}</p>
+          <h1>무엇을<br /><em>맡겨 볼까요?</em></h1>
+          <p className="hero-desc">{active.description || '설명 없음'}</p>
+        </section>
+        <p className="quick-title">이렇게 시작해 보세요</p>
         <div className="quick-grid">
-          {quickExamples.map(({ name, icon: Icon, example }) => <button key={name} className="quick" onClick={() => setInput(example)}><Icon size={17} /><span>{name} 예시</span><ChevronRight size={15} /></button>)}
+          {quickExamples.map(({ name, icon: Icon, example }) => <button key={name} className="quick" onClick={() => setInput(example)}>
+            <span className="quick-head"><span className="quick-icon"><Icon size={17} /></span><strong>{name}</strong><ChevronRight size={15} /></span>
+            <span className="quick-example">{example.split('\n')[0]}</span>
+          </button>)}
         </div>
       </div>}
     </div>
@@ -674,7 +676,7 @@ function SharesPage({ user, notify, refreshAgents }) {
 
 // ── 앱 ─────────────────────────────────────────────────────
 
-function App({ session }) {
+function App({ session, theme, setTheme }) {
   const [chatBusy, setChatBusy] = useState(false);
   const [page, setPage] = useState(currentPage);
   const [user, setUser] = useState(() => session?.userId ?? readUser());
@@ -771,7 +773,7 @@ function App({ session }) {
 
   return <div className="shell" style={{ '--accent': route.color }}>
     <aside className="sidebar">
-      <div className="sidebar-heading"><span className="sidebar-mark"><Workflow size={19} /></span><strong>워크스페이스</strong></div>
+      <div className="sidebar-heading"><span><strong>Agent Argus</strong><small>사내 업무 에이전트</small></span></div>
       <nav aria-label="워크스페이스 메뉴">{navigation.map(({ id, name, detail, icon: Icon, color }) => <a key={id} href={'#' + id} aria-current={page === id ? 'page' : undefined} style={{ '--item-accent': color }}>
         <span className="nav-icon"><Icon size={19} /></span><span><strong>{name}</strong><small>{detail}</small></span><ChevronRight size={15} className="nav-chevron" />
       </a>)}</nav>
@@ -791,8 +793,14 @@ function App({ session }) {
           </button>;
         })}
       </section>
+      {session && <div className="sidebar-bottom user-card">
+        <span className="avatar" aria-hidden="true">{(me?.attributes?.name ?? session.userId).charAt(0)}</span>
+        <span className="user-meta"><strong>{me?.attributes?.name ?? session.userId}</strong>
+          <small>{me ? [session.userId, me.roles.map(role => ROLE[role] ?? role).join(', '), me.attributes?.dept_id !== undefined && `부서 ${me.attributes.dept_id}`].filter(Boolean).join(' · ') : session.userId}</small></span>
+        <button type="button" className="logout-button" disabled={chatBusy} onClick={session.logout} title="로그아웃" aria-label="로그아웃"><LogOut size={16} /></button>
+      </div>}
       {!session && <div className="sidebar-bottom user-switch">
-        <UserRound size={16} />
+        <span className="avatar" aria-hidden="true"><UserRound size={16} /></span>
         <select aria-label="개발용 사용자" disabled={chatBusy} value={user} onChange={event => setUser(event.target.value)}>
           {(users.length ? users : [{ user_id: user, roles: [] }]).map(u => <option key={u.user_id} value={u.user_id}>
             {u.user_id} · {u.roles.map(role => ROLE[role] ?? role).join(', ')}{u.attributes?.dept_id !== undefined ? ` · 부서 ${u.attributes.dept_id}` : ''}
@@ -801,9 +809,13 @@ function App({ session }) {
       </div>}
     </aside>
     <main className={'workspace ' + (page === 'chat' ? 'chat-workspace' : '')}>
-      <header className="topbar"><span className="mark"><Workflow size={19} /></span><strong>Agent Workspace</strong><span className="top-divider" /><span className="breadcrumb">{route.name}</span>
-        {me && <span className="whoami"><span className="status-dot" />{me.attributes?.name ?? me.user_id} · {me.roles.map(role => ROLE[role] ?? role).join(', ')}</span>}
-        {session && <button type="button" className="quiet logout" disabled={chatBusy} onClick={session.logout}>로그아웃</button>}</header>
+      <header className="topbar"><span className="breadcrumb"><route.icon size={16} />{route.name}</span>
+        <span className="topbar-right">
+          {me && <span className="whoami"><span className="status-dot" />{me.attributes?.name ?? me.user_id} · {me.roles.map(role => ROLE[role] ?? role).join(', ')}</span>}
+          <button type="button" className="theme-toggle" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            aria-label={theme === 'dark' ? '라이트 모드로' : '다크 모드로'} title={theme === 'dark' ? '라이트 모드로' : '다크 모드로'}>
+            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</button>
+        </span></header>
       {notice && page === 'chat' && <p role="status" className={'notice floating ' + notice.tone}>{notice.text}<button className="icon" onClick={() => setNotice(null)} aria-label="닫기"><X size={14} /></button></p>}
       {page === 'chat' && viewing ? <ReadOnlyConversation thread={viewing}
         agentName={viewingAgent?.name ?? '사용할 수 없는 에이전트'}
@@ -827,13 +839,10 @@ function App({ session }) {
         {page === 'agents' && <AgentsPage user={user} agents={agents} tools={tools} editingId={editingId} setEditingId={setEditingId}
           refresh={refreshAgents} openChat={openChat} notify={notify} />}
         {page === 'shares' && <SharesPage user={user} notify={notify} refreshAgents={refreshAgents} />}
-        {page === 'tools' && <ul className="tool-catalog">{tools.map(({ name, display_name, description }) =>
-          <li className="panel catalog-tool" key={name}>
-            <span className="hero-icon small"><Wrench size={21} aria-hidden="true" /></span>
-            <div><h2>{display_name} <code>{name}</code></h2><p>{description}</p></div>
-          </li>)}
+        {page === 'tools' && <>
+          <ToolCatalog tools={tools} effectLabel={EFFECT} Badge={Badge} />
           {me?.roles.includes('admin') && <p className="muted">도구 등록(MCP 연결)은 관리자 기능으로 준비 중입니다.</p>}
-        </ul>}
+        </>}
         {page === 'templates' && <TemplatesPage user={user} me={me} tools={tools} setDraft={setDraft} notify={notify} />}
       </div>}
     </main>
@@ -843,6 +852,11 @@ function App({ session }) {
 // 서버의 로그인 방식을 먼저 묻는다: dev 면 지금처럼 사용자 선택, session 이면 로그인 화면 → 로그인한 사람으로 App
 function Root() {
   const [auth, setAuth] = useState({ mode: null, userId: null, message: '' });
+  const [theme, setTheme] = useState(readTheme);
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try { localStorage.setItem(themeKey, theme); } catch { /* 저장 못 해도 동작 */ }
+  }, [theme]);
 
   useEffect(() => {
     let cancelled = false;
@@ -869,14 +883,15 @@ function Root() {
 
   async function logout() {
     await fetch('/api/auth/logout', { method: 'POST' }).catch(() => null);
-    setAuth({ mode: 'session', userId: null, message: '' });
+    setAuth({ mode: 'session', userId: null, message: '로그아웃했습니다.', tone: 'ok' });
   }
 
   if (!auth.mode) return null;
   if (auth.mode === 'session' && !auth.userId) {
-    return <LoginScreen message={auth.message} onLogin={user => setAuth({ mode: 'session', userId: user.user_id, message: '' })} />;
+    return <LoginScreen key={auth.message} message={auth.message} tone={auth.tone} theme={theme} setTheme={setTheme}
+      onLogin={user => setAuth({ mode: 'session', userId: user.user_id, message: '' })} />;
   }
-  return <App key={auth.userId ?? 'dev'} session={auth.mode === 'session' ? { userId: auth.userId, logout } : null} />;
+  return <App key={auth.userId ?? 'dev'} theme={theme} setTheme={setTheme} session={auth.mode === 'session' ? { userId: auth.userId, logout } : null} />;
 }
 
 createRoot(document.getElementById('root')).render(<Root />);
