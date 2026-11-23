@@ -3,10 +3,10 @@ import json
 import pytest
 
 from contracts.permission import Principal, ToolCall
-from tools.search_doc import SearchDocsTool
+from tools.search_doc import PREVIEW_LENGTH, SearchDocsTool
 
 
-@pytest.mark.parametrize("length", [0, 199, 200, 201])
+@pytest.mark.parametrize("length", [0, PREVIEW_LENGTH - 1, PREVIEW_LENGTH, PREVIEW_LENGTH + 1])
 async def test_search_preview_and_access_filter(tmp_path, length):
     text = "가" * length
     public = {
@@ -38,8 +38,8 @@ async def test_search_preview_and_access_filter(tmp_path, length):
         "chunk_id": "public-1",
         "title": "서류 반려",
         "location": "1항",
-        "preview": text[:200],
-        "is_truncated": length > 200,
+        "preview": text[:PREVIEW_LENGTH],
+        "is_truncated": length > PREVIEW_LENGTH,
     }]
     assert "부서 제한 원문" not in result.content
     assert "등급 제한 원문" not in result.content

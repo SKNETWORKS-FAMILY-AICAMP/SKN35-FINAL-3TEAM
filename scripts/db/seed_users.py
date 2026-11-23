@@ -40,10 +40,11 @@ async def seed(users_path: Path) -> None:
             await s.execute(text("INSERT INTO dept (id, name) OVERRIDING SYSTEM VALUE VALUES (:i, :n) "
                                  "ON CONFLICT (id) DO NOTHING"), {"i": dept, "n": f"부서 {dept}"})
             uid = await s.scalar(text(
-                "INSERT INTO users (login_id, name, dept_id, position, security_grade) VALUES (:l, :l, :d, :p, :g) "
-                "ON CONFLICT (login_id) DO UPDATE SET dept_id = EXCLUDED.dept_id, position = EXCLUDED.position, "
-                "security_grade = EXCLUDED.security_grade RETURNING id"),
-                {"l": u["user_id"], "d": dept, "p": a.get("position"), "g": a.get("security_grade", 1)})
+                "INSERT INTO users (login_id, name, dept_id, position, security_grade) VALUES (:l, :n, :d, :p, :g) "
+                "ON CONFLICT (login_id) DO UPDATE SET name = EXCLUDED.name, dept_id = EXCLUDED.dept_id, "
+                "position = EXCLUDED.position, security_grade = EXCLUDED.security_grade RETURNING id"),
+                {"l": u["user_id"], "n": a.get("name") or u["user_id"], "d": dept, "p": a.get("position"),
+                 "g": a.get("security_grade", 1)})
             await s.execute(text("DELETE FROM user_role WHERE user_id = :u"), {"u": uid})
             for role in u.get("roles", []):
                 await s.execute(text("INSERT INTO user_role (user_id, role) VALUES (:u, :r)"), {"u": uid, "r": role})

@@ -6,15 +6,18 @@ import {
   Sparkles, Trash2, Undo2, UserRound, Workflow, Wrench, X,
 } from 'lucide-react';
 import './style.css';
+import LoginScreen from './LoginScreen';
 import { failedToolSummary } from './tool-status';
 import {
   emptyChatHistory, currentConversation, updateConversation,
   startNewConversation, openConversation, conversationTitle, recentConversations,
+  addSavedConversations, loadConversation, turnsToMessages,
 } from './chat-history';
 
 // ── 백엔드 API ──────────────────────────────────────────────
 // /api 는 vite.config.js 의 프록시가 FastAPI 서버(기본 http://localhost:8000)로 넘긴다.
-// 로그인이 붙기 전까지는 X-User-Id 헤더로 사용자를 고른다 (config/dev_users.yaml).
+// 서버가 AUTH_MODE=dev 면 X-User-Id 헤더로 사용자를 고른다 (config/dev_users.yaml).
+// AUTH_MODE=session 이면 로그인 쿠키로 누구인지 정하고, 서버는 X-User-Id 를 무시한다.
 
 class ApiError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -33,6 +36,7 @@ async function api(user, path, { method = 'GET', body, signal } = {}) {
   }
   if (res.status === 204) return null;
   const data = await res.json().catch(() => null);
+  if (res.status === 401) dispatchEvent(new Event('auth-expired'));  // 로그인 모드: 로그인 화면으로
   if (!res.ok) {
     const detail = data?.detail;
     const text = typeof detail === 'string' ? detail : Array.isArray(detail) ? detail.map(d => d.msg).join(', ') : res.statusText;
@@ -76,7 +80,7 @@ function groupTools(tools) {
   return [...groups];
 }
 const DEFAULT_AGENT = { agent_id: null, name: '기본 에이전트', description: '모든 도구를 쓰는 기본 에이전트' };
-const userKey = 'agent-workspace.user.v1';
+const userKey = 'agent-workspace.user.v2';  // v2: 아이디가 사번(E1001…)으로 바뀜. v1 에 남은 kim 등은 무시
 
 function currentPage() {
   const route = location.hash.slice(1);
@@ -84,7 +88,7 @@ function currentPage() {
 }
 
 function readUser() {
-  try { return localStorage.getItem(userKey) || 'kim'; } catch { return 'kim'; }
+  try { return localStorage.getItem(userKey) || 'E1001'; } catch { return 'E1001'; }
 }
 
 function lockReason(agent, user) {
@@ -255,6 +259,35 @@ function ApprovalCards({ user, approvals, onAnswered }) {
   </div>);
 }
 
+// 대화 메시지 목록 (채팅 화면과 읽기 전용 화면이 같이 쓴다)
+function ThreadMessages({ messages }) {
+  return messages.map((message, index) => <article className={'message ' + message.role} key={index}>
+    <span className="message-label">{message.role === 'user' ? '나' : message.role === 'error' ? '오류' : message.name}</span>
+    {message.attachments?.length > 0 && <div className="attachment-list">{message.attachments.map(file =>
+      <span className="attachment-chip" key={file.file_id}><FileText size={15} />{file.filename}</span>
+    )}</div>}
+    <ToolEvents events={message.events} denial={message.denial} />
+    {message.role === 'agent' ? <Formatted text={message.content} /> : <div>{message.content}</div>}
+    {message.role === 'agent' && <Sources items={message.sources}
+      searched={message.events?.some(event => event.tool_name === 'search_doc')}
+      cited={/(^|\n)\s*\**근거\**\s*[:：]/.test(message.content)} />}
+  </article>);
+}
+
+// 에이전트가 삭제·비활성화됐거나 더 쓸 수 없는 지난 대화: 기록은 보여 주고 이어서 대화하지는 못하게 한다
+function ReadOnlyConversation({ thread, agentName, reason, onLeave }) {
+  return <>
+    <div className="chat-toolbar">
+      <span className="agent-picker readonly"><Bot size={17} /><span>{agentName}</span></span>
+      <button className="quiet" onClick={onLeave}><Plus size={17} />새 대화</button>
+    </div>
+    <div className="chat-body"><div className="thread"><ThreadMessages messages={thread.messages} /></div></div>
+    <div className="compose-area">
+      <p className="readonly-note" role="status"><CircleAlert size={15} />{reason} 기록만 볼 수 있고, 이어서 대화할 수는 없습니다.</p>
+    </div>
+  </>;
+}
+
 function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, changeConversation, newConversation, notify, onBusyChange }) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -360,17 +393,7 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, cha
     </div>
     <div className="chat-body">
       {conversation.messages.length ? <div className="thread" aria-live="polite">
-        {conversation.messages.map((message, index) => <article className={'message ' + message.role} key={index}>
-          <span className="message-label">{message.role === 'user' ? '나' : message.role === 'error' ? '오류' : message.name}</span>
-          {message.attachments?.length > 0 && <div className="attachment-list">{message.attachments.map(file =>
-            <span className="attachment-chip" key={file.file_id}><FileText size={15} />{file.filename}</span>
-          )}</div>}
-          <ToolEvents events={message.events} denial={message.denial} />
-          {message.role === 'agent' ? <Formatted text={message.content} /> : <div>{message.content}</div>}
-          {message.role === 'agent' && <Sources items={message.sources}
-            searched={message.events?.some(event => event.tool_name === 'search_doc')}
-            cited={/(^|\n)\s*\**근거\**\s*[:：]/.test(message.content)} />}
-        </article>)}
+        <ThreadMessages messages={conversation.messages} />
         {sending && <article className="message agent pending"><LoaderCircle size={16} className="spin" /> 답을 만드는 중입니다…</article>}
         <ApprovalCards user={user} approvals={approvals} onAnswered={pollApprovals} />
         <div ref={chatEnd} />
@@ -651,10 +674,10 @@ function SharesPage({ user, notify, refreshAgents }) {
 
 // ── 앱 ─────────────────────────────────────────────────────
 
-function App() {
+function App({ session }) {
   const [chatBusy, setChatBusy] = useState(false);
   const [page, setPage] = useState(currentPage);
-  const [user, setUser] = useState(readUser);
+  const [user, setUser] = useState(() => session?.userId ?? readUser());
   const [users, setUsers] = useState([]);
   const [me, setMe] = useState(null);
   const [tools, setTools] = useState([]);
@@ -664,6 +687,7 @@ function App() {
   const [draft, setDraft] = useState(null);
   const [chatHistory, setChatHistory] = useState(emptyChatHistory);
   const [chatView, setChatView] = useState(0);
+  const [viewingId, setViewingId] = useState(null);  // 읽기 전용으로 연 지난 대화
   const [notice, setNotice] = useState(null);
   const route = navigation.find(({ id }) => id === page);
 
@@ -674,19 +698,29 @@ function App() {
   }, [user, notify]);
 
   useEffect(() => {
+    if (session) return;  // 로그인 모드에서는 사용자 목록을 열 수 없다
     api(user, '/api/dev/users').then(setUsers).catch(error => notify(error.message));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    try { localStorage.setItem(userKey, user); } catch { /* 저장 못 해도 동작 */ }
-    setChatHistory(emptyChatHistory()); setActiveId(null); setEditingId(null); setNotice(null);
+    if (!session) try { localStorage.setItem(userKey, user); } catch { /* 저장 못 해도 동작 */ }
+    setChatHistory(emptyChatHistory()); setActiveId(null); setEditingId(null); setNotice(null); setViewingId(null);
     api(user, '/api/me').then(setMe).catch(error => { setMe(null); notify(error.message); });
     api(user, '/api/tools').then(setTools).catch(() => setTools([]));
     refreshAgents();
+    // 서버에 저장된 내 대화 목록 (STORE=db 면 나갔다 와도, 서버를 다시 켜도 남아 있다)
+    let current = true;
+    api(user, '/api/chat/sessions')
+      .then(list => { if (current) setChatHistory(previous => addSavedConversations(previous, list)); })
+      .catch(() => { /* 목록을 못 받아도 새 대화는 할 수 있다 */ });
+    return () => { current = false; };
   }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const updatePage = () => { setPage(currentPage()); setNotice(null); };
+    const updatePage = () => {
+      setPage(currentPage()); setNotice(null);
+      if (currentPage() !== 'chat') setViewingId(null);
+    };
     addEventListener('hashchange', updatePage);
     return () => removeEventListener('hashchange', updatePage);
   }, []);
@@ -699,17 +733,31 @@ function App() {
 
   function newConversation(agentId) {
     if (chatBusy) return;
+    setViewingId(null);
     setChatHistory(previous => startNewConversation(previous, agentId));
     setChatView(previous => previous + 1);
   }
 
-  function openSavedConversation(thread) {
+  async function openSavedConversation(thread) {
     if (chatBusy) return;
     const agent = agents.find(item => item.agent_id === thread.agentId);
-    if (thread.agentId !== null && (!agent || agent.status !== 'active')) {
-      notify('이 대화의 에이전트가 삭제·비활성화되었거나 사용 권한이 없습니다.');
+    const usable = thread.agentId === null || agent?.status === 'active';
+    if (thread.saved) {  // 서버에만 있는 대화: 본문을 불러온다
+      try {
+        const turns = await api(user, `/api/chat/sessions/${encodeURIComponent(thread.sessionId)}/turns`);
+        const name = thread.agentId === null ? DEFAULT_AGENT.name : agent?.name ?? '사용할 수 없는 에이전트';
+        setChatHistory(previous => loadConversation(previous, thread.id, turnsToMessages(turns, name)));
+      } catch (error) {
+        notify(error.message);
+        return;
+      }
+    }
+    if (!usable) {  // 에이전트를 더 쓸 수 없으면 기록만 보여 준다
+      setViewingId(thread.id);
+      location.hash = 'chat';
       return;
     }
+    setViewingId(null);
     setChatHistory(previous => openConversation(previous, thread.id));
     setChatView(previous => previous + 1);
     setActiveId(thread.agentId);
@@ -717,7 +765,9 @@ function App() {
   }
 
   const recent = recentConversations(chatHistory);
-  const currentThreadId = currentConversation(chatHistory, activeId).id;
+  const viewing = viewingId ? chatHistory.threads[viewingId] : null;
+  const viewingAgent = viewing && agents.find(item => item.agent_id === viewing.agentId);
+  const currentThreadId = viewing ? viewing.id : currentConversation(chatHistory, activeId).id;
 
   return <div className="shell" style={{ '--accent': route.color }}>
     <aside className="sidebar">
@@ -741,20 +791,25 @@ function App() {
           </button>;
         })}
       </section>
-      <div className="sidebar-bottom user-switch">
+      {!session && <div className="sidebar-bottom user-switch">
         <UserRound size={16} />
         <select aria-label="개발용 사용자" disabled={chatBusy} value={user} onChange={event => setUser(event.target.value)}>
           {(users.length ? users : [{ user_id: user, roles: [] }]).map(u => <option key={u.user_id} value={u.user_id}>
             {u.user_id} · {u.roles.map(role => ROLE[role] ?? role).join(', ')}{u.attributes?.dept_id !== undefined ? ` · 부서 ${u.attributes.dept_id}` : ''}
           </option>)}
         </select>
-      </div>
+      </div>}
     </aside>
     <main className={'workspace ' + (page === 'chat' ? 'chat-workspace' : '')}>
       <header className="topbar"><span className="mark"><Workflow size={19} /></span><strong>Agent Workspace</strong><span className="top-divider" /><span className="breadcrumb">{route.name}</span>
-        {me && <span className="whoami"><span className="status-dot" />{me.user_id} · {me.roles.map(role => ROLE[role] ?? role).join(', ')}</span>}</header>
+        {me && <span className="whoami"><span className="status-dot" />{me.attributes?.name ?? me.user_id} · {me.roles.map(role => ROLE[role] ?? role).join(', ')}</span>}
+        {session && <button type="button" className="quiet logout" disabled={chatBusy} onClick={session.logout}>로그아웃</button>}</header>
       {notice && page === 'chat' && <p role="status" className={'notice floating ' + notice.tone}>{notice.text}<button className="icon" onClick={() => setNotice(null)} aria-label="닫기"><X size={14} /></button></p>}
-      {page === 'chat' ? <ChatPage key={`${user}:${chatView}`} user={user} tools={tools} agents={agents} activeId={activeId} setActiveId={setActiveId} onBusyChange={setChatBusy}
+      {page === 'chat' && viewing ? <ReadOnlyConversation thread={viewing}
+        agentName={viewingAgent?.name ?? '사용할 수 없는 에이전트'}
+        reason={viewingAgent ? '이 대화의 에이전트가 비활성화되었습니다.' : '이 대화의 에이전트가 삭제되었거나 사용 권한이 없습니다.'}
+        onLeave={() => newConversation(activeId)} />
+      : page === 'chat' ? <ChatPage key={`${user}:${chatView}`} user={user} tools={tools} agents={agents} activeId={activeId} setActiveId={setActiveId} onBusyChange={setChatBusy}
         chatHistory={chatHistory} changeConversation={changeConversation} newConversation={newConversation} notify={notify} />
       : <div className="page">
         <div className="page-heading"><div className="hero-icon small"><route.icon size={25} /></div><h1>{route.name}</h1>
@@ -785,4 +840,43 @@ function App() {
   </div>;
 }
 
-createRoot(document.getElementById('root')).render(<App />);
+// 서버의 로그인 방식을 먼저 묻는다: dev 면 지금처럼 사용자 선택, session 이면 로그인 화면 → 로그인한 사람으로 App
+function Root() {
+  const [auth, setAuth] = useState({ mode: null, userId: null, message: '' });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { mode } = await (await fetch('/api/auth/mode')).json();
+        if (mode !== 'session') { if (!cancelled) setAuth({ mode: 'dev', userId: null, message: '' }); return; }
+        const res = await fetch('/api/me');  // 쿠키가 살아 있으면 다시 로그인하지 않는다
+        const me = res.ok ? await res.json() : null;
+        if (!cancelled) setAuth({ mode, userId: me?.user_id ?? null, message: '' });
+      } catch {
+        if (!cancelled) setAuth({ mode: 'dev', userId: null, message: '' });  // 서버가 꺼져 있으면 기존 화면이 오류를 보여 준다
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (auth.mode !== 'session' || !auth.userId) return undefined;
+    const expired = () => setAuth({ mode: 'session', userId: null, message: '로그인이 만료되었습니다. 다시 로그인해 주세요.' });
+    addEventListener('auth-expired', expired);
+    return () => removeEventListener('auth-expired', expired);
+  }, [auth.mode, auth.userId]);
+
+  async function logout() {
+    await fetch('/api/auth/logout', { method: 'POST' }).catch(() => null);
+    setAuth({ mode: 'session', userId: null, message: '' });
+  }
+
+  if (!auth.mode) return null;
+  if (auth.mode === 'session' && !auth.userId) {
+    return <LoginScreen message={auth.message} onLogin={user => setAuth({ mode: 'session', userId: user.user_id, message: '' })} />;
+  }
+  return <App key={auth.userId ?? 'dev'} session={auth.mode === 'session' ? { userId: auth.userId, logout } : null} />;
+}
+
+createRoot(document.getElementById('root')).render(<Root />);

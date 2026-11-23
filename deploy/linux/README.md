@@ -68,19 +68,22 @@ cp .env.example .env                        # DATABASE_URL, EMBEDDING_MODEL_PATH
 sudo -u postgres bash deploy/linux/setup_db.sh agent_platform agent_platform_app
 ```
 
-`setup_db.sh` 가 하는 일: DB 만들기 → `CREATE EXTENSION vector` (0.8 이상인지 확인) → `alembic upgrade head`(0001~0005)
+`setup_db.sh` 가 하는 일: DB 만들기 → `CREATE EXTENSION vector` (0.8 이상인지 확인) → `alembic upgrade head`(0001~0007)
 → 앱 계정(감사 로그는 읽기·추가만) 만들기. 비밀번호는 실행 중에 직접 입력한다 (파일·기록에 남기지 않음).
 
-이어서 개발용 사용자·부서를 넣는다 (로그인 기능이 붙기 전까지):
+이어서 사용자·부서를 넣고 비밀번호를 정한다 (`.env` 에 `AUTH_MODE=session`):
 
 ```bash
-.venv/bin/python scripts/db/seed_users.py
+.venv/bin/python scripts/db/seed_users.py            # 지금은 config/dev_users.yaml 의 4명. 실제 은행은 인사 목록으로 바꾼다
+.venv/bin/python scripts/db/set_password.py --all    # 비밀번호를 두 번 물어본다 (8자 이상, 해시만 저장)
 ```
+
+실제 은행에서는 비밀번호 대신 은행 계정 시스템(AD·SSO)에 붙이는 것이 목표다 (`users.auth_provider`·`external_id` 칸이 그 자리).
 
 ## ⑤ 문서 등록 (서버)
 
 ```bash
-.venv/bin/python scripts/db/register_doc.py /data/내규/ --category 내규 --owner admin --scope company --grade 1
+.venv/bin/python scripts/db/register_doc.py /data/내규/ --category 내규 --owner E0001 --scope company --grade 1
 ```
 
 원본은 `STORAGE_ROOT/documents/{문서}/v{버전}/` 에, 파싱 결과는 그 옆 `parsed/` 에 남는다.

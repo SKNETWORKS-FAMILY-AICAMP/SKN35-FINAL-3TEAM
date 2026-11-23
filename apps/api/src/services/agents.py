@@ -15,7 +15,7 @@
 - 공유 중이거나 승인 대기 중인 에이전트는 아무도(admin 포함) 수정할 수 없다. 승인받은 내용 그대로 쓰게 하려는 것.
   고치려면 공유를 해제하고 고친 뒤 다시 요청한다. 비활성화·삭제·공유 해제는 그대로 된다.
 
-지금은 메모리에 둔다. DB 가 붙으면 agent / agent_tool 테이블 구현으로 바꾼다.
+저장소: 메모리(InMemory*, 기본·테스트) 또는 DB(services/db_stores.py, STORE=db). 둘 다 같은 async 메서드.
 """
 
 from __future__ import annotations
@@ -108,7 +108,7 @@ def can_enable(p: Principal, a: Agent) -> bool:
 class InMemoryAgentStore:
     _agents: dict[str, Agent] = field(default_factory=dict)
 
-    def create(
+    async def create(
         self, owner: Principal, *, name: str, system_prompt: str,
         tools: tuple[str, ...] = (), description: str = "",
     ) -> Agent:
@@ -124,20 +124,20 @@ class InMemoryAgentStore:
         self._agents[a.agent_id] = a
         return a
 
-    def get(self, agent_id: str) -> Agent | None:
+    async def get(self, agent_id: str) -> Agent | None:
         return self._agents.get(agent_id)
 
-    def visible_to(self, p: Principal) -> list[Agent]:
+    async def visible_to(self, p: Principal) -> list[Agent]:
         return [a for a in self._agents.values() if can_view(p, a)]
 
-    def save(self, agent: Agent) -> Agent:
+    async def save(self, agent: Agent) -> Agent:
         self._agents[agent.agent_id] = agent
         return agent
 
-    def update(self, agent: Agent, **changes: object) -> Agent:
-        return self.save(replace(agent, **changes))
+    async def update(self, agent: Agent, **changes: object) -> Agent:
+        return await self.save(replace(agent, **changes))
 
-    def delete(self, agent_id: str) -> None:
+    async def delete(self, agent_id: str) -> None:
         self._agents.pop(agent_id, None)
 
 
@@ -182,22 +182,22 @@ def can_see_request(p: Principal, r: ShareRequest) -> bool:
 class InMemoryShareRequestStore:
     _requests: dict[str, ShareRequest] = field(default_factory=dict)
 
-    def create(self, agent: Agent, requester: Principal, approver_id: str, scope: SharedScope, comment: str) -> ShareRequest:
+    async def create(self, agent: Agent, requester: Principal, approver_id: str, scope: SharedScope, comment: str) -> ShareRequest:
         r = ShareRequest(str(uuid.uuid4()), agent.agent_id, requester.user_id, approver_id, scope, comment)
         self._requests[r.request_id] = r
         return r
 
-    def get(self, request_id: str) -> ShareRequest | None:
+    async def get(self, request_id: str) -> ShareRequest | None:
         return self._requests.get(request_id)
 
-    def pending_for_agent(self, agent_id: str) -> ShareRequest | None:
+    async def pending_for_agent(self, agent_id: str) -> ShareRequest | None:
         return next((r for r in self._requests.values() if r.agent_id == agent_id and r.status == "pending"), None)
 
-    def visible_to(self, p: Principal) -> list[ShareRequest]:
+    async def visible_to(self, p: Principal) -> list[ShareRequest]:
         items = [r for r in self._requests.values() if can_see_request(p, r)]
         return sorted(items, key=lambda r: r.requested_at, reverse=True)
 
-    def decide(self, r: ShareRequest, by: Principal, approved: bool, comment: str = "") -> ShareRequest:
+    async def decide(self, r: ShareRequest, by: Principal, approved: bool, comment: str = "") -> ShareRequest:
         r = replace(
             r, status="approved" if approved else "rejected", decided_by=by.user_id,
             decision_comment=comment, decided_at=_now(),
@@ -205,8 +205,8 @@ class InMemoryShareRequestStore:
         self._requests[r.request_id] = r
         return r
 
-    def cancel_pending(self, agent_id: str, by: Principal, reason: str) -> None:
+    async def cancel_pending(self, agent_id: str, by: Principal, reason: str) -> None:
         """에이전트가 지워지거나 공유를 거두면 대기 중인 요청은 반려 처리한다."""
-        r = self.pending_for_agent(agent_id)
+        r = await self.pending_for_agent(agent_id)
         if r is not None:
-            self.decide(r, by, approved=False, comment=reason)
+            await self.decide(r, by, approved=False, comment=reason)

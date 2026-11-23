@@ -87,7 +87,7 @@ async def test_other_users_file_is_denied_by_chat_and_tool(setup):
 async def test_agent_without_parser_rejects_attachment(setup):
     app, svc, _ = setup
     item = svc.uploads.create("kim", "규정.hwpx", _hwpx())
-    agent = svc.agents.create(KIM, name="일반", system_prompt="일반 응답", tools=())
+    agent = await svc.agents.create(KIM, name="일반", system_prompt="일반 응답", tools=())
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/api/chat/messages", headers=HEADERS, json={
             "agent_id": agent.agent_id, "file_ids": [item["file_id"]],

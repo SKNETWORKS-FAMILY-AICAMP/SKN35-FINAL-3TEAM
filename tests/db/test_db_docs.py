@@ -21,7 +21,7 @@ from tests.db.test_retrieval import QueryEmbedder, _doc
 from tests.db.test_schema import _user, conn  # noqa: F401
 from tools.db_docs import BackgroundEmbedder, DbReadDocTool, DbSearchDocsTool
 from tools.read_doc import READ_DOC_SPEC
-from tools.search_doc import SEARCH_DOC_SPEC
+from tools.search_doc import PREVIEW_LENGTH, SEARCH_DOC_SPEC
 
 SEARCH_KEYS = {"doc_id", "chunk_id", "title", "location", "preview", "is_truncated"}
 READ_KEYS = {"doc_id", "chunk_id", "title", "location", "text"}
@@ -39,7 +39,7 @@ async def _no_session():
 
 ROW = {"chunk_id": 42, "doc_id": 7, "doc_version_id": 9, "title": "가상 여신규정", "file_name": "가상.hwpx",
        "chunk_index": 0, "page": 3, "heading_path": ["가상 여신규정", "제2장 여신", "제12조(사후관리)"],
-       "content": "가" * 250, "score": 0.9}
+       "content": "가" * (PREVIEW_LENGTH + 50), "score": 0.9}
 
 
 def test_location_falls_back_to_page_then_paragraph():
@@ -63,7 +63,7 @@ async def test_search_result_shape(monkeypatch):
     m = r.data["matches"][0]
     assert set(m) == SEARCH_KEYS
     assert (m["doc_id"], m["chunk_id"], m["location"]) == ("7", "42", "제2장 여신 > 제12조(사후관리)")
-    assert len(m["preview"]) == 200 and m["is_truncated"] is True
+    assert len(m["preview"]) == PREVIEW_LENGTH and m["is_truncated"] is True
 
 
 async def test_search_without_grade_returns_nothing(monkeypatch):
@@ -107,7 +107,7 @@ def test_background_embedder_reports_load_failure():
 async def test_tools_in_real_db(conn):  # noqa: F811
     uid = await _user(conn)
     dept = await conn.scalar(text("SELECT dept_id FROM users WHERE id = :u"), {"u": uid})
-    other = await conn.scalar(text("INSERT INTO department (name) VALUES ('다른 부서') RETURNING id"))
+    other = await conn.scalar(text("INSERT INTO dept (name) VALUES ('다른 부서') RETURNING id"))
     emb = QueryEmbedder()
     async with AsyncSession(bind=conn, join_transaction_mode="create_savepoint") as session:
         mine = await _doc(conn, uid, dept, "dept", 2)
@@ -130,7 +130,7 @@ async def test_tools_in_real_db(conn):  # noqa: F811
         search = DbSearchDocsTool(FixedQuery(), session_factory=same_session, top_k=50)
         r = await search.run(_call({"query": "연체 통지"}, me))
         assert r.ok and r.data["matches"] and r.data["matches"][0]["chunk_id"] == str(tid)
-        assert r.data["matches"][0]["preview"] == target[:200]
+        assert r.data["matches"][0]["preview"] == target[:PREVIEW_LENGTH]
         ids = {m["chunk_id"] for m in r.data["matches"]}
         assert str(hidden) not in ids                                   # 다른 부서 문서는 안 보임
 

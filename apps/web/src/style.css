@@ -284,3 +284,20 @@ details[open] .more { display: none; }
 .template .actions { width: 100%; justify-content: flex-end; flex-wrap: wrap; }
 .template.unavailable { opacity: .82; }
 .tool-tags span.missing { color: #f6b273; border-style: dashed; }
+
+/* 로그인 (AUTH_MODE=session) — 기존 패널·버튼 모양을 그대로 쓴다 */
+.login-page { min-height: 100dvh; display: grid; place-items: center; padding: 16px; }
+.login-panel { width: min(380px, 100%); padding: 30px 28px 26px; display: grid; gap: 14px; }
+.login-heading { display: flex; align-items: center; gap: 11px; font-size: .93rem; margin-bottom: 6px; }
+.login-panel h1 { font-size: 1.7rem; }
+.login-field { display: grid; gap: 7px; font-size: .85rem; color: var(--muted); }
+.login-field input { width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #090909; color: #f1f1f1; padding: 10px 11px; font-size: 1rem; }
+.login-error { color: #f48e88; font-size: .875rem; }
+.login-submit { width: 100%; margin-top: 4px; }
+.logout { min-height: 32px; margin-left: 10px; }
+
+/* 지난 대화를 읽기 전용으로 열었을 때 (에이전트가 삭제·비활성화됨) */
+.agent-picker.readonly { padding: 0 13px; color: #eee; font-size: .875rem; }
+.agent-picker.readonly span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.readonly-note { display: flex; gap: 8px; align-items: center; justify-content: center; padding: 14px 16px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); font-size: .86rem; text-align: center; }
+.readonly-note svg { flex: none; color: #f6b273; }
