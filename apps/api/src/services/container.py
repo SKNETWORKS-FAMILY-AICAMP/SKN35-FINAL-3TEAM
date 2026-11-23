@@ -86,13 +86,21 @@ def llm_from_env() -> LLMClient:
         return LocalMathClient()
     if provider != "openai":
         raise ValueError(f"알 수 없는 LLM_PROVIDER: {provider}")
-    return OpenAICompatLLM.from_env()
+    if os.environ.get("LLM_MODEL"):
+        return OpenAICompatLLM.from_env()
+    # 기본: 컨텍스트를 늘린 qwen3:8b-24k (config/ollama/README.md). 아직 안 만들었으면 qwen3:8b 로 대신한다
+    return FallbackLLM(OpenAICompatLLM.from_env(model=CHAT_MODEL), OpenAICompatLLM.from_env(model=CHAT_MODEL_FALLBACK))
+
+
+CHAT_MODEL = "qwen3:8b-24k"
+CHAT_MODEL_FALLBACK = "qwen3:8b"
 
 
 class FallbackLLM:
     """먼저 primary 를 부르고, 그 모델이 서버에 없으면(404) fallback 으로 대신한다.
 
-    초안 전용 큰 모델을 아직 받지 않은 팀원도 그대로 돌릴 수 있게 하려는 것.
+    초안 전용 큰 모델(qwen3:14b)이나 컨텍스트를 늘린 채팅 모델(qwen3:8b-24k)을
+    아직 만들지 않은 팀원도 그대로 돌릴 수 있게 하려는 것.
     연결 실패·타임아웃은 대신하지 않고 그대로 올린다 (느린 것과 없는 것은 다르다).
     """
 
@@ -106,9 +114,18 @@ class FallbackLLM:
                 return await self.primary.chat(messages, tools)
             except NotFoundError:
                 self._missing = True
-                log.warning("초안 모델 %s 이 없어 채팅 모델로 초안을 만듭니다 (ollama pull 로 받으면 됩니다)",
-                            getattr(self.primary, "model", "?"))
+                log.warning("모델 %s 이 없어 %s 로 대신합니다 (config/ollama/README.md 참고)",
+                            getattr(self.primary, "model", "?"), getattr(self.fallback, "model", "?"))
         return await self.fallback.chat(messages, tools)
+
+    async def chat_required_tool(self, messages, tool):
+        """둘 다 툴 호출 강제를 지원할 때만 쓴다 (RequiredToolLLMClient)."""
+        if not self._missing:
+            try:
+                return await self.primary.chat_required_tool(messages, tool)
+            except NotFoundError:
+                self._missing = True
+        return await self.fallback.chat_required_tool(messages, tool)
 
 
 def draft_llm_from_env(chat_llm: LLMClient) -> LLMClient:

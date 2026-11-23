@@ -2,19 +2,26 @@
 
 contracts.harness.Message ↔ OpenAI chat 메시지 형식을 변환한다.
 qwen3 가 내보내는 <think>...</think> 추론 블록은 최종 답변에서 지운다.
+보내기 전에 메시지를 모델의 컨텍스트 한도 안으로 줄인다 (harness/context.py). 한도는 Ollama 에 물어본다.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import uuid
 from typing import Any
 
+import httpx
 from openai import AsyncOpenAI
 
 from contracts.harness import LLMResponse, LLMToolCall, Message, ToolSpec
+from harness.context import fit_messages
+
+log = logging.getLogger("uvicorn.error")
+OLLAMA_DEFAULT_CONTEXT = 4096  # 모델에 num_ctx 를 정하지 않았을 때 Ollama 가 잡는 값 (16GB 맥에서 확인)
 
 _THINK = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 
@@ -66,21 +73,47 @@ class OpenAICompatLLM:
         api_key: str = "ollama",
         timeout: float = 120.0,
         client: AsyncOpenAI | None = None,
+        context_tokens: int | None = None,  # 모델 컨텍스트 한도. None 이면 Ollama 에 물어본다
+        reserve_tokens: int | None = None,  # 답(생각 포함)에 남길 토큰. None 이면 한도의 1/4 (최대 4096)
         **extra: Any,  # temperature 등 chat.completions.create 에 그대로 넘길 값
     ) -> None:
         self.model = model
         self._extra = extra
+        self._base_url = base_url
+        self._context = context_tokens
+        self._reserve = reserve_tokens
         self._client = client or AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=timeout, max_retries=0)
 
     @classmethod
-    def from_env(cls, **extra: Any) -> OpenAICompatLLM:
+    def from_env(cls, model: str | None = None, **extra: Any) -> OpenAICompatLLM:
         return cls(
             base_url=os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1"),
-            model=os.environ.get("LLM_MODEL", "qwen3:8b"),
+            model=model or os.environ.get("LLM_MODEL", "qwen3:8b"),
             api_key=os.environ.get("LLM_API_KEY", "ollama"),
-            timeout=float(os.environ.get("LLM_TIMEOUT_SECONDS", "120")),
+            timeout=float(os.environ.get("LLM_TIMEOUT_SECONDS", "300")),  # 긴 문서 첫 읽기가 2분 가까이 걸린다
+            context_tokens=int(os.environ["LLM_CONTEXT_TOKENS"]) if os.environ.get("LLM_CONTEXT_TOKENS") else None,
             **extra,
         )
+
+    async def context_limit(self) -> int:
+        """모델의 컨텍스트 한도. Ollama /api/show 의 num_ctx (Modelfile 설정) 를 읽고, 없으면 Ollama 기본값."""
+        if self._context is None:
+            self._context = OLLAMA_DEFAULT_CONTEXT
+            root = re.sub(r"/v1/?$", "", self._base_url.rstrip("/"))
+            try:
+                async with httpx.AsyncClient(timeout=3) as http:
+                    info = (await http.post(f"{root}/api/show", json={"model": self.model})).json()
+                if "error" in info:  # 서버에 없는 모델: 호출이 404 로 실패하니 여기서는 경고하지 않는다
+                    return self._context
+                found = re.search(r"^num_ctx\s+(\d+)", info.get("parameters") or "", re.M)
+                if found:
+                    self._context = int(found.group(1))
+            except Exception:  # Ollama 가 아니거나 응답이 없으면 안전한 기본값
+                pass
+            if self._context <= OLLAMA_DEFAULT_CONTEXT:
+                log.warning("LLM %s 의 컨텍스트 한도가 %d 토큰입니다. 긴 문서는 잘려서 전달됩니다 "
+                            "(config/ollama/README.md 참고)", self.model, self._context)
+        return self._context
 
     async def chat(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:
         return await self._chat(messages, tools)
@@ -89,6 +122,15 @@ class OpenAICompatLLM:
         return await self._chat(messages, [tool], tool_choice={"type": "function", "function": {"name": tool.name}})
 
     async def _chat(self, messages: list[Message], tools: list[ToolSpec], *, tool_choice: dict | None = None) -> LLMResponse:
+        limit = await self.context_limit()
+        reserve = self._reserve if self._reserve is not None else min(4096, limit // 4)
+        messages, report = fit_messages(messages, tools, limit, reserve)
+        if report.changed:
+            log.warning(
+                "컨텍스트 한도(%d 토큰)를 넘어 줄여서 보냄: 어림 %d → %d 토큰, 지난 툴 결과 %d개 줄임, "
+                "메시지 %d개 뺌, 이번 툴 결과 %d개 자름",
+                limit, report.before, report.after, report.compacted, report.dropped, report.truncated,
+            )
         kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": [message_to_openai(m) for m in messages],

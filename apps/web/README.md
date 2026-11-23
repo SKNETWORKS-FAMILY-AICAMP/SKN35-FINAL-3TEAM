@@ -6,7 +6,7 @@ React + Vite 화면입니다. FastAPI 백엔드(`apps/api`)에 연결되어 에�
 
 Node.js 20.19 이상이 필요합니다. 터미널 두 개에서 저장소 루트 기준으로 실행합니다.
 
-1. 백엔드 (Ollama 에 `qwen3:8b` 가 있어야 합니다. LLM 없이 해 보려면 앞에 `LLM_PROVIDER=local_math` 를 붙입니다)
+1. 백엔드 (Ollama 에 `qwen3:8b` 가 있어야 합니다. 긴 문서를 읽으려면 `qwen3:8b-24k` 도 한 번 만들어 둡니다: `config/ollama/README.md`. LLM 없이 해 보려면 앞에 `LLM_PROVIDER=local_math` 를 붙입니다)
 
    ```bash
    uv run python -m uvicorn main:app --app-dir apps/api/src --reload
