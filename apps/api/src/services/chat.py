@@ -16,6 +16,7 @@ from harness.attachment_grounding import attachment_request
 from services.agents import Agent
 from services.container import AppServices
 from services.sessions import ChatSession
+from services.uploads import split_attachment_context
 
 
 @dataclass(frozen=True)
@@ -93,6 +94,42 @@ def tool_events(new_messages: list[Message], labels: dict[str, str]) -> list[Too
             label = labels.get(tc.tool_name, tc.tool_name)
             events.append(ToolEvent(tc.call_id, tc.tool_name, label, tc.arguments, content, not content.startswith("error:")))
     return events
+
+
+@dataclass(frozen=True)
+class PastTurn:
+    """저장된 대화를 다시 열 때 화면에 그릴 한 번의 질문과 답 (COM-06)."""
+
+    question: str
+    attachments: list[dict]  # file_id, filename
+    message: str  # 마지막 답. 끝까지 못 간 요청이면 빈 문자열
+    tool_events: list[ToolEvent]
+    sources: list[Source]
+    denial: Denial | None = None  # 권한 거부로 멈춘 요청이면 무엇이 왜 막혔는지
+
+
+def past_turns(messages: list[Message], labels: dict[str, str],
+               denials: dict[int, Denial] | None = None) -> list[PastTurn]:
+    """사용자 메시지 1개 = 요청 1건. 하네스가 중간에 넣는 안내는 저장하지 않으므로 이렇게 나눌 수 있다.
+    denials: 몇 번째 질문(0부터)이 권한 거부로 멈췄는지 (ChatSession.denials)."""
+    denials = denials or {}
+    groups: list[list[Message]] = []
+    for m in messages:
+        if m.role == "user":
+            groups.append([m])
+        elif m.role != "system" and groups:
+            groups[-1].append(m)
+    turns = []
+    for index, (first, *rest) in enumerate(groups):
+        answer = next((m.content for m in reversed(rest)
+                       if m.role == "assistant" and not m.tool_calls and m.content.strip()), "")
+        question, files = split_attachment_context(first.content)
+        denial = denials.get(index)
+        if denial is not None and not denial.display_name:
+            denial = Denial(denial.call_id, denial.tool_name, denial.kind, denial.reason, labels.get(denial.tool_name, ""))
+        turns.append(PastTurn(question, files, strip_empty_citation(answer) if answer else "",
+                              tool_events(rest, labels), sources(rest), denial))
+    return turns
 
 
 def tool_capability_prompt(specs: list[ToolSpec]) -> str:
@@ -195,6 +232,8 @@ async def send_message(
         )
         new = result.messages[len(history):]
         session.messages = list(result.messages[1:])
+        await svc.sessions.record_turn(session, run_id, result.stop_reason, result.llm_calls, new,
+                                       denial=result.denial)  # DB 저장소면 기록 (거부 내용 포함)
 
     if result.final_message is not None:
         text = strip_empty_citation(result.final_message.content)

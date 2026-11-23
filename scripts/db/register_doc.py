@@ -1,9 +1,9 @@
 """사내 문서 등록: 원본 저장 → 파싱 → 청킹 → KURE-v3 임베딩 → chunk 표 → 현재 버전으로 바꾸기.
 
     uv run python scripts/db/register_doc.py 규정.hwpx --title "여신규정" --category 내규 \
-        --owner admin --scope company --grade 1
-    uv run python scripts/db/register_doc.py 폴더/ --category 내규 --owner admin      # 폴더 안 파일 모두 (제목 = 파일 이름)
-    uv run python scripts/db/register_doc.py 새판.hwpx --doc-id 12 --owner admin     # 이미 있는 문서의 새 버전
+        --owner E0001 --scope company --grade 1
+    uv run python scripts/db/register_doc.py 폴더/ --category 내규 --owner E0001      # 폴더 안 파일 모두 (제목 = 파일 이름)
+    uv run python scripts/db/register_doc.py 새판.hwpx --doc-id 12 --owner E0001     # 이미 있는 문서의 새 버전
 
 - --scope dept 면 --dept(읽을 수 있는 부서)를 주거나, 주지 않으면 --owner 의 부서가 된다.
 - 같은 문서에 같은 파일(sha256)을 다시 올리면 건너뛴다.

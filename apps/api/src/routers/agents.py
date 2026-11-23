@@ -76,22 +76,22 @@ class AgentOut(BaseModel):
     pending_share_scope: str | None = None  # 승인 대기 중인 공유 요청이 있으면 그 범위
 
 
-def edit_lock(a: Agent, svc: AppServices) -> str | None:
+async def edit_lock(a: Agent, svc: AppServices) -> str | None:
     """공유된 에이전트는 승인받은 그대로 써야 하므로 편집을 막는다. 고치려면 공유를 해제한다."""
     if a.scope != "personal":
         return "공유 중인 에이전트는 수정할 수 없습니다. 공유를 해제한 뒤 수정하고 다시 공유 요청하세요"
-    if svc.share_requests.pending_for_agent(a.agent_id) is not None:
+    if await svc.share_requests.pending_for_agent(a.agent_id) is not None:
         return "공유 승인 대기 중인 에이전트는 수정할 수 없습니다. 요청이 처리된 뒤 수정하세요"
     return None
 
 
-def to_out(a: Agent, p: Principal, svc: AppServices) -> AgentOut:
-    pending = svc.share_requests.pending_for_agent(a.agent_id)  
+async def to_out(a: Agent, p: Principal, svc: AppServices) -> AgentOut:
+    pending = await svc.share_requests.pending_for_agent(a.agent_id)
     widest = a.scope == "company"
     return AgentOut(
         agent_id=a.agent_id, owner_user_id=a.owner_user_id, name=a.name, description=a.description,
         system_prompt=a.system_prompt, tools=list(a.tools), scope=a.scope, status=a.status,
-        can_edit=rules.can_edit(p, a) and edit_lock(a, svc) is None,
+        can_edit=rules.can_edit(p, a) and await edit_lock(a, svc) is None,
         can_delete=rules.can_edit(p, a),
         can_disable=a.status == "active" and rules.can_disable(p, a),
         can_enable=a.status == "disabled" and rules.can_enable(p, a),
@@ -112,8 +112,8 @@ async def check_tools(svc: AppServices, names: list[str]) -> tuple[str, ...]:
     return tuple(names)
 
 
-def load(svc: AppServices, agent_id: str, user: Principal, allowed: Callable[[Principal, Agent], bool]) -> Agent:
-    a = svc.agents.get(agent_id)
+async def load(svc: AppServices, agent_id: str, user: Principal, allowed: Callable[[Principal, Agent], bool]) -> Agent:
+    a = await svc.agents.get(agent_id)
     if a is None or not rules.can_view(user, a):
         raise HTTPException(404, "에이전트를 찾을 수 없습니다")
     if not allowed(user, a):
@@ -168,10 +168,10 @@ async def create_agent(
     body: AgentIn, user: Principal = Depends(current_user), svc: AppServices = Depends(get_services),
 ) -> AgentOut:
     tools = await check_tools(svc, body.tools)
-    a = svc.agents.create(
+    a = await svc.agents.create(
         user, name=body.name, system_prompt=body.system_prompt, tools=tools, description=body.description,
     )
-    return to_out(a, user, svc)
+    return await to_out(a, user, svc)
 
 
 @router.get("/api/agents", response_model=list[AgentOut])
@@ -179,17 +179,17 @@ async def list_agents(
     mine: bool = False, user: Principal = Depends(current_user), svc: AppServices = Depends(get_services),
 ) -> list[AgentOut]:
     """내가 볼 수 있는 에이전트. mine=true 면 내가 만든 것만."""
-    agents = svc.agents.visible_to(user)
+    agents = await svc.agents.visible_to(user)
     if mine:
         agents = [a for a in agents if a.owner_user_id == user.user_id]
-    return [to_out(a, user, svc) for a in agents]
+    return [await to_out(a, user, svc) for a in agents]
 
 
 @router.get("/api/agents/{agent_id}", response_model=AgentOut)
 async def get_agent(
     agent_id: str, user: Principal = Depends(current_user), svc: AppServices = Depends(get_services),
 ) -> AgentOut:
-    return to_out(load(svc, agent_id, user, rules.can_view), user, svc)
+    return await to_out(await load(svc, agent_id, user, rules.can_view), user, svc)
 
 
 @router.patch("/api/agents/{agent_id}", response_model=AgentOut)
@@ -197,38 +197,38 @@ async def update_agent(
     agent_id: str, body: AgentPatch,
     user: Principal = Depends(current_user), svc: AppServices = Depends(get_services),
 ) -> AgentOut:
-    a = load(svc, agent_id, user, rules.can_edit)
-    if (lock := edit_lock(a, svc)) is not None:
+    a = await load(svc, agent_id, user, rules.can_edit)
+    if (lock := await edit_lock(a, svc)) is not None:
         raise HTTPException(409, lock)
     changes = body.model_dump(exclude_unset=True, exclude_none=True)
     if "tools" in changes:
         changes["tools"] = await check_tools(svc, changes["tools"])
-    return to_out(svc.agents.update(a, **changes), user, svc)
+    return await to_out(await svc.agents.update(a, **changes), user, svc)
 
 
 @router.post("/api/agents/{agent_id}/disable", response_model=AgentOut)
 async def disable_agent(
     agent_id: str, user: Principal = Depends(current_user), svc: AppServices = Depends(get_services),
 ) -> AgentOut:
-    a = load(svc, agent_id, user, rules.can_disable)
-    return to_out(svc.agents.update(a, status="disabled", disabled_by=user.user_id), user, svc)
+    a = await load(svc, agent_id, user, rules.can_disable)
+    return await to_out(await svc.agents.update(a, status="disabled", disabled_by=user.user_id), user, svc)
 
 
 @router.post("/api/agents/{agent_id}/enable", response_model=AgentOut)
 async def enable_agent(
     agent_id: str, user: Principal = Depends(current_user), svc: AppServices = Depends(get_services),
 ) -> AgentOut:
-    a = load(svc, agent_id, user, rules.can_enable)
-    return to_out(svc.agents.update(a, status="active", disabled_by=None), user, svc)
+    a = await load(svc, agent_id, user, rules.can_enable)
+    return await to_out(await svc.agents.update(a, status="active", disabled_by=None), user, svc)
 
 
 @router.delete("/api/agents/{agent_id}", status_code=204)
 async def delete_agent(
     agent_id: str, user: Principal = Depends(current_user), svc: AppServices = Depends(get_services),
 ) -> None:
-    load(svc, agent_id, user, rules.can_edit)
-    svc.share_requests.cancel_pending(agent_id, user, "에이전트가 삭제됨")
-    svc.agents.delete(agent_id)
+    await load(svc, agent_id, user, rules.can_edit)
+    await svc.share_requests.cancel_pending(agent_id, user, "에이전트가 삭제됨")
+    await svc.agents.delete(agent_id)
 
 
 # ── 공유 요청 ──────────────────────────────────────────────
@@ -258,8 +258,8 @@ class ShareRequestOut(BaseModel):
     can_decide: bool
 
 
-def request_out(r: ShareRequest, p: Principal, svc: AppServices) -> ShareRequestOut:
-    a = svc.agents.get(r.agent_id)
+async def request_out(r: ShareRequest, p: Principal, svc: AppServices) -> ShareRequestOut:
+    a = await svc.agents.get(r.agent_id)
     return ShareRequestOut(
         **{k: getattr(r, k) for k in (
             "request_id", "agent_id", "requester_id", "approver_id", "requested_scope", "comment",
@@ -276,22 +276,22 @@ async def request_share(
     user: Principal = Depends(current_user), svc: AppServices = Depends(get_services),
 ) -> ShareRequestOut:
     """공유 범위를 넓혀 달라고 바로 위 관리자에게 요청한다. admin 은 바로 적용된다."""
-    a = load(svc, agent_id, user, rules.can_request_share)
+    a = await load(svc, agent_id, user, rules.can_request_share)
     if a.status != "active":
         raise HTTPException(409, "비활성화된 에이전트는 공유할 수 없습니다")
     if rules.SCOPE_ORDER[body.scope] <= rules.SCOPE_ORDER[a.scope]:
         raise HTTPException(409, f"이미 '{a.scope}' 범위로 공유되어 있습니다")
-    if svc.share_requests.pending_for_agent(a.agent_id) is not None:
+    if await svc.share_requests.pending_for_agent(a.agent_id) is not None:
         raise HTTPException(409, "이미 승인 대기 중인 공유 요청이 있습니다")
 
     superior = svc.users.superior_of(user)
     if superior is None:  # admin: 위가 없으니 바로 적용 (기록은 남긴다)
-        r = svc.share_requests.create(a, user, user.user_id, body.scope, body.comment)
-        r = svc.share_requests.decide(r, user, approved=True, comment="관리자 직접 적용")
-        svc.agents.update(a, scope=body.scope)
+        r = await svc.share_requests.create(a, user, user.user_id, body.scope, body.comment)
+        r = await svc.share_requests.decide(r, user, approved=True, comment="관리자 직접 적용")
+        await svc.agents.update(a, scope=body.scope)
     else:
-        r = svc.share_requests.create(a, user, superior.user_id, body.scope, body.comment)
-    return request_out(r, user, svc)
+        r = await svc.share_requests.create(a, user, superior.user_id, body.scope, body.comment)
+    return await request_out(r, user, svc)
 
 
 @router.get("/api/share-requests", response_model=list[ShareRequestOut])
@@ -300,29 +300,29 @@ async def list_share_requests(
     user: Principal = Depends(current_user), svc: AppServices = Depends(get_services),
 ) -> list[ShareRequestOut]:
     """inbox: 내가 결정할 대기 요청 / outbox: 내가 보낸 요청 / all: 볼 수 있는 전부 (최근 순)."""
-    items = svc.share_requests.visible_to(user)
+    items = await svc.share_requests.visible_to(user)
     if box == "inbox":
         items = [r for r in items if r.status == "pending" and rules.can_decide(user, r)]
     elif box == "outbox":
         items = [r for r in items if r.requester_id == user.user_id]
-    return [request_out(r, user, svc) for r in items]
+    return [await request_out(r, user, svc) for r in items]
 
 
-def _decide(svc: AppServices, request_id: str, user: Principal, approved: bool, comment: str) -> ShareRequestOut:
-    r = svc.share_requests.get(request_id)
+async def _decide(svc: AppServices, request_id: str, user: Principal, approved: bool, comment: str) -> ShareRequestOut:
+    r = await svc.share_requests.get(request_id)
     if r is None or not rules.can_see_request(user, r):
         raise HTTPException(404, "공유 요청을 찾을 수 없습니다")
     if not rules.can_decide(user, r):
         raise HTTPException(403, "이 요청을 결정할 권한이 없습니다")
     if r.status != "pending":
         raise HTTPException(409, "이미 처리된 요청입니다")
-    a = svc.agents.get(r.agent_id)
+    a = await svc.agents.get(r.agent_id)
     if approved:
         if a is None or a.status != "active":
             raise HTTPException(409, "에이전트가 삭제됐거나 비활성화되어 승인할 수 없습니다")
         if rules.SCOPE_ORDER[r.requested_scope] > rules.SCOPE_ORDER[a.scope]:
-            svc.agents.update(a, scope=r.requested_scope)
-    return request_out(svc.share_requests.decide(r, user, approved, comment), user, svc)
+            await svc.agents.update(a, scope=r.requested_scope)
+    return await request_out(await svc.share_requests.decide(r, user, approved, comment), user, svc)
 
 
 @router.post("/api/share-requests/{request_id}/approve", response_model=ShareRequestOut)
@@ -330,7 +330,7 @@ async def approve_share(
     request_id: str, body: DecisionIn | None = None,
     user: Principal = Depends(current_user), svc: AppServices = Depends(get_services),
 ) -> ShareRequestOut:
-    return _decide(svc, request_id, user, True, body.comment if body else "")
+    return await _decide(svc, request_id, user, True, body.comment if body else "")
 
 
 @router.post("/api/share-requests/{request_id}/reject", response_model=ShareRequestOut)
@@ -338,7 +338,7 @@ async def reject_share(
     request_id: str, body: DecisionIn | None = None,
     user: Principal = Depends(current_user), svc: AppServices = Depends(get_services),
 ) -> ShareRequestOut:
-    return _decide(svc, request_id, user, False, body.comment if body else "")
+    return await _decide(svc, request_id, user, False, body.comment if body else "")
 
 
 @router.post("/api/agents/{agent_id}/unshare", response_model=AgentOut)
@@ -346,6 +346,6 @@ async def unshare_agent(
     agent_id: str, user: Principal = Depends(current_user), svc: AppServices = Depends(get_services),
 ) -> AgentOut:
     """공유를 거두고 개인용으로 되돌린다. 승인 없이 주인·admin 이 바로 한다."""
-    a = load(svc, agent_id, user, rules.can_unshare)
-    svc.share_requests.cancel_pending(a.agent_id, user, "공유를 거둠")
-    return to_out(svc.agents.update(a, scope="personal"), user, svc)
+    a = await load(svc, agent_id, user, rules.can_unshare)
+    await svc.share_requests.cancel_pending(a.agent_id, user, "공유를 거둠")
+    return await to_out(await svc.agents.update(a, scope="personal"), user, svc)

@@ -17,6 +17,9 @@ STORAGE_ROOT=          # 원본 파일 저장 폴더. 비우면 data/storage
 | `versions/0004_chunk_embedding_halfvec.py` | **[초안, DB 담당 확인 전]** `chunk.embedding` vector(1024) → halfvec(2048) (KURE-v3). 기존 벡터는 비워지므로 색인을 다시 돌린다 |
 | `versions/0005_rename_department_to_dept.py` | 테이블 `department` → `dept` (제약·시퀀스 이름 포함) |
 | `versions/0006_rename_document_to_doc.py` | 테이블 `document` → `doc`, `document_version` → `doc_version` (제약·인덱스·시퀀스 이름 포함), `audit_log.target_type` 에 `'doc'` 추가 |
+| `versions/0007_login.py` | 로그인: `users` 에 비밀번호 해시·사용 여부·연속 실패·잠금·마지막 로그인 칸, `login_session` 표(쿠키 토큰의 SHA-256 만 저장), `audit_log.event_type` 에 `login`·`login_failed`·`logout` 추가 |
+| `versions/0008_agent_decision_columns.py` | 에이전트·공유 요청 저장 칸: `agent.disabled_by`, `agent_share_request.decided_by`·`decision_comment`, `chat_session.agent_removed` |
+| `versions/0009_agent_run_denial.py` | `agent_run.denial` (JSONB): 권한 거부로 멈춘 요청의 거부 내용. 지난 대화를 다시 열 때 거부 안내를 다시 그린다 |
 
 ## 자주 쓰는 명령
 

@@ -11,6 +11,13 @@
 --         work_file(session_doc 대체), output_file, output_source
 --   바꿔서 반영: doc.scope 는 남기되 personal 을 뺐다 (개인 파일은 work_file 로). 부서 문서는 계속 지원.
 --   보류: share_request_file, agent_attachment, output_publish_request, user_memory (흐름이 정해지면 추가)
+--
+-- 2026-11-23 마이그레이션 0007~0010 반영 (바뀐 곳에 [0007] 처럼 번호를 달았다)
+--   [0007] 로그인: users 비밀번호·잠금 칸, login_session 표, audit_log.event_type 에 login·login_failed·logout
+--   [0008] agent.disabled_by, agent_share_request.decided_by·decision_comment, chat_session.agent_removed
+--   [0009] agent_run.denial (권한 거부로 멈춘 요청의 거부 내용)
+--   [0010] audit_log.call_id·rule_id 외래키 제거, run_id 추가 (툴 실행 감사를 실행 도중에 DB 에 쓰고, 대화를 지워도 남게)
+--   아직 반영 안 함: [0002] DB 하드닝 (users.auth_provider·external_id, 보안등급 1~5 CHECK, audit_log 수정 금지 트리거, agent_app 역할)
 
 CREATE EXTENSION IF NOT EXISTS vector;
 
@@ -28,7 +35,12 @@ CREATE TABLE users (
     name            VARCHAR(100) NOT NULL,
     dept_id         BIGINT NOT NULL REFERENCES dept (id),
     position        VARCHAR(50),
-    security_grade  INT NOT NULL DEFAULT 1
+    security_grade  INT NOT NULL DEFAULT 1,
+    password_hash       VARCHAR(255),  -- [0007] scrypt 해시. 원문 저장 안 함. NULL 이면 비밀번호 로그인 불가
+    is_active           BOOLEAN NOT NULL DEFAULT TRUE,  -- [0007] FALSE 면 로그인·기존 세션 모두 거부
+    failed_login_count  INT NOT NULL DEFAULT 0 CHECK (failed_login_count >= 0),  -- [0007]
+    locked_until        TIMESTAMPTZ,  -- [0007] 연속 실패로 이 시각까지 로그인 거부
+    last_login_at       TIMESTAMPTZ   -- [0007]
 );
 
 ALTER TABLE dept
@@ -39,6 +51,21 @@ CREATE TABLE user_role (
     user_id  BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     PRIMARY KEY (role, user_id)
 );
+
+-- [0007] 로그인 세션. 쿠키에는 임의 토큰만, DB 에는 그 토큰의 SHA-256 만 둔다. 로그아웃·강제 종료 = revoked_at
+CREATE TABLE login_session (
+    token_hash    CHAR(64) PRIMARY KEY,
+    user_id       BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at    TIMESTAMPTZ NOT NULL,
+    last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    revoked_at    TIMESTAMPTZ,
+    client_ip     VARCHAR(64),
+    user_agent    VARCHAR(300),
+    CHECK (expires_at > created_at)
+);
+
+CREATE INDEX ix_login_session_user ON login_session (user_id);
 
 -- ── 에이전트 ────────────────────────────────────────────
 
@@ -70,7 +97,8 @@ CREATE TABLE agent (
     status         VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
     template_id    BIGINT REFERENCES agent_template (id) ON DELETE SET NULL,  -- 만들 때 고른 템플릿
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    disabled_by    BIGINT REFERENCES users (id)  -- [0008] 비활성화한 사람. 주인이 직접 끈 것만 주인이 다시 켤 수 있다
 );
 
 CREATE TABLE agent_tool (
@@ -88,7 +116,9 @@ CREATE TABLE agent_share_request (
     status           VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
     comment          TEXT,
     requested_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    decided_at       TIMESTAMPTZ
+    decided_at       TIMESTAMPTZ,
+    decided_by       BIGINT REFERENCES users (id),  -- [0008] 승인·반려한 사람
+    decision_comment TEXT                           -- [0008] 승인·반려 의견
 );
 
 -- scope=dept 에이전트를 쓸 수 있는 부서. 부서 공유가 승인되면 요청자 부서가 들어가고,
@@ -108,7 +138,9 @@ CREATE TABLE chat_session (
     user_id     BIGINT NOT NULL REFERENCES users (id),
     agent_id    BIGINT REFERENCES agent (id) ON DELETE SET NULL,  -- NULL 이면 기본 에이전트
     title       VARCHAR(200),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()  -- 메시지가 추가되면 트리거로 갱신
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),  -- 메시지가 추가되면 트리거로 갱신
+    -- [0008] 쓰던 에이전트가 삭제됨 (agent_id 가 NULL 이 되면 '기본 에이전트' 와 구분이 안 돼 권한이 넓어질 수 있어 따로 표시)
+    agent_removed  BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE agent_run (
@@ -117,7 +149,9 @@ CREATE TABLE agent_run (
     llm_calls    INT NOT NULL DEFAULT 0,
     stop_reason  VARCHAR(20) CHECK (stop_reason IN ('completed', 'max_turns', 'denied')),
     started_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    ended_at     TIMESTAMPTZ  -- 실행 중이면 NULL
+    ended_at     TIMESTAMPTZ,  -- 실행 중이면 NULL
+    -- [0009] 권한 거부로 멈춘 요청의 거부 내용 {call_id, tool_name, display_name, kind, reason}
+    denial       JSONB CHECK (denial IS NULL OR (jsonb_typeof(denial) = 'object' AND stop_reason = 'denied'))
 );
 
 CREATE TABLE message (
@@ -185,8 +219,9 @@ CREATE TABLE audit_log (
     id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     event_type          VARCHAR(30) NOT NULL DEFAULT 'tool_call'
                         CHECK (event_type IN ('tool_call', 'doc_register', 'work_upload', 'work_purge',
-                                              'output_download', 'agent_share')),
-    call_id             VARCHAR(100) REFERENCES tool_call (call_id),
+                                              'output_download', 'agent_share',
+                                              'login', 'login_failed', 'logout')),  -- [0007] 로그인 기록
+    call_id             VARCHAR(100),  -- [0010] tool_call.call_id 와 같은 값. 외래키 없음 (실행 도중 기록, 대화를 지워도 남게)
     session_id          UUID,
     user_id             BIGINT NOT NULL,
     agent_id            BIGINT,  -- 기록용, FK 없음
@@ -195,13 +230,14 @@ CREATE TABLE audit_log (
     principal_snapshot  JSONB,
     decision            VARCHAR(10) CHECK (decision IN ('allow', 'deny', 'ask')),
     reason              TEXT,
-    rule_id             VARCHAR(100) REFERENCES policy_rule (policy_rule_id),
+    rule_id             VARCHAR(100),  -- [0010] 정책 규칙 ID (config/permissions.yaml). 외래키 없음
     approval            VARCHAR(20) CHECK (approval IN ('approved', 'rejected', 'timeout')),
     executed            BOOLEAN NOT NULL DEFAULT FALSE,
     tool_ok             BOOLEAN,  -- 실행했을 때 툴 성공 여부, 실행 안 했으면 NULL
     target_type         VARCHAR(30) CHECK (target_type IN ('doc', 'work_file', 'output_file', 'agent')),
     target_id           BIGINT,
     ts                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    run_id              UUID,  -- [0010] 판정이 나온 요청 (agent_run.id). 외래키 없음
     CHECK (event_type <> 'tool_call'
            OR (call_id IS NOT NULL AND session_id IS NOT NULL AND tool_name IS NOT NULL AND decision IS NOT NULL))
 );
@@ -210,6 +246,8 @@ CREATE INDEX idx_audit_log_user_ts ON audit_log (user_id, ts);
 CREATE INDEX idx_audit_log_tool_ts ON audit_log (tool_name, ts);
 CREATE INDEX idx_audit_log_ts      ON audit_log (ts);
 CREATE INDEX idx_audit_log_target  ON audit_log (target_type, target_id);
+CREATE INDEX idx_audit_log_call    ON audit_log (call_id);     -- [0010]
+CREATE INDEX idx_audit_log_session ON audit_log (session_id);  -- [0010]
 
 -- ── 문서 (사내 지식) ────────────────────────────────────
 -- 관리자(또는 부서 관리자)가 등록한 문서만 들어간다. 직원이 대화에 올린 파일은 work_file 로 간다.
@@ -341,6 +379,7 @@ CREATE TABLE output_source (
 COMMENT ON TABLE dept                IS '부서';
 COMMENT ON TABLE users               IS '사용자';
 COMMENT ON TABLE user_role           IS '사용자 역할 (admin > dept_head > member)';
+COMMENT ON TABLE login_session       IS '로그인 세션. 쿠키 토큰의 SHA-256 만 저장. 로그아웃·강제 종료는 revoked_at';
 COMMENT ON TABLE agent_template      IS '관리자가 만든 에이전트 템플릿';
 COMMENT ON TABLE agent_template_tool IS '템플릿에 들어 있는 툴';
 COMMENT ON TABLE agent               IS '에이전트 (개인·부서·전사)';

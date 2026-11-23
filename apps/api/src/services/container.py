@@ -25,6 +25,7 @@ from services.inbox import InboxStore
 from services.mail_accounts import GmailAccountResolver
 from services.sessions import InMemorySessionStore
 from services.templates import InMemoryTemplateStore, load_templates
+from services.auth import AuthService
 from services.users import UserDirectory
 from services.uploads import UploadStore
 from tools.arithmetic import arithmetic_tools
@@ -88,6 +89,7 @@ class AppServices:
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
     require_search: RequireSearch | None = field(default_factory=RequireSearch)  # 문서 질문 검색 강제. None 이면 끔
     require_review_lookup: bool = True  # 심사 건의 상태는 실제 조회 결과로만 안내
+    auth: AuthService | None = None  # AUTH_MODE=session 이면 로그인(쿠키·DB 세션). None 이면 개발용 X-User-Id
 
 
 def llm_from_env() -> LLMClient:
@@ -207,7 +209,36 @@ def db_doc_tools_from_env() -> list | None:
     return [DbSearchDocsTool(embedder), DbReadDocTool()]
 
 
-def build_from_env(*, gmail_account_resolver: GmailAccountResolver | None = None) -> AppServices:
+def users_from_env() -> tuple[UserDirectory, AuthService | None]:
+    """AUTH_MODE=session: DB 사용자 + 로그인(쿠키 세션). dev(기본): config/dev_users.yaml + X-User-Id 헤더."""
+    mode = os.environ.get("AUTH_MODE", "dev").strip().lower()
+    if mode == "dev":
+        return UserDirectory.from_yaml(os.environ.get("DEV_USERS_PATH", "config/dev_users.yaml")), None
+    if mode != "session":
+        raise ValueError(f"AUTH_MODE 는 dev 또는 session 이어야 합니다: {mode!r}")
+    from db.engine import session_scope
+    from services.auth import AuthSettings, DbUserDirectory
+
+    users = DbUserDirectory(session_scope)
+    return users, AuthService(session_scope, users, AuthSettings.from_env())
+
+
+def stores_from_env() -> dict:
+    """STORE=db: 에이전트·공유 요청·대화를 PostgreSQL 에 (서버를 껐다 켜도 남는다). memory(기본): 메모리."""
+    store = os.environ.get("STORE", "memory").strip().lower()
+    if store == "memory":
+        return {}
+    if store != "db":
+        raise ValueError(f"STORE 는 memory 또는 db 여야 합니다: {store!r}")
+    from db.engine import session_scope
+    from services.db_stores import DbAgentStore, DbSessionStore, DbShareRequestStore
+
+    log.info("저장소: 팀 DB (에이전트·공유 요청·대화)")
+    return {"agents": DbAgentStore(session_scope), "share_requests": DbShareRequestStore(session_scope),
+            "sessions": DbSessionStore(session_scope)}
+
+
+def build_from_env() -> AppServices:
     env = os.environ.get
     rules, default = load_policy(
         env("PERMISSION_POLICY_PATH", "config/permissions.yaml"),
@@ -225,7 +256,10 @@ def build_from_env(*, gmail_account_resolver: GmailAccountResolver | None = None
     documents = DocumentStore(Path(env("DOCUMENT_DB_PATH", str(REPO_ROOT / "data" / "documents.sqlite3"))),
                               load_forms(Path(env("DOCUMENT_FORMS_DIR", str(DOCUMENT_FORMS)))))
     llm = llm_from_env()
+    users, auth = users_from_env()
+    stores = stores_from_env()
     return AppServices(
+        **stores,
         llm=llm,
         draft_llm=draft_llm_from_env(llm),
         tools=SimpleToolRegistry(build_tools(
@@ -241,7 +275,8 @@ def build_from_env(*, gmail_account_resolver: GmailAccountResolver | None = None
         checker=CustomerMailRule(create_checker(rules=rules, default=default), loan_store),
         approvals=FutureApprovalHandler(float(env("PERMISSION_APPROVAL_TIMEOUT_SECONDS", "120"))),
         audit=JsonlAuditLogger(env("PERMISSION_AUDIT_LOG_PATH", "logs/permission_audit.jsonl")),
-        users=UserDirectory.from_yaml(env("DEV_USERS_PATH", "config/dev_users.yaml")),
+        users=users,
+        auth=auth,
         templates=InMemoryTemplateStore(load_templates(env("AGENT_TEMPLATES_PATH", "config/agent_templates.yaml"))),
         max_turns=int(env("HARNESS_MAX_TURNS", "10")),
         tool_timeout=float(env("HARNESS_TOOL_TIMEOUT_SECONDS", "30")),
