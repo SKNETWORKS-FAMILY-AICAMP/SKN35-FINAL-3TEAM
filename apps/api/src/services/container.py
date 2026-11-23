@@ -152,6 +152,9 @@ def build_tools(doc_path: str | Path = FIXTURES / "doc_chunks.json", upload_dir:
                 upload_store: UploadStore | None = None) -> list:
     """로컬 도구와 환경변수로 활성화한 Gmail MCP 도구를 함께 등록한다."""
     doc = Path(doc_path)
+                upload_store: UploadStore | None = None, doc_tools: list | None = None) -> list:
+    """로컬 도구와 환경변수로 활성화한 Gmail MCP 도구를 함께 등록한다.
+    doc_tools 를 주면 파일 예시 대신 그 문서 검색·열람 도구를 쓴다 (DOCUMENT_STORE=db → tools/db_docs.py)."""
     uploads = Path(upload_dir) if upload_dir else REPO_ROOT / "data/uploads"
     upload_store = upload_store or UploadStore(uploads)
     review_store = review_store or ReviewStore(
@@ -159,11 +162,24 @@ def build_tools(doc_path: str | Path = FIXTURES / "doc_chunks.json", upload_dir:
         Path(os.environ.get("REVIEW_REQUEST_DB_PATH", str(REPO_ROOT / "data/review_requests.sqlite3"))),
     )
     return [
-        *arithmetic_tools(), SearchDocsTool(doc), ReadDocTool(doc), TodayTool(Path(holiday_path) if holiday_path is not None else None),
-        ParseDocTool(uploads, timeout=parse_timeout, uploads=upload_store),
+        *arithmetic_tools(), *(doc_tools or [SearchDocumentsTool(doc), ReadDocumentTool(doc)]), TodayTool(Path(holiday_path) if holiday_path is not None else None),
+        ParseDocumentTool(uploads, timeout=parse_timeout, uploads=upload_store),
         GetReviewCaseTool(review_store), SubmitReviewRequestTool(review_store),
         *build_gmail_tools(),
     ]
+
+
+def db_doc_tools_from_env() -> list | None:
+    """DOCUMENT_STORE=db 이면 팀 DB(pgvector) 문서 도구, 아니면 None (파일 예시를 읽는 기존 도구).
+    필요한 값: DATABASE_URL, EMBEDDING_MODEL_PATH(KURE-v3 폴더). 모델은 서버가 뜰 때 미리 올린다."""
+    if os.environ.get("DOCUMENT_STORE", "file").strip().lower() != "db":
+        return None
+    from knowledge.ingestion.embedders import KureEmbedder
+    from tools.db_docs import BackgroundEmbedder, DbReadDocumentTool, DbSearchDocumentsTool
+
+    embedder = BackgroundEmbedder(lambda: KureEmbedder())
+    log.info("문서 도구: 팀 DB(pgvector) 사용 — KURE-v3 를 미리 불러오는 중")
+    return [DbSearchDocumentsTool(embedder), DbReadDocumentTool()]
 
 
 def build_from_env() -> AppServices:
@@ -187,6 +203,7 @@ def build_from_env() -> AppServices:
             doc_path, upload_dir=env("UPLOAD_DIR"),
             parse_timeout=float(env("PARSE_TOOL_TIMEOUT_SECONDS", str(DEFAULT_PARSE_TIMEOUT))),
             holiday_path=holiday_path, review_store=review_store, upload_store=uploads,
+            doc_tools=db_doc_tools_from_env(),
         )),
         uploads=uploads,
         checker=create_checker(rules=rules, default=default),

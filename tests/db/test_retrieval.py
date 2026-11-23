@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import json
+
 from types import SimpleNamespace
 
 from sqlalchemy import text
@@ -69,9 +71,11 @@ async def test_search_respects_permissions_in_real_db(conn):  # noqa: F811
         old = await _doc(conn, uid, dept, "company", 1, current=False)   # 옛 버전 → 안 보여야 함
         for v in (mine, theirs, secret, old):
             await index_doc_version(session, v, parsed_law(), embedder=emb, count_tokens=COUNT)
-        target = (await session.execute(text("SELECT content FROM chunk WHERE doc_version_id = :v ORDER BY chunk_index LIMIT 1"),
-                                        {"v": mine})).scalar()
+        # 청크 벡터는 content 가 아니라 embed_text("문서 > 장 > 조" + 본문)로 만든다 → 저장된 벡터 그대로 질문으로 쓴다
+        tid, tvec = (await session.execute(text("SELECT id, embedding FROM chunk WHERE doc_version_id = :v "
+                                                "ORDER BY chunk_index LIMIT 1"), {"v": mine})).one()
         p = SimpleNamespace(attributes={"dept_id": dept, "security_grade": 2})
-        hits = await search_for_principal(session, target, p, embedder=emb, k=50)
-        assert hits and {h["doc_version_id"] for h in hits} == {mine}
-        assert hits[0]["content"] == target and hits[0]["score"] > 0.99      # 같은 글이 1등
+        hits = await search_for_principal(session, json.loads(tvec), p, k=50)   # 글자 '[…]' 로 옴
+        made = {mine, theirs, secret, old}                     # DB 에 이미 등록된 다른 문서는 빼고 본다
+        assert hits and {h["doc_version_id"] for h in hits} & made == {mine}
+        assert hits[0]["chunk_id"] == tid and hits[0]["score"] > 0.99      # 같은 청크가 1등 (halfvec 오차 감안)
