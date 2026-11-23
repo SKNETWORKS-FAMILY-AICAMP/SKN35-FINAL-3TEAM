@@ -4,7 +4,7 @@
 LLM 이 고른 값이 아니라 플랫폼이 넘겨준 로그인 사용자만 owner_user_id 로 들어온다 (manifest 의 inject).
 
 플랫폼 PostgreSQL 에 붙일 때는 같은 메서드를 가진 store_pg.PostgresMailStore 를 쓴다 (open_store 가 설정으로 고른다).
-표 정의: sql/mail_schema.sql · alembic 0005.
+표 정의: sql/mail_schema.sql · alembic 0011.
 """
 
 from __future__ import annotations

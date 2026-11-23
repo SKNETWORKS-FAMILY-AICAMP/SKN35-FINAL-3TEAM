@@ -1,4 +1,4 @@
--- 개인 메일 저장 표 5개 (PostgreSQL 16). 같은 정의가 alembic/versions/0005_mail_tables.py 와
+-- 개인 메일 저장 표 5개 (PostgreSQL 16). 같은 정의가 alembic/versions/0011_mail_tables.py 와
 -- apps/api/src/db/models.py 에 있다 (표를 만들고 바꾸는 건 마이그레이션이 한다 — 이 파일은 읽기용 사본).
 -- 개발·테스트 중 DB 가 없을 때는 같은 구조를 SQLite (gmail_mcp/store.py) 로 쓴다.
 --
@@ -96,7 +96,7 @@ COMMENT ON TABLE  mail_sync_run         IS '동기화 실행 기록 (감사용)'
 COMMENT ON COLUMN mail_sync_run.mode    IS 'incremental / full / prune';
 COMMENT ON COLUMN mail_sync_run.summary IS '건수 · 사유별 실패 수';
 
--- 퇴사(삭제)한 직원의 메일 보관 — alembic 0006. 직원이 이미 없으므로 users 외래키는 없다.
+-- 퇴사(삭제)한 직원의 메일 보관 — alembic 0012. 직원이 이미 없으므로 users 외래키는 없다.
 CREATE TABLE mail_archive (
     former_user_id  BIGINT       NOT NULL,
     message_id      VARCHAR(64)  NOT NULL,
@@ -125,4 +125,4 @@ CREATE INDEX ix_mail_archive_user_sent   ON mail_archive (former_user_id, sent_a
 CREATE INDEX ix_mail_archive_login       ON mail_archive (former_login_id);
 
 -- users 행을 지우기 직전(BEFORE DELETE)에 그 직원의 메일을 mail_archive 로 복사한다. (이후 ON DELETE CASCADE 가 원본을 지움)
--- 함수 본문은 alembic/versions/0006_mail_archive.py 의 archive_user_mail() 참고.
+-- 함수 본문은 alembic/versions/0012_mail_archive.py 의 archive_user_mail() 참고.

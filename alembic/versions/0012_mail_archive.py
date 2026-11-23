@@ -1,6 +1,6 @@
 """[초안 — DB 담당 확인 전] 퇴사(삭제)한 직원의 메일을 관리자용 보관 표에 옮겨 두기 (2026-11-23, 커넥터 담당 제안)
 
-0005 에서는 직원(users)이 지워지면 그 직원의 메일도 함께 지워졌다 (ON DELETE CASCADE).
+0011 에서는 직원(users)이 지워지면 그 직원의 메일도 함께 지워졌다 (ON DELETE CASCADE).
 이제는 지우기 직전에 메일을 mail_archive 로 복사하고, 그다음에 원래 표에서 지운다.
 
 - mail_archive  퇴사한 직원의 메일. 직원이 이미 지워졌으므로 users 외래키는 걸 수 없고,
@@ -12,8 +12,8 @@
 mail_account · mail_sync_* 는 보관하지 않고 그대로 지운다 (연결 계정 주소만 보관 행의 account_email 에 남김).
 users.id 는 GENERATED ALWAYS AS IDENTITY 라서 다른 직원이 같은 ID 를 다시 받지 않는다 → former_user_id 로 구분된다.
 
-Revision ID: 0006
-Revises: 0005
+Revision ID: 0012
+Revises: 0011
 Create Date: 2026-11-23
 """
 from __future__ import annotations

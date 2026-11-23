@@ -2,7 +2,7 @@
 
 - 표를 만들고 바꾸는 건 alembic/ 마이그레이션이 한다. 이 파일은 코드에서 표를 읽고 쓰기 위한 지도다.
   그래서 CHECK 제약·트리거·부분 인덱스는 여기 다시 적지 않고 마이그레이션에만 둔다 (한 곳에서만 관리).
-- 팀 ERD 에서 바꾼 것은 [DB 추가](0002)·[0003]·[0005]·[0006] 처럼 마이그레이션 번호로 표시한다.
+- 팀 ERD 에서 바꾼 것은 [DB 추가](0002)·[0003]·[0011]·[0012] 처럼 마이그레이션 번호로 표시한다.
 - 칸을 바꿀 땐: 마이그레이션 추가 → 이 파일 수정 → tests/db 의 모델·DB 일치 테스트로 확인.
 """
 
@@ -358,7 +358,7 @@ class OutputSource(Base):
     doc_version_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("doc_version.id"))  # [0003]
 
 
-# ── 개인 메일 (커넥터 mcp-servers/gmail) — [0005 초안] ─────────
+# ── 개인 메일 (커넥터 mcp-servers/gmail) — [0011 초안] ─────────
 # 직원이 연결한 개인 Gmail 을 관계형 DB 에만 저장한다 (벡터DB · chunk 대상 아님).
 # 읽고 쓰는 곳은 커넥터뿐이고, 모든 조회에 owner_user_id = 로그인 사용자 조건이 붙는다.
 
@@ -424,7 +424,7 @@ class MailSyncRun(Base):
 
 
 class MailArchive(Base):
-    """[0006 초안] 퇴사(삭제)한 직원의 메일. users 를 지우기 직전에 트리거(trg_users_archive_mail)가 복사한다.
+    """[0012 초안] 퇴사(삭제)한 직원의 메일. users 를 지우기 직전에 트리거(trg_users_archive_mail)가 복사한다.
     직원이 이미 없으므로 users 외래키는 없다. 관리자만 본다 (MCP 툴로 열지 않음)."""
     __tablename__ = "mail_archive"
     __table_args__ = (Index("ix_mail_archive_user_thread", "former_user_id", "thread_id"),

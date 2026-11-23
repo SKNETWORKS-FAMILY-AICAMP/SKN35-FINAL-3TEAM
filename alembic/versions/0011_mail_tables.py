@@ -9,11 +9,11 @@
 - mail_sync_failure 동기화 실패 사유
 - mail_sync_run     동기화 실행 기록
 
-직원(users)이 지워지면 메일도 함께 지워진다 (ON DELETE CASCADE). 단 0006 트리거가 지우기 직전에 mail_archive 로 복사해 둔다.
+직원(users)이 지워지면 메일도 함께 지워진다 (ON DELETE CASCADE). 단 0012 트리거가 지우기 직전에 mail_archive 로 복사해 둔다.
 기존 표는 건드리지 않는다. 앱 권한(agent_app)은 0002 의 기본 권한 규칙이 새 표에도 적용한다.
 
-Revision ID: 0005
-Revises: 0004
+Revision ID: 0011
+Revises: 0010
 Create Date: 2026-11-23
 """
 from __future__ import annotations

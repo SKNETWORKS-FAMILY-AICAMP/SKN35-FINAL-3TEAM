@@ -1,5 +1,5 @@
-"""메일 저장소 — 플랫폼 PostgreSQL (alembic 0005 의 mail_* 표). MailStore(SQLite)와 같은 메서드.
-퇴사(삭제)한 직원의 메일은 alembic 0006 트리거가 mail_archive 로 옮긴다 — 관리자용 조회·삭제 메서드는 맨 아래.
+"""메일 저장소 — 플랫폼 PostgreSQL (alembic 0011 의 mail_* 표). MailStore(SQLite)와 같은 메서드.
+퇴사(삭제)한 직원의 메일은 alembic 0012 트리거가 mail_archive 로 옮긴다 — 관리자용 조회·삭제 메서드는 맨 아래.
 
 owner_user_id 로 받는 값은 **users.login_id** (하네스가 로그인 사용자로 채운 requester_id) 이다.
 SQL 안에서 `(SELECT id FROM users WHERE login_id = $1)` 로 users.id 로 바꿔 쓰므로,

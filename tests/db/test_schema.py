@@ -61,7 +61,7 @@ async def test_models_match_database_columns(conn):
     assert set(db) == set(models), (set(db) ^ set(models))
     diff = {t: db[t] ^ models[t] for t in db if db[t] != models[t]}
     assert not diff, diff
-    assert len(db) == 30  # 팀 ERD 24 + 개인 메일 5 [0005] + 퇴사자 메일 보관 1 [0006]
+    assert len(db) == 31  # 팀 ERD 24 + [0007] login_session + 개인 메일 5 [0011] + 퇴사자 메일 보관 1 [0012]
 
 
 async def _user(conn, grade=2) -> int:
