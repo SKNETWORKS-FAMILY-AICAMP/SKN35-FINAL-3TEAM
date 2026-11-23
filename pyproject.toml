@@ -26,6 +26,8 @@ dependencies = [
     "alembic>=1.20.1",
     "pgvector>=0.5.1",
     "fpdf2>=2.9.0",
+    # 시장 툴(apps/api/src/tools/market.py)이 market_mcp 를 직접 import 한다. 그냥 uv sync 만 해도 설치되도록 의존성으로 둔다.
+    "market-mcp",
 ]
 
 [project.optional-dependencies]
@@ -47,3 +49,6 @@ asyncio_default_fixture_loop_scope = "function"
 
 [tool.uv.workspace]
 members = ["mcp-servers/gmail", "mcp-servers/market"]
+
+[tool.uv.sources]
+market-mcp = { workspace = true }
