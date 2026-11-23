@@ -1,6 +1,6 @@
 """퇴사(삭제)한 직원의 메일 보관 관리 — 관리자용 CLI.
 
-직원(users)이 삭제되면 DB 트리거(alembic 0006)가 그 직원의 메일을 mail_archive 로 옮긴다.
+직원(users)이 삭제되면 DB 트리거(alembic 0012)가 그 직원의 메일을 mail_archive 로 옮긴다.
 에이전트(MCP 툴)는 이 표를 읽을 수 없고, 관리자가 이 명령으로만 본다. 플랫폼 PostgreSQL (GMAIL_DATABASE_URL) 에서만 동작한다.
 
   uv run gmail-archive list                          보관된 직원 목록 (건수)

@@ -84,7 +84,7 @@ ollama pull qwen3:14b                              # 약 9.3GB. 안 받으면 �
 ## 5. 표 · 사용자 · 비밀번호 (Windows, 저장소 맨 위)
 
 ```powershell
-uv sync
+uv sync --all-packages --extra hwp      # hwp = 한글 파일 읽기 (빼면 기업은행 문서가 안 들어가요)
 uv run alembic upgrade head                        # 표 만들기 (지금 0010). 누가 새 마이그레이션을 올리면 다시 실행
 uv run python scripts/db/seed_users.py             # 부서·직원 (config/dev_users.yaml 의 사번 E1001 · E1002 · E2001 · E2002 · E0001)
 uv run python scripts/db/set_password.py --all     # 모두에게 같은 비밀번호 (두 번 입력, 8자 이상. 시연은 qwer1234)

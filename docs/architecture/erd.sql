@@ -12,8 +12,8 @@
 CREATE TABLE `dept` (
 --   삭제: session_document (→ work_file)
 --   변경: agent, message, tool_call, audit_log, document, document_version, chunk
--- 2026-11-23 [alembic 0006 초안]: mail_archive 추가 — 직원(users)을 지우기 직전 트리거가 그 직원의 mail_message 를 복사해 둔다 (퇴사자 메일을 관리자가 관리). users 외래키 없음.
--- 2026-11-23: 개인 메일 표 5개 추가 [alembic 0005 초안] — mail_account, mail_message, mail_sync_state, mail_sync_failure, mail_sync_run
+-- 2026-11-23 [alembic 0012 초안]: mail_archive 추가 — 직원(users)을 지우기 직전 트리거가 그 직원의 mail_message 를 복사해 둔다 (퇴사자 메일을 관리자가 관리). users 외래키 없음.
+-- 2026-11-23: 개인 메일 표 5개 추가 [alembic 0011 초안] — mail_account, mail_message, mail_sync_state, mail_sync_failure, mail_sync_run
 --   직원(users) 삭제 시 메일도 삭제 (ON DELETE CASCADE). 실제 DB 는 PostgreSQL 이라 JSON 은 JSONB, DATETIME 은 TIMESTAMPTZ 로 만든다.
 	`id`	BIGINT	NOT NULL	COMMENT '부서 ID',
 	`name`	VARCHAR(100)	NOT NULL	COMMENT '부서명',
