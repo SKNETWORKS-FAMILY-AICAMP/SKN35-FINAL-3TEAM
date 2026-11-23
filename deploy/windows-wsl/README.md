@@ -18,7 +18,7 @@
 | 4. `.env` | Windows (저장소 맨 위) | 한 번 |
 | 5. 표 · 사용자 · 비밀번호 | Windows (저장소 맨 위) | 표가 바뀔 때마다 `alembic upgrade head` |
 | 6. 켜기 · 로그인 | Windows | 매번 |
-| 7. 문서 넣기 (기업은행 내규 10개) | Windows (저장소 맨 위) | 한 번 |
+| 7. 문서 넣기 (`seed_docs.py` 한 줄) | Windows (저장소 맨 위) | 한 번 |
 
 ---
 
@@ -117,26 +117,17 @@ cd apps/web; npm install; npm run dev                                         # 
 
 ## 7. 문서 넣기 (Windows, 저장소 맨 위, 한 번)
 
-문서는 **각자 DB 에만** 들어간다 (원본 저장 폴더 `data/storage` 도 git 에 안 올라간다). 그래서 PC 마다 한 번씩 넣는다.
-UC-01(규정 질의응답) 이 쓰는 문서는 기업은행 공개 내규 10개다. 원본 hwp 10개(파일 이름 `여신규정_2025-12-30.hwp` 처럼 `이름_날짜`)를 한 폴더에 받아 두고:
+문서는 **각자 DB 에만** 들어간다 (DB 내용과 `data/storage` 는 git 에 안 올라간다). 그래서 PC 마다 한 번 넣는다.
+원본 파일은 저장소에 같이 들어 있다 (`data/seed_docs/`, 기업은행 공개 내규 10개 + 권한 시연 문서 1개). 명령 한 줄:
 
 ```powershell
-$dir = "기업은행_내규_10개를_받은_폴더"
-Get-ChildItem $dir -Filter *.hwp | ForEach-Object {
-  $name = $_.BaseName -replace '_\d{4}-\d{2}-\d{2}$', ''
-  uv run python scripts/db/register_doc.py $_.FullName --title "기업은행 $name" --category 내규 --owner E0001 --scope company --grade 1
-}
+uv run python scripts/db/seed_docs.py
 ```
 
-- 전사 공개(`company`), 보안등급 1, 등록자 관리자(`E0001`). 제목은 "기업은행 예금규정" 처럼 된다.
-- 10개에 약 10분 (조각 528개). 같은 파일을 다시 넣으면 건너뛴다.
-- 확인: `wsl -u postgres -e psql -d agent_platform -c "SELECT id, title FROM doc ORDER BY id"` 에 10줄
-
-부서 공개 시험용 문서(선택): 부서 10 사람만 보이는 문서가 있어야 "다른 부서는 못 본다" 를 보여 줄 수 있다.
-
-```powershell
-uv run python scripts/db/register_doc.py 13_금융위_개인채무자FAQ.hwpx --title "개인채무자 FAQ (부서 10 전용 시험)" --category 공문 --owner E1002 --scope dept --grade 2
-```
+- 기업은행 내규 10개: 전사 공개, 보안등급 1, 제목 "기업은행 ○○규정" (목록은 `data/seed_docs/manifest.yaml`)
+- 권한 시연 문서 1개: "개인채무자 FAQ (부서 10 전용 시험)" — 부서 10 사람만 검색된다. 빼려면 `--no-test`
+- 처음에는 약 10분 (조각 528개 + 23개). 다시 돌려도 이미 있는 문서는 건너뛴다
+- 확인: 화면 왼쪽 **사내 문서** 에 "전사 공개 문서 10개 · 검색 조각 528개"
 
 ## 자주 막히는 곳
 
