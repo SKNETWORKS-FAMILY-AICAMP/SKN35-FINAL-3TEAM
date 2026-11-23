@@ -7,16 +7,16 @@
 -- 2026-11-20 v5 제안(erd_v5_schema.postgres.sql) 일부 반영. 이름은 코드와 같은 dept_id·security_grade 를 유지했다.
 --   반영: agent 생성·수정 시각, agent_template(+tool), agent_assignment, agent_knowledge,
 --         message·tool_call.has_work_data, audit_log 확장(event_type·target),
---         document.category·status, document_version 메타(sha256·시행일·파싱본), chunk.heading_path,
---         work_file(session_document 대체), output_file, output_source
---   바꿔서 반영: document.scope 는 남기되 personal 을 뺐다 (개인 파일은 work_file 로). 부서 문서는 계속 지원.
+--         doc.category·status, doc_version 메타(sha256·시행일·파싱본), chunk.heading_path,
+--         work_file(session_doc 대체), output_file, output_source
+--   바꿔서 반영: doc.scope 는 남기되 personal 을 뺐다 (개인 파일은 work_file 로). 부서 문서는 계속 지원.
 --   보류: share_request_file, agent_attachment, output_publish_request, user_memory (흐름이 정해지면 추가)
 
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- ── 조직 ────────────────────────────────────────────────
 
-CREATE TABLE department (
+CREATE TABLE dept (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name          VARCHAR(100) NOT NULL,
     head_user_id  BIGINT  -- FK 는 users 생성 후 아래에서 추가 (순환 참조)
@@ -26,13 +26,13 @@ CREATE TABLE users (
     id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     login_id        VARCHAR(100) NOT NULL UNIQUE,
     name            VARCHAR(100) NOT NULL,
-    dept_id         BIGINT NOT NULL REFERENCES department (id),
+    dept_id         BIGINT NOT NULL REFERENCES dept (id),
     position        VARCHAR(50),
     security_grade  INT NOT NULL DEFAULT 1
 );
 
-ALTER TABLE department
-    ADD CONSTRAINT fk_department_head FOREIGN KEY (head_user_id) REFERENCES users (id);
+ALTER TABLE dept
+    ADD CONSTRAINT fk_dept_head FOREIGN KEY (head_user_id) REFERENCES users (id);
 
 CREATE TABLE user_role (
     role     VARCHAR(50) NOT NULL CHECK (role IN ('admin', 'dept_head', 'member')),
@@ -95,7 +95,7 @@ CREATE TABLE agent_share_request (
 -- 관리자가 다른 부서에 더 배정할 수 있다.
 CREATE TABLE agent_assignment (
     agent_id     BIGINT NOT NULL REFERENCES agent (id) ON DELETE CASCADE,
-    dept_id      BIGINT NOT NULL REFERENCES department (id) ON DELETE CASCADE,
+    dept_id      BIGINT NOT NULL REFERENCES dept (id) ON DELETE CASCADE,
     assigned_by  BIGINT NOT NULL REFERENCES users (id),
     assigned_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (agent_id, dept_id)
@@ -199,7 +199,7 @@ CREATE TABLE audit_log (
     approval            VARCHAR(20) CHECK (approval IN ('approved', 'rejected', 'timeout')),
     executed            BOOLEAN NOT NULL DEFAULT FALSE,
     tool_ok             BOOLEAN,  -- 실행했을 때 툴 성공 여부, 실행 안 했으면 NULL
-    target_type         VARCHAR(30) CHECK (target_type IN ('document', 'work_file', 'output_file', 'agent')),
+    target_type         VARCHAR(30) CHECK (target_type IN ('doc', 'work_file', 'output_file', 'agent')),
     target_id           BIGINT,
     ts                  TIMESTAMPTZ NOT NULL DEFAULT now(),
     CHECK (event_type <> 'tool_call'
@@ -214,10 +214,10 @@ CREATE INDEX idx_audit_log_target  ON audit_log (target_type, target_id);
 -- ── 문서 (사내 지식) ────────────────────────────────────
 -- 관리자(또는 부서 관리자)가 등록한 문서만 들어간다. 직원이 대화에 올린 파일은 work_file 로 간다.
 
-CREATE TABLE document (
+CREATE TABLE doc (
     id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     owner_user_id   BIGINT NOT NULL REFERENCES users (id),       -- 등록한 사람
-    owner_dept_id   BIGINT NOT NULL REFERENCES department (id),  -- 관리 책임 부서 (scope=dept 면 읽을 수 있는 부서)
+    owner_dept_id   BIGINT NOT NULL REFERENCES dept (id),  -- 관리 책임 부서 (scope=dept 면 읽을 수 있는 부서)
     title           VARCHAR(255) NOT NULL,
     category        VARCHAR(30) NOT NULL CHECK (category IN ('내규', '매뉴얼', '상품', '법령', '공문')),
     scope           VARCHAR(20) NOT NULL DEFAULT 'company' CHECK (scope IN ('dept', 'company')),
@@ -225,30 +225,30 @@ CREATE TABLE document (
     status          VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'retired'))  -- 폐지된 규정은 retired
 );
 
-CREATE TABLE document_version (
+CREATE TABLE doc_version (
     id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    document_id     BIGINT NOT NULL REFERENCES document (id) ON DELETE CASCADE,
+    doc_id     BIGINT NOT NULL REFERENCES doc (id) ON DELETE CASCADE,
     version         INT NOT NULL,
     is_current      BOOLEAN NOT NULL DEFAULT TRUE,
     file_name       VARCHAR(255) NOT NULL,
     mime_type       VARCHAR(100) NOT NULL,
-    storage_path    VARCHAR(500) NOT NULL,  -- knowledge/{document_id}/{version}/원본
+    storage_path    VARCHAR(500) NOT NULL,  -- knowledge/{doc_id}/{version}/원본
     status          VARCHAR(20) NOT NULL DEFAULT 'processing' CHECK (status IN ('processing', 'ready', 'failed')),
     sha256          CHAR(64) NOT NULL,                        -- 같은 파일 중복 등록 막기
     effective_date  DATE,                                     -- 시행일
     parse_profile   VARCHAR(20) NOT NULL DEFAULT 'accurate',  -- 파싱 설정
     parsed_path     VARCHAR(500),                             -- parse_result/1 JSON
     registered_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (document_id, version)
+    UNIQUE (doc_id, version)
 );
 
 -- 문서마다 현재 버전은 하나만
-CREATE UNIQUE INDEX uq_document_version_current ON document_version (document_id) WHERE is_current;
-CREATE UNIQUE INDEX uq_document_version_sha256  ON document_version (document_id, sha256);
+CREATE UNIQUE INDEX uq_doc_version_current ON doc_version (doc_id) WHERE is_current;
+CREATE UNIQUE INDEX uq_doc_version_sha256  ON doc_version (doc_id, sha256);
 
 CREATE TABLE chunk (
     id                   BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    document_version_id  BIGINT NOT NULL REFERENCES document_version (id) ON DELETE CASCADE,
+    doc_version_id  BIGINT NOT NULL REFERENCES doc_version (id) ON DELETE CASCADE,
     chunk_index          INT NOT NULL,
     page                 INT,
     content              TEXT NOT NULL,
@@ -256,11 +256,11 @@ CREATE TABLE chunk (
     scope                VARCHAR(20) NOT NULL CHECK (scope IN ('dept', 'company')),  -- 문서에서 상속
     security_grade       INT NOT NULL,     -- 문서에서 상속
     heading_path         TEXT[],           -- parse_result elements.heading_path (예: {제3장, 제42조})
-    embedding            vector(1024),     -- bge-m3 (EMBEDDING_DIM=1024)
-    UNIQUE (document_version_id, chunk_index)
+    embedding            halfvec(2048),    -- [0004] KURE-v3 (EMBEDDING_DIM=2048)
+    UNIQUE (doc_version_id, chunk_index)
 );
 
-CREATE INDEX idx_chunk_embedding ON chunk USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX idx_chunk_embedding ON chunk USING hnsw (embedding halfvec_cosine_ops);  -- [0004]
 CREATE INDEX idx_chunk_access    ON chunk (scope, owner_dept_id, security_grade);
 
 CREATE TABLE citation (
@@ -274,13 +274,13 @@ CREATE TABLE citation (
 CREATE TABLE agent_knowledge (
     id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     agent_id     BIGINT NOT NULL REFERENCES agent (id) ON DELETE CASCADE,
-    document_id  BIGINT REFERENCES document (id) ON DELETE CASCADE,
+    doc_id  BIGINT REFERENCES doc (id) ON DELETE CASCADE,
     category     VARCHAR(30) CHECK (category IN ('내규', '매뉴얼', '상품', '법령', '공문')),
-    CHECK ((document_id IS NULL) <> (category IS NULL))
+    CHECK ((doc_id IS NULL) <> (category IS NULL))
 );
 
 -- ── 작업 파일 ───────────────────────────────────────────
--- 직원이 이번 대화에서 쓰려고 직접 올린 파일 (예전 session_document 자리).
+-- 직원이 이번 대화에서 쓰려고 직접 올린 파일 (예전 session_doc 자리).
 -- 원본은 파싱을 확인하면 지우고, 파싱본만 만료 시각까지 둔다.
 -- 대화가 지워져도 이 행은 감사용으로 남는다 (session_id → NULL). 파일 실물은 정리 작업이 지운다.
 
@@ -332,13 +332,13 @@ CREATE TABLE output_source (
     id                   BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     output_id            BIGINT NOT NULL REFERENCES output_file (id) ON DELETE CASCADE,
     work_file_id         BIGINT REFERENCES work_file (id),
-    document_version_id  BIGINT REFERENCES document_version (id),
-    CHECK ((work_file_id IS NULL) <> (document_version_id IS NULL))
+    doc_version_id  BIGINT REFERENCES doc_version (id),
+    CHECK ((work_file_id IS NULL) <> (doc_version_id IS NULL))
 );
 
 -- ── 설명 (COMMENT ON) ───────────────────────────────────
 
-COMMENT ON TABLE department          IS '부서';
+COMMENT ON TABLE dept                IS '부서';
 COMMENT ON TABLE users               IS '사용자';
 COMMENT ON TABLE user_role           IS '사용자 역할 (admin > dept_head > member)';
 COMMENT ON TABLE agent_template      IS '관리자가 만든 에이전트 템플릿';
@@ -354,8 +354,8 @@ COMMENT ON TABLE tool_call           IS '툴 호출';
 COMMENT ON TABLE approval_request    IS 'ASK 판정 툴 호출의 승인 요청';
 COMMENT ON TABLE policy_rule         IS '권한 정책 규칙 (priority 순으로 처음 맞는 규칙 적용)';
 COMMENT ON TABLE audit_log           IS '감사 로그 (툴 호출, 문서 등록, 파일 업로드·삭제·내려받기, 에이전트 공유)';
-COMMENT ON TABLE document            IS '사내 문서 (관리자 등록)';
-COMMENT ON TABLE document_version    IS '문서 버전';
+COMMENT ON TABLE doc            IS '사내 문서 (관리자 등록)';
+COMMENT ON TABLE doc_version    IS '문서 버전';
 COMMENT ON TABLE chunk               IS '문서 청크 (권한 속성은 문서에서 상속)';
 COMMENT ON TABLE citation            IS '답변 근거';
 COMMENT ON TABLE agent_knowledge     IS '에이전트가 검색할 문서 (문서 또는 분류)';
@@ -363,7 +363,7 @@ COMMENT ON TABLE work_file           IS '작업 파일 (직원이 대화에 올�
 COMMENT ON TABLE output_file         IS 'AI 산출물';
 COMMENT ON TABLE output_source       IS '산출물을 만들 때 쓴 입력';
 
-COMMENT ON COLUMN department.head_user_id        IS '부서장 사용자 ID';
+COMMENT ON COLUMN dept.head_user_id              IS '부서장 사용자 ID';
 COMMENT ON COLUMN users.position                 IS '직급';
 COMMENT ON COLUMN users.security_grade           IS '보안등급';
 COMMENT ON COLUMN agent.scope                    IS '공개 범위 (personal, dept, company)';
@@ -387,11 +387,11 @@ COMMENT ON COLUMN audit_log.principal_snapshot   IS '판정 시점 요청자 속
 COMMENT ON COLUMN audit_log.approval             IS 'ASK 일 때 승인 결과 (approved, rejected, timeout)';
 COMMENT ON COLUMN audit_log.tool_ok              IS '실행했을 때 툴 성공 여부 (실행 안 했으면 NULL)';
 COMMENT ON COLUMN audit_log.ts                   IS '판정 시각 (UTC)';
-COMMENT ON COLUMN document.category              IS '분류 (내규, 매뉴얼, 상품, 법령, 공문)';
-COMMENT ON COLUMN document.scope                 IS '공개 범위 (dept, company)';
-COMMENT ON COLUMN document.owner_dept_id         IS '관리 책임 부서';
-COMMENT ON COLUMN document_version.is_current    IS '현재 버전 여부';
-COMMENT ON COLUMN document_version.parsed_path   IS 'parse_result/1 JSON 경로';
+COMMENT ON COLUMN doc.category              IS '분류 (내규, 매뉴얼, 상품, 법령, 공문)';
+COMMENT ON COLUMN doc.scope                 IS '공개 범위 (dept, company)';
+COMMENT ON COLUMN doc.owner_dept_id         IS '관리 책임 부서';
+COMMENT ON COLUMN doc_version.is_current    IS '현재 버전 여부';
+COMMENT ON COLUMN doc_version.parsed_path   IS 'parse_result/1 JSON 경로';
 COMMENT ON COLUMN chunk.heading_path             IS '제목 경로 (parse_result elements.heading_path)';
 COMMENT ON COLUMN chunk.embedding                IS 'bge-m3 임베딩 (1024차원)';
 COMMENT ON COLUMN citation.score                 IS '검색 유사도';

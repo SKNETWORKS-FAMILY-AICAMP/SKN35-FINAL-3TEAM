@@ -1,17 +1,9 @@
-"""문서 원문 열람 툴과 문서 접근 규칙 (SYS-03: 권한 필터는 툴 안에서 강제한다).
-
-읽을 수 있는 조건:
-- 요청자 보안등급(security_grade) >= 문서 보안등급
-- 공개 범위(scope): company 는 모두, dept 는 같은 부서(dept_id)만. personal 은 아직 지원 안 함(거부).
-지금은 data/fixtures/document_chunks.json 을 읽는다. 벡터 DB 가 붙으면 검색 쪽만 바뀐다.
-"""
-
-import asyncio
 import json
+import asyncio
 from pathlib import Path
-
-from contracts.harness import ToolResult, ToolSpec
-from contracts.permission import Principal, ToolCall
+from contracts.permission import Principal
+from contracts.harness import ToolSpec, ToolResult
+from contracts.permission import ToolCall, Principal
 
 def load_doc_chunks(path: Path) -> list[dict]:
     with path.open("r", encoding="utf-8") as file:
@@ -71,11 +63,11 @@ def find_readable_chunk(chunks : list[dict], chunk_id : str, principal : Princip
         return chunk
     return None
 
-class ReadDocumentTool:
+class ReadDocTool:
     spec = READ_DOC_SPEC
 
     def __init__(self, doc_path:Path)->None:
-        self.document_path = doc_path
+        self.doc_path = doc_path
 
     async def run(self, call : ToolCall) -> ToolResult:
         chunk_id = call.arguments.get("chunk_id")
@@ -90,7 +82,7 @@ class ReadDocumentTool:
         try:
             chunks = await asyncio.to_thread(
                 load_doc_chunks,
-                self.document_path,
+                self.doc_path,
             )
         except (OSError, UnicodeError, json.JSONDecodeError):
             return ToolResult(call.call_id, False, "문서 목록을 읽을 수 없습니다.")

@@ -12,6 +12,16 @@ import tempfile
 import olefile
 
 
+def _fix_text(s: str) -> str:
+    """syhwp 0.0.8은 HWP 글(UTF-16)을 한 칸(code unit)씩 chr()로 읽는다(syhwp/_hwp5.py).
+    그래서 기본 다국어 평면 밖 글자(예: 한글 프로그램 전용 기호 U+F012B)가 짝 없는 서러게이트 두 칸으로 깨지고,
+    이 글을 UTF-8로 저장하면 UnicodeEncodeError로 멈춘다. 여기서 두 칸을 다시 한 글자로 합친다.
+    짝이 없는 칸이 남으면 U+FFFD로 바꾼다(저장이 멈추지 않게)."""
+    if not any(0xD800 <= ord(ch) <= 0xDFFF for ch in s):
+        return s
+    return s.encode("utf-16-le", "surrogatepass").decode("utf-16-le", "replace")
+
+
 def header_flags(data: bytes) -> dict:
     ole = olefile.OleFileIO(io.BytesIO(data))
     h = ole.openstream("FileHeader").read()
@@ -44,11 +54,12 @@ def read_hwp(data: bytes, allow_distribution: bool = False) -> dict:
     for b in d.blocks:
         name = type(b).__name__
         if name == "Paragraph":
-            if b.text.strip():
-                blocks.append({"type": "para", "text": b.text.strip(), "style_level": None})
+            text = _fix_text(b.text)
+            if text.strip():
+                blocks.append({"type": "para", "text": text.strip(), "style_level": None})
         elif name == "Table":
-            cells = sorted((c.row, c.col, c.row_span, c.col_span, " ".join(c.text.split())) for c in b.cells)
+            cells = sorted((c.row, c.col, c.row_span, c.col_span, " ".join(_fix_text(c.text).split())) for c in b.cells)
             blocks.append({"type": "table", "rows": b.n_rows, "cols": b.n_cols, "cells": cells})
         elif name == "Equation":
-            blocks.append({"type": "para", "text": f"[수식: {b.script}]", "style_level": None})
+            blocks.append({"type": "para", "text": f"[수식: {_fix_text(b.script)}]", "style_level": None})
     return {"status": "ok", "blocks": blocks, "flags": flags}

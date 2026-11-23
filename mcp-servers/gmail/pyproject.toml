@@ -1,0 +1,24 @@
+[project]
+name = "gmail-mcp"
+version = "0.1.0"
+description = "MCP server: 팀 Gmail 계정 연동 (메일 검색·읽기·발송) + 증분 동기화 · 권한 동기화"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=2.3,<3",
+    "pydantic>=2.7",
+    "google-api-python-client>=2.100.0",
+    "google-auth>=2.23.0",
+    "google-auth-oauthlib>=1.1.0",
+]
+
+[project.scripts]
+gmail-mcp = "gmail_mcp.server:main"
+gmail-mcp-auth = "gmail_mcp.google_auth:setup_main"
+gmail-sync = "gmail_mcp.runner:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gmail_mcp"]

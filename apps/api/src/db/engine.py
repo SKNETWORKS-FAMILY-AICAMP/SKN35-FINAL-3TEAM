@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
@@ -36,6 +37,15 @@ def get_engine() -> AsyncEngine:
 async def get_session() -> AsyncIterator[AsyncSession]:
     """FastAPI 의존성: `session: AsyncSession = Depends(get_session)`. 요청이 끝나면 닫는다.
     커밋은 쓰는 쪽이 명시적으로 한다 (오류가 나면 커밋 안 된 변경은 버려진다)."""
+    get_engine()
+    assert _sessions is not None
+    async with _sessions() as session:
+        yield session
+
+
+@asynccontextmanager
+async def session_scope() -> AsyncIterator[AsyncSession]:
+    """요청 밖(툴·스크립트)에서 세션 하나를 열고 닫는다. 커밋은 쓰는 쪽이 한다."""
     get_engine()
     assert _sessions is not None
     async with _sessions() as session:

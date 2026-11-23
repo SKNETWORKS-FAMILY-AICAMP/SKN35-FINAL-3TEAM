@@ -1,18 +1,18 @@
 # -*- coding: utf-8 -*-
 """문서 파서 진입점: 파일 하나 → 구조화된 결과 (RAG 수집·프롬프트용 문서 공용).
 
-    from knowledge.ingestion.parsers.pipeline import DocumentParser
+    from knowledge.ingestion.parsers.pipeline import DocParser
 
-    parser = DocumentParser()                              # 모델은 처음 쓸 때 한 번만 올린다
-    r = parser.parse("원본.pdf")                            # 경로 (= document_version.storage_path)
+    parser = DocParser()                              # 모델은 처음 쓸 때 한 번만 올린다
+    r = parser.parse("원본.pdf")                            # 경로 (= doc_version.storage_path)
     r = parser.parse(data, file_name="원본.hwpx")           # 업로드 바이트 (프롬프트용 첨부)
 
-    r.status      # ok / rejected / failed      r.db_status  # ready / failed (document_version.status)
+    r.status      # ok / rejected / failed      r.db_status  # ready / failed (doc_version.status)
     r.reason      # 거절·실패 이유
     r.markdown    # 프롬프트에 바로 넣을 본문 (표는 마크다운 표)
     r.elements    # RAG 청킹용 항목 목록 (종류·글·쪽·위치·제목 경로·표 칸·표 만든 방법)
     r.log         # 단계별 처리 기록 (감사용)
-    r.save_beside("원본.pdf", document_version_id=123)    # 원본 옆 parsed/123.json
+    r.save_beside("원본.pdf", doc_version_id=123)    # 원본 옆 parsed/123.json
 
 형식별 경로 (router 판별 — 확장자를 믿지 않는다)
   HWPX            → 우리 추출기 (readers.hwpx) — 원본 구조 그대로
@@ -60,32 +60,32 @@ class ParseResult:
     markdown: str = ""
     log: dict = field(default_factory=dict)
     seconds: float = 0.0
-    document: object = None                      # DoclingDocument (있으면) — JSON 에는 docling_document 로 들어간다
+    doc: object = None                      # DoclingDocument (있으면) — JSON 에는 docling_doc 로 들어간다
 
     @property
     def db_status(self) -> str:
-        """document_version.status 값 (processing → ready / failed)."""
+        """doc_version.status 값 (processing → ready / failed)."""
         return "ready" if self.status == "ok" else "failed"
 
-    def to_dict(self, document_version_id=None, include_docling: bool = True) -> dict:
-        d = {"schema": SCHEMA, "parser_version": PARSER_VERSION, "document_version_id": document_version_id,
+    def to_dict(self, doc_version_id=None, include_docling: bool = True) -> dict:
+        d = {"schema": SCHEMA, "parser_version": PARSER_VERSION, "doc_version_id": doc_version_id,
              "file_name": self.file_name, "status": self.status, "db_status": self.db_status, "reason": self.reason,
              "route": self.route, "pages": self.pages, "seconds": self.seconds,
              "elements": self.elements, "markdown": self.markdown, "log": self.log}
-        if include_docling and self.document is not None:
-            d["docling_document"] = self.document.export_to_dict()
+        if include_docling and self.doc is not None:
+            d["docling_doc"] = self.doc.export_to_dict()
         return d
 
-    def save_beside(self, original_path, document_version_id, include_docling: bool = True) -> Path:
-        """원본 옆 parsed/{document_version_id}.json 으로 저장하고 그 경로를 돌려준다 (파서 입출력 계약)."""
-        out = Path(original_path).parent / "parsed" / f"{document_version_id}.json"
+    def save_beside(self, original_path, doc_version_id, include_docling: bool = True) -> Path:
+        """원본 옆 parsed/{doc_version_id}.json 으로 저장하고 그 경로를 돌려준다 (파서 입출력 계약)."""
+        out = Path(original_path).parent / "parsed" / f"{doc_version_id}.json"
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(self.to_dict(document_version_id, include_docling), ensure_ascii=False), encoding="utf-8")
+        out.write_text(json.dumps(self.to_dict(doc_version_id, include_docling), ensure_ascii=False), encoding="utf-8")
         return out
 
 
 # ------------------------------------------------------------------ 파서
-class DocumentParser:
+class DocParser:
     def __init__(self, models_dir: str | Path | None = None, timeout: float = 600.0):
         """models_dir: 모델 폴더. 없으면 환경변수 PARSER_MODELS_DIR. 둘 다 없으면 PDF·이미지는 failed(이유: 모델 경로 없음),
         HWPX·HWP·DOCX 등 모델이 필요 없는 형식은 그대로 된다."""
@@ -158,7 +158,7 @@ class DocumentParser:
         if r.encoding and r.encoding.lower().replace("-", "") not in ("utf8", "ascii"):
             data = data.decode(r.encoding, errors="replace").encode("utf-8")     # Docling 은 모르면 cp1252 로 추측한다
         if r.format in ("pdf", "image") and (self.models is None or not self.models.is_dir()):
-            return ParseResult("failed", f"모델 폴더 없음 — DocumentParser(models_dir=...) 나 환경변수 {MODELS_ENV} 로 지정", name, info)
+            return ParseResult("failed", f"모델 폴더 없음 — DocParser(models_dir=...) 나 환경변수 {MODELS_ENV} 로 지정", name, info)
         stream = DocumentStream(name=f"{Path(name).stem}{r.docling_ext or path.suffix}", stream=__import__("io").BytesIO(data))
         conv = self._docling().convert(stream, raises_on_error=False)
         status = str(getattr(conv.status, "value", conv.status))
@@ -185,7 +185,7 @@ class DocumentParser:
         from knowledge.ingestion.parsers.pdf.rule_tables import apply_rule_tables
         from knowledge.ingestion.parsers.pdf.table_merge import merge_split_tables
         from knowledge.ingestion.parsers.pdf.table_spans import fix_table_spans
-        from knowledge.ingestion.parsers.pdf.text_fidelity import FidelityLog, fix_document, fix_words, read_quote_chars
+        from knowledge.ingestion.parsers.pdf.text_fidelity import FidelityLog, fix_doc, fix_words, read_quote_chars
 
         def tag(obj, **kw):
             """표 객체에 '만든 방법'을 붙인다 (각 단계 log.items = 그 단계가 바꾸거나 넣은 표 객체, log 기록과 같은 순서)."""
@@ -208,7 +208,7 @@ class DocumentParser:
             if scan:
                 imgs = ocr_reread.page_images_from_pdf(raw, scan)
         if imgs:
-            log["ocr_reread"] = ocr_reread.reread_document(doc, self._ocr(), imgs).pages
+            log["ocr_reread"] = ocr_reread.reread_doc(doc, self._ocr(), imgs).pages
         log["picture_text"] = lift_picture_text(doc, words if words is not None else {}).pictures
         log["table_spans"] = fix_table_spans(doc, lines, words).tables
         if fmt == "pdf" and lines and words:
@@ -239,7 +239,7 @@ class DocumentParser:
         mlog = merge_split_tables(doc, lines)
         log["table_merge"] = {"merged": mlog.merged, "refused": mlog.refused}
         if tflog is not None:
-            fix_document(doc, quotes, tflog)
+            fix_doc(doc, quotes, tflog)
             log["text_fidelity"] = {"words": tflog.words, "items": tflog.items, "cells": tflog.cells,
                                     "circled": tflog.circled, "skipped": len(tflog.skipped)}
         return log
@@ -248,7 +248,7 @@ class DocumentParser:
     def _result(self, doc, name: str, info: dict, sources: dict, log: dict, default_table_source: str) -> ParseResult:
         return ParseResult("ok", "", name, info, pages=len(doc.pages) or None,
                            elements=_elements(doc, sources, default_table_source), markdown=doc.export_to_markdown(),
-                           log=log, document=doc)
+                           log=log, doc=doc)
 
     # ---- 무거운 것은 처음 쓸 때 한 번만 -----------------------------------------
     def _docling(self):
@@ -277,8 +277,9 @@ class DocumentParser:
 
 # ------------------------------------------------------------------ 항목 목록 (청킹용)
 def _elements(doc, sources: dict, default_table_source: str) -> list[dict]:
-    """DoclingDocument → [{type, text, page, pages, bbox(l,t,r,b 왼쪽 위 원점), heading_path, (표면) table}] 읽는 순서대로."""
-    from docling_core.types.doc import PictureItem, SectionHeaderItem, TableItem, TextItem, TitleItem
+    """DoclingDocument → [{type, text, page, pages, bbox(l,t,r,b 왼쪽 위 원점), heading_path, (표면) table, (목록 항목이면) marker}] 읽는 순서대로.
+    청킹용 필드 2개: marker = 목록 항목의 번호("1.", "가." 등, PDF에서 본문과 따로 나옴), 표 칸의 h = Docling이 머리행으로 본 칸."""
+    from docling_core.types.doc import ListItem, PictureItem, SectionHeaderItem, TableItem, TextItem, TitleItem
 
     out, path = [], []                             # path: [(단계, 제목)]
     for it, _ in doc.iterate_items():

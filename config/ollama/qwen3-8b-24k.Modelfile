@@ -1,0 +1,4 @@
+# 채팅용 qwen3:8b 에 컨텍스트 한도 24,576 토큰을 붙인 모델.
+# 만들기: ollama create qwen3:8b-24k -f config/ollama/qwen3-8b-24k.Modelfile
+FROM qwen3:8b
+PARAMETER num_ctx 24576

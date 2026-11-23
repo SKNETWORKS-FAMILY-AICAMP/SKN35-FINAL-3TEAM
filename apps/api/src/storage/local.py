@@ -19,7 +19,7 @@ class StorageKeyError(ValueError):
 class StoredFile:
     key: str      # DB 의 storage_path 에 넣을 값
     size: int     # 바이트 (work_file.size_bytes)
-    sha256: str   # 64자 16진수 (document_version.sha256 등 — 중복 등록 막기·감사)
+    sha256: str   # 64자 16진수 (doc_version.sha256 등 — 중복 등록 막기·감사)
 
 
 class LocalStorage:

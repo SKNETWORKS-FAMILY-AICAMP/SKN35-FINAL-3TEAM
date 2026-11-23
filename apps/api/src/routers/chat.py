@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+import asyncio
+import sqlite3
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from openai import APIConnectionError, APIError, APITimeoutError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from contracts.permission import Principal
 from routers.deps import current_user, get_services
@@ -13,6 +15,7 @@ from services import agents as agent_rules
 from services.agents import Agent
 from services.chat import send_message
 from services.container import AppServices
+from services.uploads import MAX_ATTACHMENTS, attachment_context
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -22,9 +25,18 @@ class ChatRequest(BaseModel):
     # Swagger 예시에 session_id 를 넣지 않는다 ("string" 이 그대로 가면 404)
     model_config = {"json_schema_extra": {"examples": [{"content": "123 곱하기 45 계산해줘"}]}}
 
-    content: str = Field(min_length=1, max_length=4000)
+    content: str = Field(default="", max_length=4000)
     session_id: str | None = None  # 없으면 새 세션
     agent_id: str | None = None  # 새 세션을 열 때 쓸 에이전트 (없으면 기본 에이전트). 이어 쓸 때는 무시
+    file_ids: list[str] = Field(default_factory=list, max_length=MAX_ATTACHMENTS)
+
+    @model_validator(mode="after")
+    def require_message(self):
+        if not self.content.strip() and not self.file_ids:
+            raise ValueError("메시지 또는 첨부 파일이 필요합니다.")
+        if len(set(self.file_ids)) != len(self.file_ids):
+            raise ValueError("같은 파일을 중복 첨부할 수 없습니다.")
+        return self
 
 
 class ToolEventOut(BaseModel):
@@ -93,14 +105,28 @@ async def post_message(
 ) -> ChatResponse:
     if req.session_id is None:
         agent = usable_agent(svc, user, req.agent_id)
-        session = svc.sessions.create(user.user_id, agent.agent_id if agent else None)
+        session = None
     else:
         session = svc.sessions.get_owned(req.session_id, user.user_id)
         if session is None:
             raise HTTPException(404, "세션을 찾을 수 없습니다")
         agent = usable_agent(svc, user, session.agent_id, existing=True)
+    attachments = []
+    if req.file_ids:
+        if await svc.tools.get("parse_doc") is None or (agent is not None and "parse_doc" not in agent.tools):
+            raise HTTPException(409, "이 에이전트에 업로드 문서 읽기 도구를 추가해 주세요.")
+        try:
+            for file_id in req.file_ids:
+                item = await asyncio.to_thread(svc.uploads.get_owned, file_id, user.user_id)
+                if item is None:
+                    raise HTTPException(404, "열람 가능한 첨부 파일을 찾을 수 없습니다.")
+                attachments.append(item)
+        except (OSError, sqlite3.Error) as error:
+            raise HTTPException(503, "첨부 파일 정보를 읽을 수 없습니다.") from error
+    if session is None:
+        session = svc.sessions.create(user.user_id, agent.agent_id if agent else None)
     try:
-        turn = await send_message(svc, user, session, req.content, agent)
+        turn = await send_message(svc, user, session, attachment_context(req.content, attachments), agent)
     except (APITimeoutError, APIConnectionError, APIError) as e:  # NFR-06: LLM 장애는 사용자에게 알린다
         log.warning("LLM 호출 실패: %s", e)
         raise HTTPException(502, "LLM 서버 응답이 없습니다. 잠시 후 다시 시도해 주세요.") from e

@@ -268,7 +268,7 @@ def page_images_from_pdf(pdf_bytes: bytes, pages: set[int]) -> dict[int, list]:
     return out
 
 
-def reread_document(doc: DoclingDocument, engine, images: dict[int, list]) -> RereadLog:
+def reread_doc(doc: DoclingDocument, engine, images: dict[int, list]) -> RereadLog:
     """images에 있는 쪽(글자층 없는 쪽)마다 다시 읽기를 반영한다."""
     log = RereadLog()
     for page_no, imgs in sorted(images.items()):

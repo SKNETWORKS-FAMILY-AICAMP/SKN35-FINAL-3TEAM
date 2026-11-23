@@ -3,7 +3,7 @@ import json
 import pytest
 
 from contracts.permission import Principal, ToolCall
-from tools.search_doc import SearchDocumentsTool
+from tools.search_doc import SearchDocsTool
 
 
 @pytest.mark.parametrize("length", [0, 199, 200, 201])
@@ -28,7 +28,7 @@ async def test_search_preview_and_access_filter(tmp_path, length):
     principal = Principal("kim", ("member",), {"dept_id": 10, "security_grade": 2})
     call = ToolCall("search", "search_doc", {"query": "서류 반려"}, principal, "session")
 
-    result = await SearchDocumentsTool(path).run(call)
+    result = await SearchDocsTool(path).run(call)
 
     assert result.ok
     payload = json.loads(result.content)

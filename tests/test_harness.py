@@ -92,7 +92,7 @@ def test_template_reply_deny_includes_reason_and_done_results():
     text = template_reply(Denial("c2", "delete_file", "deny", "부서장만 삭제 가능"),
                           [DoneTool("summarize", "예산 10% 증액")])
     assert "부서장만 삭제 가능." in text and "summarize: 예산 10% 증액" in text
-    assert text.index("완료된 작업") < text.index("delete_file")
+    assert text.index("delete_file") < text.index("완료된 작업")
 
 
 def test_template_reply_rejected_does_not_blame_permission():

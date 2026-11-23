@@ -68,6 +68,22 @@ async def test_no_tools_param_when_empty_and_thinking_stripped():
     assert resp.message.content == "안녕하세요"
 
 
+async def test_required_tool_request_is_scoped_to_the_given_tool():
+    from contracts.harness import RequiredToolLLMClient
+
+    seen = []
+    llm = fake_llm({"content": None, "tool_calls": [
+        {"id": "required", "type": "function", "function": {"name": "search", "arguments": '{"q":"test"}'}},
+    ]}, seen)
+    assert isinstance(llm, RequiredToolLLMClient)
+    reply = await llm.chat_required_tool([Message("user", "검색해줘")], SEARCH)
+    assert seen[0]["tool_choice"] == {"type": "function", "function": {"name": "search"}}
+    assert [item["function"]["name"] for item in seen[0]["tools"]] == ["search"]
+    assert reply.message.tool_calls[0].tool_name == "search"
+    await llm.chat([Message("user", "일반 질문")], [SEARCH])
+    assert "tool_choice" not in seen[1]
+
+
 def test_parse_arguments_edge_cases():
     assert parse_arguments("") == {}
     assert parse_arguments('{"a": 1}') == {"a": 1}

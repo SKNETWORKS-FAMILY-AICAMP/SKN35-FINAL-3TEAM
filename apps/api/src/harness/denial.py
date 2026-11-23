@@ -1,13 +1,9 @@
-"""권한 거부로 run 을 멈출 때의 마무리 답변 (계약 규칙 8-c).
-
-- 성공한 툴 실행이 없으면 template_reply() 고정 문구로 바로 답한다.
-- 있으면 wrapup_instruction() 을 붙여 LLM 을 tools=[] 로 한 번 더 부른다.
-  (qwen3:8b 실험에서 거부 종류·사유·끝난 결과를 지시문에 직접 넣어야 안내가 정확했다)
-"""
+"""거부·승인 거절·시간 초과는 서버의 확정 문구와 실제 완료 결과로 안내한다."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 
 from contracts.harness import Denial
 
@@ -18,6 +14,7 @@ _MAX_RESULT_CHARS = 300
 class DoneTool:
     tool_name: str
     content: str
+    name: str = ""  # 도구 코드 이름. tool_name은 화면 표시 이름이다.
 
 
 def _clip(text: str) -> str:
@@ -28,6 +25,23 @@ def _clip(text: str) -> str:
 def _sentence(text: str) -> str:
     text = text.strip()
     return text if text.endswith((".", "!", "?")) else text + "."
+
+
+def _done_summary(done: DoneTool) -> str:
+    if done.name == "get_review_case":
+        try:
+            data = json.loads(done.content)
+        except (ValueError, TypeError):
+            data = None
+        if isinstance(data, dict) and isinstance(data.get("status"), str):
+            lines = [f"- {done.tool_name}", f"  - 상태: {_clip(data['status'])}"]
+            if isinstance(data.get("case_id"), str):
+                lines.insert(1, f"  - 심사 건: {_clip(data['case_id'])}")
+            missing = data.get("missing_docs")
+            if isinstance(missing, list) and all(isinstance(item, str) for item in missing):
+                lines.append(f"  - 누락 서류: {_clip(', '.join(missing)) if missing else '없음'}")
+            return "\n".join(lines)
+    return f"- {done.tool_name}: {_clip(done.content)}"
 
 
 def template_reply(denial: Denial, done: list[DoneTool] = ()) -> str:
@@ -49,8 +63,8 @@ def template_reply(denial: Denial, done: list[DoneTool] = ()) -> str:
             "필요하면 내용을 바꿔 다시 요청해 주세요."
         )
     if done:
-        finished = "\n".join(f"- {d.tool_name}: {_clip(d.content)}" for d in done)
-        body = f"완료된 작업:\n{finished}\n\n{body}"
+        finished = "\n".join(_done_summary(d) for d in done)
+        body = f"{body}\n\n완료된 작업:\n{finished}"
     return body
 
 
@@ -67,6 +81,7 @@ _NEXT = {
 
 
 def wrapup_instruction(denial: Denial, done: list[DoneTool]) -> str:
+    """기존 호출부와의 호환용. 실행 하네스는 모델 마무리 대신 template_reply를 사용한다."""
     finished = "\n".join(f"- {d.tool_name}: {_clip(d.content)}" for d in done)
     return (
         "[안내 지시] 이번 요청은 여기서 끝났다. 더 이상 도구를 쓸 수 없다.\n"

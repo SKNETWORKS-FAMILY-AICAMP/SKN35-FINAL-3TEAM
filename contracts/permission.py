@@ -1,5 +1,4 @@
 """권한 계약 (하네스 ↔ 권한).
-
 하네스는 툴을 실행하기 직전에 반드시 await PermissionChecker.check() 를 호출한다.
 모든 프로토콜 메서드는 async 다 (정책·감사 저장소가 DB/네트워크일 수 있으므로).
 - ALLOW: 바로 실행
@@ -65,7 +64,6 @@ class PermissionResult:
 class PermissionChecker(Protocol):
     async def check(self, call: ToolCall) -> PermissionResult: ...
 
-
 # 승인 요청의 결과 (DB approval_request.status 와 같은 값)
 #   approved  사용자가 승인함 → 실행
 #   rejected  사용자가 거절함
@@ -95,6 +93,7 @@ class AuditRecord:
     executed: bool = False
     tool_ok: bool | None = None  # executed 일 때 툴이 성공(ToolResult.ok)했는지. 실행 안 했으면 None
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    tool_ok: bool | None = None
 
 
 @runtime_checkable

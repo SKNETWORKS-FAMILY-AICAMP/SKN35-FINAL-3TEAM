@@ -1,12 +1,22 @@
 # DB 마이그레이션 (Alembic)
 
-PostgreSQL 16 + pgvector 표 구조 변경 이력. 저장소 맨 위에서 실행한다. 접속 주소는 `.env` 의 `DATABASE_URL`.
+PostgreSQL 16 + pgvector 표 구조 변경 이력. 저장소 맨 위에서 실행한다.
+
+`.env` 에 넣을 값:
+
+```
+DATABASE_URL=postgresql+asyncpg://postgres:비밀번호@127.0.0.1:5432/agent_platform
+STORAGE_ROOT=          # 원본 파일 저장 폴더. 비우면 data/storage
+```
 
 | 파일 | 내용 |
 |---|---|
 | `versions/0001_team_erd.py` | 팀 ERD 그대로 (`docs/architecture/schema.postgres.sql`, 24개 표). 손으로 고치지 않는다 |
 | `versions/0002_db_hardening.py` | SSO 연결 칸, 보안등급 1~5, 감사 로그 추가만 허용, 앱 전용 역할 `agent_app` |
 | `versions/0003_rename_document_id.py` | `document_id` → `doc_id` (document_version·agent_knowledge), `document_version_id` → `doc_version_id` (chunk·output_source) |
+| `versions/0004_chunk_embedding_halfvec.py` | **[초안, DB 담당 확인 전]** `chunk.embedding` vector(1024) → halfvec(2048) (KURE-v3). 기존 벡터는 비워지므로 색인을 다시 돌린다 |
+| `versions/0005_rename_department_to_dept.py` | 테이블 `department` → `dept` (제약·시퀀스 이름 포함) |
+| `versions/0006_rename_document_to_doc.py` | 테이블 `document` → `doc`, `document_version` → `doc_version` (제약·인덱스·시퀀스 이름 포함), `audit_log.target_type` 에 `'doc'` 추가 |
 
 ## 자주 쓰는 명령
 

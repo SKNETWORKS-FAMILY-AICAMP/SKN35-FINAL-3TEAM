@@ -113,6 +113,13 @@ class LLMClient(Protocol):
     async def chat(self, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse: ...
 
 
+@runtime_checkable
+class RequiredToolLLMClient(LLMClient, Protocol):
+    """명시적으로 요청된 실행 단계에서 특정 도구 호출을 요구할 수 있는 선택 기능."""
+
+    async def chat_required_tool(self, messages: list[Message], tool: ToolSpec) -> LLMResponse: ...
+
+
 @dataclass(frozen=True)
 class ToolResult:
     call_id: str
@@ -159,12 +166,11 @@ class ToolRegistry(Protocol):
 #    b. 같은 응답의 남은 tool_call 은 실행하지 않는다. 권한 검사·감사 로그 없이
 #       "실행하지 않음" 툴 메시지만 붙인다 (규칙 2 유지).
 #    c. 마무리 답변 (final_message, role="assistant"):
-#       - 이번 run 에서 성공(ok)한 툴 실행이 하나도 없으면: LLM 을 부르지 않고 고정 문구로 답한다.
+#       - LLM 을 추가 호출하지 않고 서버가 거부 종류에 맞는 고정 문구를 만든다.
 #         문구에는 PermissionResult.reason 을 포함한다 (DENY 일 때).
 #         툴은 ToolSpec.label(표시 이름)로 부른다.
-#       - 성공한 툴 실행이 있으면: chat() 을 tools=[] 로 딱 한 번 더 불러 끝난 결과와 막힌 이유를
-#         함께 안내하게 한다. 이 호출에 넣는 지시문은 RunResult.messages 에 남기지 않는다.
-#         이 호출이 실패(예외)하면 고정 문구로 대신한다. 어느 쪽이든 llm_calls 에 센다.
+#       - 이번 run 에서 성공(ok)한 툴이 있으면 실제 완료 결과를 별도 항목으로 함께 안내한다.
+#         실행하지 않은 작업의 성공 여부를 LLM 에게 다시 생성시키지 않는다.
 #    d. stop_reason="denied", RunResult.denial 에 거부 정보를 담는다.
 #       Denial.kind 는 deny(정책) / rejected(사용자 거절) / timeout(승인 시간 초과) 를 구분한다.
 #    (툴 실행 실패·없는 툴은 거부가 아니다. 그때는 에러를 돌려주고 계속 진행한다.)

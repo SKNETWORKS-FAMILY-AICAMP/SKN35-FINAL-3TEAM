@@ -2,10 +2,15 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   ArrowUp, Bot, Braces, Check, ChevronRight, CircleAlert, FileText, Inbox, LayoutTemplate, ListChecks,
-  LoaderCircle, Lock, Pencil, MessageSquare, Plus, Power, PowerOff, Search, Settings2, Share2, ShieldCheck,
+  LoaderCircle, Lock, Pencil, MessageSquare, Paperclip, Plus, Power, PowerOff, Search, Settings2, Share2, ShieldCheck,
   Sparkles, Trash2, Undo2, UserRound, Workflow, Wrench, X,
 } from 'lucide-react';
 import './style.css';
+import { failedToolSummary } from './tool-status';
+import {
+  emptyChatHistory, currentConversation, updateConversation,
+  startNewConversation, openConversation, conversationTitle, recentConversations,
+} from './chat-history';
 
 // ── 백엔드 API ──────────────────────────────────────────────
 // /api 는 vite.config.js 의 프록시가 FastAPI 서버(기본 http://localhost:8000)로 넘긴다.
@@ -15,13 +20,13 @@ class ApiError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 
-async function api(user, path, { method = 'GET', body } = {}) {
+async function api(user, path, { method = 'GET', body, signal } = {}) {
   let res;
   try {
     res = await fetch(path, {
-      method,
-      headers: { 'X-User-Id': user, ...(body !== undefined && { 'Content-Type': 'application/json' }) },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      method, signal,
+      headers: { 'X-User-Id': user, ...(body !== undefined && !(body instanceof FormData) && { 'Content-Type': 'application/json' }) },
+      body: body instanceof FormData ? body : body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
     throw new ApiError(0, '서버에 연결할 수 없습니다. 백엔드(uvicorn)가 켜져 있는지 확인하세요.');
@@ -180,15 +185,13 @@ function parseJson(text) {
   try { return JSON.parse(text); } catch { return null; }
 }
 
-function summarize(event) {
-  if (!event.ok) {
-    const reason = event.result.replace(/^error:\s*/, '');
-    if (/not executed|실행하지 않았/.test(reason)) return '앞선 작업이 막혀 실행하지 않음';
-    if (/^permission/.test(reason)) return '권한 때문에 실행하지 않음';
-    return reason.length > 60 ? reason.slice(0, 60) + '…' : reason;
-  }
+function summarize(event, denial) {
+  if (!event.ok) return failedToolSummary(event, denial);
   const data = parseJson(event.result);
   const args = event.arguments ?? {};
+  if (event.tool_name === 'parse_doc' && data?.filename) {
+    return `${data.filename} · 읽기 완료${data.tables ? ` · 표 ${data.tables}개` : ''}${data.truncated ? ' · 일부만 읽음' : ''}`;
+  }
   if (event.tool_name === 'search_doc' && data?.matches) {
     return `"${args.query ?? data.query}" · ${data.matches.length ? data.matches.length + '건 찾음' : '찾지 못함'}`;
   }
@@ -203,7 +206,7 @@ function ToolEvents({ events, denial }) {
   return <details className="tool-events">
     <summary>
       {events?.map(event => <span key={event.call_id} className={'event ' + (event.ok ? 'ok' : 'fail')}>
-        {event.ok ? <Check size={13} /> : <X size={13} />}<strong>{event.display_name}</strong>{summarize(event)}
+        {event.ok ? <Check size={13} /> : <X size={13} />}<strong>{event.display_name}</strong>{summarize(event, denial)}
       </span>)}
       {denial && <span className="event fail"><CircleAlert size={13} />{{ deny: '권한 없음', rejected: '승인 거절', timeout: '승인 시간 초과' }[denial.kind] ?? denial.kind} · {denial.display_name}</span>}
       <span className="more">자세히</span>
@@ -252,15 +255,31 @@ function ApprovalCards({ user, approvals, onAnswered }) {
   </div>);
 }
 
-function ChatPage({ user, agents, activeId, setActiveId, conversations, setConversations, notify }) {
+function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, changeConversation, newConversation, notify, onBusyChange }) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [approvals, setApprovals] = useState([]);
+  const [attachments, setAttachments] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const fileInput = useRef(null);
+  const alive = useRef(true);
+  const controller = useRef(new AbortController());
   const chatEnd = useRef(null);
   const usable = [DEFAULT_AGENT, ...agents.filter(agent => agent.status === 'active')];
   const active = usable.find(agent => agent.agent_id === activeId) ?? DEFAULT_AGENT;
-  const key = active.agent_id ?? 'default';
-  const conversation = conversations[key] ?? { sessionId: null, messages: [] };
+  const canParse = tools.some(tool => tool.name === 'parse_doc') &&
+    (active.agent_id === null || active.tools?.includes('parse_doc'));
+  const busy = sending || uploading;
+  const conversation = currentConversation(chatHistory, active.agent_id);
+
+  useEffect(() => {
+    onBusyChange(busy);
+  }, [busy, onBusyChange]);
+  useEffect(() => () => {
+    alive.current = false;
+    controller.current.abort();
+    onBusyChange(false);
+  }, [onBusyChange]);
 
   useEffect(() => { chatEnd.current?.scrollIntoView({ block: 'nearest' }); }, [conversation.messages.length, sending, approvals.length]);
 
@@ -274,40 +293,78 @@ function ChatPage({ user, agents, activeId, setActiveId, conversations, setConve
     return () => clearInterval(timer);
   }, [sending, pollApprovals]);
 
-  function update(fn) { setConversations(previous => ({ ...previous, [key]: fn(previous[key] ?? { sessionId: null, messages: [] }) })); }
+  function update(fn) { changeConversation(active.agent_id, fn); }
+
+  async function attachFiles(event) {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (!files.length || !canParse || busy) return;
+    if (attachments.length + files.length > 5) {
+      notify('한 번에 파일을 5개까지 첨부할 수 있습니다.');
+      return;
+    }
+    if (files.some(file => file.size === 0 || file.size > 20 * 1024 * 1024)) {
+      notify('비어 있지 않은 20MB 이하 파일을 선택해 주세요.');
+      return;
+    }
+    setUploading(true);
+    try {
+      for (const file of files) {
+        const form = new FormData();
+        form.append('file', file);
+        const uploaded = await api(user, '/api/uploads', { method: 'POST', body: form, signal: controller.current.signal });
+        if (!alive.current) return;
+        setAttachments(previous => [...previous, uploaded]);
+      }
+    } catch (error) {
+      if (alive.current) notify(error.message);
+    } finally {
+      if (alive.current) setUploading(false);
+    }
+  }
 
   async function send(event) {
     event.preventDefault();
     const content = input.trim();
-    if (!content || sending) return;
+    if ((!content && !attachments.length) || busy) return;
+    const sentAttachments = attachments;
     setInput('');
-    update(c => ({ ...c, messages: [...c.messages, { role: 'user', content }] }));
+    setAttachments([]);
+    update(c => ({ ...c, messages: [...c.messages, { role: 'user', content, attachments: sentAttachments }] }));
     setSending(true);
     try {
       const body = conversation.sessionId ? { content, session_id: conversation.sessionId } : { content, agent_id: active.agent_id };
-      const reply = await api(user, '/api/chat/messages', { method: 'POST', body });
+      body.file_ids = sentAttachments.map(file => file.file_id);
+      const reply = await api(user, '/api/chat/messages', { method: 'POST', body, signal: controller.current.signal });
+      if (!alive.current) return;
       update(c => ({ sessionId: reply.session_id, messages: [...c.messages, {
         role: 'agent', name: active.name, content: reply.message, events: reply.tool_events, denial: reply.denial, sources: reply.sources,
       }] }));
     } catch (error) {
+      if (!alive.current) return;
+      setInput(content);
+      setAttachments(sentAttachments);
       if (error.status === 404 && conversation.sessionId) update(c => ({ ...c, sessionId: null })); // 서버 재시작 등으로 세션이 사라짐
       update(c => ({ ...c, messages: [...c.messages, { role: 'error', content: error.message }] }));
     } finally {
-      setSending(false);
+      if (alive.current) setSending(false);
     }
   }
 
   return <>
     <div className="chat-toolbar">
-      <label className="agent-picker"><Bot size={17} /><select aria-label="작업 에이전트" value={active.agent_id ?? ''} onChange={event => { setActiveId(event.target.value || null); setInput(''); }}>
+      <label className="agent-picker"><Bot size={17} /><select aria-label="작업 에이전트" disabled={busy} value={active.agent_id ?? ''} onChange={event => { setActiveId(event.target.value || null); setInput(''); setAttachments([]); }}>
         {usable.map(agent => <option key={agent.agent_id ?? 'default'} value={agent.agent_id ?? ''}>{agent.name}{agent.agent_id && agent.owner_user_id !== user ? ` (${agent.owner_user_id})` : ''}</option>)}
       </select></label>
-      <button className="quiet" disabled={sending} onClick={() => { update(() => ({ sessionId: null, messages: [] })); setInput(''); }}><Plus size={17} />새 대화</button>
+      <button className="quiet" disabled={busy} onClick={() => { newConversation(active.agent_id); setInput(''); setAttachments([]); }}><Plus size={17} />새 대화</button>
     </div>
     <div className="chat-body">
       {conversation.messages.length ? <div className="thread" aria-live="polite">
         {conversation.messages.map((message, index) => <article className={'message ' + message.role} key={index}>
           <span className="message-label">{message.role === 'user' ? '나' : message.role === 'error' ? '오류' : message.name}</span>
+          {message.attachments?.length > 0 && <div className="attachment-list">{message.attachments.map(file =>
+            <span className="attachment-chip" key={file.file_id}><FileText size={15} />{file.filename}</span>
+          )}</div>}
           <ToolEvents events={message.events} denial={message.denial} />
           {message.role === 'agent' ? <Formatted text={message.content} /> : <div>{message.content}</div>}
           {message.role === 'agent' && <Sources items={message.sources}
@@ -326,8 +383,19 @@ function ChatPage({ user, agents, activeId, setActiveId, conversations, setConve
         </div>
       </div>}
     </div>
-    <div className="compose-area"><form className="composer" onSubmit={send}>
-      <textarea aria-label="메시지" rows={2} maxLength={4000} value={input} onChange={event => setInput(event.target.value)}
+    <div className="compose-area">
+      {attachments.length > 0 && <div className="attachment-list" aria-label="첨부된 파일">{attachments.map(file =>
+        <span className="attachment-chip" key={file.file_id}><FileText size={15} /><span>{file.filename}</span>
+          <button type="button" disabled={busy} aria-label={file.filename + ' 첨부 제거'} onClick={() => setAttachments(previous => previous.filter(item => item.file_id !== file.file_id))}><X size={14} /></button>
+        </span>
+      )}</div>}
+      {uploading && <p role="status" className="attachment-help">파일을 업로드하는 중입니다…</p>}
+      <form className="composer" onSubmit={send}>
+      <input type="file" ref={fileInput} hidden multiple onChange={attachFiles} aria-label="문서 파일 선택"
+        accept=".hwp,.hwpx,.pdf,.docx,.xlsx,.pptx,.html,.htm,.eml,.csv,.tsv,.md,.markdown,.png,.jpg,.jpeg,.tif,.tiff,.gif,.bmp" />
+      <button className="attach-button" type="button" aria-label="파일 첨부" disabled={!canParse || busy || attachments.length >= 5}
+        title={canParse ? '파일 첨부 · 최대 5개, 각 20MB' : '에이전트에 업로드 문서 읽기 도구를 추가해 주세요.'} onClick={() => fileInput.current.click()}><Paperclip size={20} /></button>
+      <textarea aria-label="메시지" readOnly={sending} rows={2} maxLength={4000} value={input} onChange={event => setInput(event.target.value)}
         placeholder="에이전트에게 작업을 요청하세요"
         onKeyDown={event => {
           if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) {
@@ -335,8 +403,8 @@ function ChatPage({ user, agents, activeId, setActiveId, conversations, setConve
             event.currentTarget.form.requestSubmit();
           }
         }} />
-      <button className="send" aria-label="메시지 보내기" disabled={!input.trim() || sending}><ArrowUp size={20} /></button>
-    </form><p className="footnote">{user} 로 요청 · 도구 실행 전마다 권한 정책이 판정합니다.</p></div>
+      <button className="send" aria-label="메시지 보내기" disabled={(!input.trim() && !attachments.length) || busy}><ArrowUp size={20} /></button>
+    </form><p className="footnote">{canParse ? '문서·이미지 첨부 가능 · 파일당 20MB, 최대 5개' : '파일을 읽으려면 에이전트에 업로드 문서 읽기 도구를 추가하세요.'}</p></div>
   </>;
 }
 
@@ -436,7 +504,7 @@ function AgentsPage({ user, agents, tools, editingId, setEditingId, refresh, ope
 
   async function save(value) {
     setSaving(true);
-    await run('/api/agents/' + editing.agent_id, { method: 'PATCH', body: value }, '변경사항을 저장했습니다.');
+    await run('/api/agents/' + editing.agent_id, { method: 'PATCH', body: value }, '변경사항을 저장했습니다. 변경된 설정은 새 대화에서 테스트해 주세요');
     setSaving(false);
   }
 
@@ -584,6 +652,7 @@ function SharesPage({ user, notify, refreshAgents }) {
 // ── 앱 ─────────────────────────────────────────────────────
 
 function App() {
+  const [chatBusy, setChatBusy] = useState(false);
   const [page, setPage] = useState(currentPage);
   const [user, setUser] = useState(readUser);
   const [users, setUsers] = useState([]);
@@ -593,7 +662,8 @@ function App() {
   const [activeId, setActiveId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState(null);
-  const [conversations, setConversations] = useState({});
+  const [chatHistory, setChatHistory] = useState(emptyChatHistory);
+  const [chatView, setChatView] = useState(0);
   const [notice, setNotice] = useState(null);
   const route = navigation.find(({ id }) => id === page);
 
@@ -609,7 +679,7 @@ function App() {
 
   useEffect(() => {
     try { localStorage.setItem(userKey, user); } catch { /* 저장 못 해도 동작 */ }
-    setConversations({}); setActiveId(null); setEditingId(null); setNotice(null);
+    setChatHistory(emptyChatHistory()); setActiveId(null); setEditingId(null); setNotice(null);
     api(user, '/api/me').then(setMe).catch(error => { setMe(null); notify(error.message); });
     api(user, '/api/tools').then(setTools).catch(() => setTools([]));
     refreshAgents();
@@ -623,15 +693,57 @@ function App() {
 
   function openChat(id) { setActiveId(id); location.hash = 'chat'; }
 
+  function changeConversation(agentId, change) {
+    setChatHistory(previous => updateConversation(previous, agentId, change));
+  }
+
+  function newConversation(agentId) {
+    if (chatBusy) return;
+    setChatHistory(previous => startNewConversation(previous, agentId));
+    setChatView(previous => previous + 1);
+  }
+
+  function openSavedConversation(thread) {
+    if (chatBusy) return;
+    const agent = agents.find(item => item.agent_id === thread.agentId);
+    if (thread.agentId !== null && (!agent || agent.status !== 'active')) {
+      notify('이 대화의 에이전트가 삭제·비활성화되었거나 사용 권한이 없습니다.');
+      return;
+    }
+    setChatHistory(previous => openConversation(previous, thread.id));
+    setChatView(previous => previous + 1);
+    setActiveId(thread.agentId);
+    location.hash = 'chat';
+  }
+
+  const recent = recentConversations(chatHistory);
+  const currentThreadId = currentConversation(chatHistory, activeId).id;
+
   return <div className="shell" style={{ '--accent': route.color }}>
     <aside className="sidebar">
       <div className="sidebar-heading"><span className="sidebar-mark"><Workflow size={19} /></span><strong>워크스페이스</strong></div>
       <nav aria-label="워크스페이스 메뉴">{navigation.map(({ id, name, detail, icon: Icon, color }) => <a key={id} href={'#' + id} aria-current={page === id ? 'page' : undefined} style={{ '--item-accent': color }}>
         <span className="nav-icon"><Icon size={19} /></span><span><strong>{name}</strong><small>{detail}</small></span><ChevronRight size={15} className="nav-chevron" />
       </a>)}</nav>
+      <section className="sidebar-history" aria-label="최근 대화">
+        <h2>최근 대화</h2>
+        {!recent.length && <p className="history-empty">시작한 대화가 여기에 표시됩니다.</p>}
+        {recent.map(thread => {
+          const title = conversationTitle(thread);
+          const agentName = thread.agentId === null ? DEFAULT_AGENT.name : agents.find(item => item.agent_id === thread.agentId)?.name ?? '사용할 수 없는 에이전트';
+          const selected = page === 'chat' && currentThreadId === thread.id;
+          return <button type="button" key={thread.id} disabled={chatBusy}
+            className={selected ? 'selected' : ''} aria-current={selected ? 'true' : undefined}
+            aria-label={`대화 열기: ${title}`} title={`${title} · ${agentName}`}
+            onClick={() => openSavedConversation(thread)}>
+            <MessageSquare size={15} />
+            <span><strong>{title}</strong><small>{agentName}</small></span>
+          </button>;
+        })}
+      </section>
       <div className="sidebar-bottom user-switch">
         <UserRound size={16} />
-        <select aria-label="개발용 사용자" value={user} onChange={event => setUser(event.target.value)}>
+        <select aria-label="개발용 사용자" disabled={chatBusy} value={user} onChange={event => setUser(event.target.value)}>
           {(users.length ? users : [{ user_id: user, roles: [] }]).map(u => <option key={u.user_id} value={u.user_id}>
             {u.user_id} · {u.roles.map(role => ROLE[role] ?? role).join(', ')}{u.attributes?.dept_id !== undefined ? ` · 부서 ${u.attributes.dept_id}` : ''}
           </option>)}
@@ -642,8 +754,8 @@ function App() {
       <header className="topbar"><span className="mark"><Workflow size={19} /></span><strong>Agent Workspace</strong><span className="top-divider" /><span className="breadcrumb">{route.name}</span>
         {me && <span className="whoami"><span className="status-dot" />{me.user_id} · {me.roles.map(role => ROLE[role] ?? role).join(', ')}</span>}</header>
       {notice && page === 'chat' && <p role="status" className={'notice floating ' + notice.tone}>{notice.text}<button className="icon" onClick={() => setNotice(null)} aria-label="닫기"><X size={14} /></button></p>}
-      {page === 'chat' ? <ChatPage user={user} agents={agents} activeId={activeId} setActiveId={setActiveId}
-        conversations={conversations} setConversations={setConversations} notify={notify} />
+      {page === 'chat' ? <ChatPage key={`${user}:${chatView}`} user={user} tools={tools} agents={agents} activeId={activeId} setActiveId={setActiveId} onBusyChange={setChatBusy}
+        chatHistory={chatHistory} changeConversation={changeConversation} newConversation={newConversation} notify={notify} />
       : <div className="page">
         <div className="page-heading"><div className="hero-icon small"><route.icon size={25} /></div><h1>{route.name}</h1>
           <p>{{

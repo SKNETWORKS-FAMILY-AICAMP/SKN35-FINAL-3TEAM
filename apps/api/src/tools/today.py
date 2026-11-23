@@ -20,7 +20,13 @@ TODAY_SPEC = ToolSpec(
     description=(
         "한국 시간 기준 오늘 날짜와 요일을 확인하고, 기준일에서 N일 뒤 날짜를 계산합니다. "
         "달력일 계산과 영업일 계산(주말과 휴일 제외)을 모두 할 수 있습니다. "
-        "weekday는 오늘, base_weekday는 기준일, target_weekday는 계산 결과의 요일입니다."
+        "weekday는 오늘, base_weekday는 기준일, target_weekday는 계산 결과의 요일입니다. "
+        "오늘 날짜와 요일만 물으면 반드시 빈 객체 {}로 호출하세요. "
+        "날짜 계산이 필요할 때만 days를 넣으세요. "
+        "mode와 base_date를 지정할 때는 days도 함께 넣어야 합니다. "
+        "호출 예시: 오늘 조회는 {}; "
+        "3일 뒤는 {\"days\": 3}; "
+        "3영업일 뒤는 {\"days\": 3, \"mode\": \"business\"}. "
     ),
     parameters={
         "type": "object",
@@ -98,8 +104,10 @@ def calculate_business_date(base_date: str, days: int, holidays: set[date],) -> 
 class TodayTool:
     spec = TODAY_SPEC
 
-    def __init__(self, holiday_path: Path) -> None:
-        self.holiday_path = holiday_path
+    def __init__(self, holiday_path: Path | None = None) -> None:
+        self.holiday_path = holiday_path if holiday_path is not None else (
+            Path(__file__).resolve().parents[4] / "data/fixtures/business_holidays_demo.json"
+        )
 
     async def run(self, call: ToolCall) -> ToolResult:
         payload = get_today()

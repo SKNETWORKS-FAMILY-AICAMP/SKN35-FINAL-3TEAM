@@ -7,11 +7,11 @@ import re
 from pathlib import Path
 
 from contracts.permission import Principal, ToolCall
-from tools.read_doc import ReadDocumentTool
-from tools.search_doc import SearchDocumentsTool
+from tools.read_doc import ReadDocTool
+from tools.search_doc import SearchDocsTool
 from tools.today import TodayTool
 
-DOCS = Path(__file__).parent.parent / "data/fixtures/document_chunks.json"
+DOCS = Path(__file__).parent.parent / "data/fixtures/doc_chunks.json"
 
 KIM = Principal("kim", ("member",), {"dept_id": 10, "security_grade": 2})
 LEE = Principal("lee", ("dept_head",), {"dept_id": 10, "security_grade": 3})
@@ -24,12 +24,12 @@ def call(tool: str, args: dict, who: Principal) -> ToolCall:
 
 
 async def search(who: Principal, query: str = "서류 반려") -> list[str]:
-    result = await SearchDocumentsTool(DOCS).run(call("search_doc", {"query": query}, who))
+    result = await SearchDocsTool(DOCS).run(call("search_doc", {"query": query}, who))
     assert result.ok
     return [m["doc_id"] for m in json.loads(result.content)["matches"]]
 
 
-async def test_search_filters_by_department_and_grade():
+async def test_search_filters_by_dept_and_grade():
     assert await search(KIM) == ["doc-001", "doc-002"]  # 보안등급 3 문서는 안 보임
     assert await search(LEE) == ["doc-001", "doc-002", "doc-003"]
     assert await search(PARK) == ["doc-001"]  # 다른 부서 문서는 안 보임
@@ -37,7 +37,7 @@ async def test_search_filters_by_department_and_grade():
 
 
 async def test_read_applies_same_filter():
-    tool = ReadDocumentTool(DOCS)
+    tool = ReadDocTool(DOCS)
     ok = await tool.run(call("get_doc_chunk", {"chunk_id": "doc-002-01"}, KIM))
     assert ok.ok and "누락된 항목" in json.loads(ok.content)["text"]
     for who, chunk in ((PARK, "doc-002-01"), (KIM, "doc-003-01")):
@@ -46,10 +46,10 @@ async def test_read_applies_same_filter():
 
 
 async def test_bad_arguments_are_errors_not_crashes():
-    assert not (await SearchDocumentsTool(DOCS).run(call("search_doc", {"query": "  "}, KIM))).ok
-    assert not (await SearchDocumentsTool(DOCS).run(call("search_doc", {}, KIM))).ok
-    assert not (await ReadDocumentTool(DOCS).run(call("get_doc_chunk", {"chunk_id": 3}, KIM))).ok
-    missing = await SearchDocumentsTool(Path("/nope.json")).run(call("search_doc", {"query": "a"}, KIM))
+    assert not (await SearchDocsTool(DOCS).run(call("search_doc", {"query": "  "}, KIM))).ok
+    assert not (await SearchDocsTool(DOCS).run(call("search_doc", {}, KIM))).ok
+    assert not (await ReadDocTool(DOCS).run(call("get_doc_chunk", {"chunk_id": 3}, KIM))).ok
+    missing = await SearchDocsTool(Path("/nope.json")).run(call("search_doc", {"query": "a"}, KIM))
     assert not missing.ok
 
 
@@ -65,6 +65,12 @@ def test_all_tools_registered_with_display_names():
     tools = build_tools(DOCS)
     assert {t.spec.name for t in tools} >= {"search_doc", "get_doc_chunk", "today", "add", "get_review_case", "submit_review_request"}
     assert all(t.spec.display_name for t in tools)
+    specs = {t.spec.name: t.spec for t in tools}
+    assert (specs["parse_doc"].effect, specs["parse_doc"].domain) == ("read", "문서")
+    for name in ("search_mail", "read_mail", "send_mail"):
+        if name in specs:
+            assert specs[name].effect == ("send" if name == "send_mail" else "read")
+            assert specs[name].domain == "메일"
 
 
 async def test_today_counts_business_days_skipping_weekend_and_holiday():

@@ -41,7 +41,7 @@ class UserDirectory:
         """바로 위 관리자: 팀원 → 소속 부서장, 부서장 → admin. admin 은 위가 없다 (None).
 
         부서장이 없는 부서의 팀원은 admin 에게 올라간다.
-        DB 가 붙으면 department.head_user_id 와 user_role 로 찾는다.
+        DB 가 붙으면 dept.head_user_id 와 user_role 로 찾는다.
         """
         if "admin" in p.roles:
             return None

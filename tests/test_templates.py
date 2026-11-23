@@ -13,7 +13,7 @@ BODY = {"name": "계산", "system_prompt": "계산은 툴로 한다.", "tools": 
 
 def test_seed_templates_load_and_cover_use_cases():
     seeds = {t.template_id: t for t in load_templates(ROOT / "config/agent_templates.yaml")}
-    assert {"uc01-regulation", "uc02-market-report", "uc03-maturity-alert", "uc05-notice-approval"} <= set(seeds)
+    assert {"uc01-regulation", "uc02-market-report", "uc03-maturity-alert", "uc05-maturity-notice"} <= set(seeds)
     assert all(t.system_prompt and t.example for t in seeds.values())
     assert load_templates(ROOT / "nope.yaml") == []
 
