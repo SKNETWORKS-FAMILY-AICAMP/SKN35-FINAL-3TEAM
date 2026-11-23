@@ -5,6 +5,10 @@
 --   신규: agent_template, agent_template_tool, agent_assignment, agent_knowledge, work_file, output_file, output_source
 --   삭제: session_doc (→ work_file)
 --   변경: agent, message, tool_call, audit_log, doc, doc_version, chunk
+-- 2026-11-23: 마이그레이션 0007~0010 반영 (자세한 내용은 schema.postgres.sql 머리 주석)
+--   신규: login_session [0007]
+--   변경: users [0007], agent·agent_share_request·chat_session [0008], agent_run [0009], audit_log [0007·0010]
+--   삭제: audit_log → tool_call, audit_log → policy_rule 외래키 [0010]
 CREATE TABLE `dept` (
 	`id`	BIGINT	NOT NULL	COMMENT '부서 ID',
 	`name`	VARCHAR(100)	NOT NULL	COMMENT '부서명',
@@ -17,7 +21,23 @@ CREATE TABLE `users` (
 	`name`	VARCHAR(100)	NOT NULL	COMMENT '이름',
 	`dept_id`	BIGINT	NOT NULL	COMMENT '소속 부서 ID',
 	`position`	VARCHAR(50)	NULL	COMMENT '직급',
-	`security_grade`	INT	NOT NULL	DEFAULT 1	COMMENT '보안등급'
+	`security_grade`	INT	NOT NULL	DEFAULT 1	COMMENT '보안등급',
+	`password_hash`	VARCHAR(255)	NULL	COMMENT '비밀번호 해시 (scrypt). 원문 저장 안 함. NULL 이면 비밀번호 로그인 불가 [0007]',
+	`is_active`	BOOLEAN	NOT NULL	DEFAULT TRUE	COMMENT 'FALSE 면 로그인·기존 세션 모두 거부 [0007]',
+	`failed_login_count`	INT	NOT NULL	DEFAULT 0	COMMENT '연속 로그인 실패 횟수 (성공하면 0) [0007]',
+	`locked_until`	DATETIME	NULL	COMMENT '연속 실패로 이 시각까지 로그인 거부 [0007]',
+	`last_login_at`	DATETIME	NULL	COMMENT '마지막 로그인 성공 시각 [0007]'
+);
+
+CREATE TABLE `login_session` (
+	`token_hash`	CHAR(64)	NOT NULL	COMMENT '쿠키 토큰의 SHA-256 (토큰 원문은 저장 안 함) [0007]',
+	`user_id`	BIGINT	NOT NULL	COMMENT '사용자 ID',
+	`created_at`	DATETIME	NOT NULL	DEFAULT CURRENT_TIMESTAMP	COMMENT '로그인 시각',
+	`expires_at`	DATETIME	NOT NULL	COMMENT '만료 시각',
+	`last_seen_at`	DATETIME	NOT NULL	DEFAULT CURRENT_TIMESTAMP	COMMENT '마지막 사용 시각',
+	`revoked_at`	DATETIME	NULL	COMMENT '로그아웃·강제 종료 시각',
+	`client_ip`	VARCHAR(64)	NULL	COMMENT '접속 IP',
+	`user_agent`	VARCHAR(300)	NULL	COMMENT '브라우저 정보'
 );
 
 CREATE TABLE `user_role` (
@@ -50,7 +70,8 @@ CREATE TABLE `agent` (
 	`status`	VARCHAR(20)	NOT NULL	DEFAULT 'active'	COMMENT '상태 (active, disabled)',
 	`template_id`	BIGINT	NULL	COMMENT '만들 때 고른 템플릿 ID',
 	`created_at`	DATETIME	NOT NULL	DEFAULT CURRENT_TIMESTAMP	COMMENT '생성 시각',
-	`updated_at`	DATETIME	NOT NULL	DEFAULT CURRENT_TIMESTAMP	COMMENT '수정 시각'
+	`updated_at`	DATETIME	NOT NULL	DEFAULT CURRENT_TIMESTAMP	COMMENT '수정 시각',
+	`disabled_by`	BIGINT	NULL	COMMENT '비활성화한 사람. 주인이 직접 끈 것만 주인이 다시 켤 수 있다 [0008]'
 );
 
 CREATE TABLE `agent_tool` (
@@ -67,7 +88,9 @@ CREATE TABLE `agent_share_request` (
 	`status`	VARCHAR(20)	NOT NULL	DEFAULT 'pending'	COMMENT '상태 (pending, approved, rejected)',
 	`comment`	TEXT	NULL	COMMENT '승인·반려 의견',
 	`requested_at`	DATETIME	NOT NULL	DEFAULT CURRENT_TIMESTAMP	COMMENT '요청 시각',
-	`decided_at`	DATETIME	NULL	COMMENT '처리 시각'
+	`decided_at`	DATETIME	NULL	COMMENT '처리 시각',
+	`decided_by`	BIGINT	NULL	COMMENT '승인·반려한 사용자 ID [0008]',
+	`decision_comment`	TEXT	NULL	COMMENT '승인·반려 의견 [0008]'
 );
 
 CREATE TABLE `agent_assignment` (
@@ -89,7 +112,8 @@ CREATE TABLE `chat_session` (
 	`user_id`	BIGINT	NOT NULL	COMMENT '사용자 ID',
 	`agent_id`	BIGINT	NULL	COMMENT '사용한 에이전트 ID (NULL 이면 기본 에이전트)',
 	`title`	VARCHAR(200)	NULL	COMMENT '세션 제목',
-	`updated_at`	DATETIME	NULL	COMMENT '마지막 대화 시각'
+	`updated_at`	DATETIME	NULL	COMMENT '마지막 대화 시각',
+	`agent_removed`	BOOLEAN	NOT NULL	DEFAULT FALSE	COMMENT '쓰던 에이전트가 삭제됨 (이 대화는 더 이어갈 수 없음) [0008]'
 );
 
 CREATE TABLE `message` (
@@ -134,8 +158,8 @@ CREATE TABLE `policy_rule` (
 
 CREATE TABLE `audit_log` (
 	`id`	BIGINT	NOT NULL	COMMENT '감사 로그 ID',
-	`event_type`	VARCHAR(30)	NOT NULL	DEFAULT 'tool_call'	COMMENT '기록 종류 (tool_call, doc_register, work_upload, work_purge, output_download, agent_share)',
-	`call_id`	VARCHAR(100)	NULL	COMMENT '툴 호출 ID (tool_call 일 때 필수)',
+	`event_type`	VARCHAR(30)	NOT NULL	DEFAULT 'tool_call'	COMMENT '기록 종류 (tool_call, doc_register, work_upload, work_purge, output_download, agent_share, login, login_failed, logout [0007])',
+	`call_id`	VARCHAR(100)	NULL	COMMENT '툴 호출 ID (tool_call 일 때 필수). 외래키 없음 — 실행 도중 기록, 대화를 지워도 남게 [0010]',
 	`session_id`	CHAR(36)	NULL	COMMENT '세션 ID (tool_call 일 때 필수)',
 	`user_id`	BIGINT	NOT NULL	COMMENT '요청자 ID',
 	`agent_id`	BIGINT	NULL	COMMENT '호출한 에이전트 ID (기록용, FK 없음)',
@@ -144,13 +168,14 @@ CREATE TABLE `audit_log` (
 	`principal_snapshot`	JSON	NULL	COMMENT '판정 시점 요청자 속성',
 	`decision`	VARCHAR(10)	NULL	COMMENT '판정 (allow, deny, ask) (tool_call 일 때 필수)',
 	`reason`	TEXT	NULL	COMMENT '판정 사유',
-	`rule_id`	VARCHAR(100)	NULL	COMMENT '매칭된 규칙 ID (없으면 기본값)',
+	`rule_id`	VARCHAR(100)	NULL	COMMENT '매칭된 규칙 ID (없으면 기본값). config/permissions.yaml 의 id, 외래키 없음 [0010]',
 	`approval`	VARCHAR(20)	NULL	COMMENT 'ASK 일 때 승인 결과 (approved, rejected, timeout)',
 	`executed`	BOOLEAN	NOT NULL	DEFAULT FALSE	COMMENT '실행 여부',
 	`tool_ok`	BOOLEAN	NULL	COMMENT '실행했을 때 툴 성공 여부 (실행 안 했으면 NULL)',
 	`target_type`	VARCHAR(30)	NULL	COMMENT '대상 종류 (doc, work_file, output_file, agent)',
 	`target_id`	BIGINT	NULL	COMMENT '대상 ID (기록용, FK 없음)',
-	`ts`	DATETIME	NOT NULL	DEFAULT CURRENT_TIMESTAMP	COMMENT '판정 시각 (UTC)'
+	`ts`	DATETIME	NOT NULL	DEFAULT CURRENT_TIMESTAMP	COMMENT '판정 시각 (UTC)',
+	`run_id`	CHAR(36)	NULL	COMMENT '판정이 나온 요청 (agent_run.id, 외래키 없음) [0010]'
 );
 
 CREATE TABLE `doc` (
@@ -205,7 +230,8 @@ CREATE TABLE `agent_run` (
 	`llm_calls`	INT	NOT NULL	DEFAULT 0	COMMENT 'LLM 호출 횟수',
 	`stop_reason`	VARCHAR(20)	NULL	COMMENT '종료 사유 (completed, max_turns, denied)',
 	`started_at`	DATETIME	NOT NULL	DEFAULT CURRENT_TIMESTAMP	COMMENT '시작 시각',
-	`ended_at`	DATETIME	NULL	COMMENT '종료 시각 (실행 중이면 NULL)'
+	`ended_at`	DATETIME	NULL	COMMENT '종료 시각 (실행 중이면 NULL)',
+	`denial`	JSON	NULL	COMMENT '권한 거부로 멈춘 요청의 거부 내용 {call_id, tool_name, display_name, kind, reason} [0009]'
 );
 
 CREATE TABLE `work_file` (
@@ -256,6 +282,10 @@ ALTER TABLE `dept` ADD CONSTRAINT `PK_DEPT` PRIMARY KEY (
 
 ALTER TABLE `users` ADD CONSTRAINT `PK_USERS` PRIMARY KEY (
 	`id`
+);
+
+ALTER TABLE `login_session` ADD CONSTRAINT `PK_LOGIN_SESSION` PRIMARY KEY (
+	`token_hash`
 );
 
 ALTER TABLE `user_role` ADD CONSTRAINT `PK_USER_ROLE` PRIMARY KEY (
@@ -402,6 +432,9 @@ REFERENCES `chunk` (
 
 -- ── 비식별 관계 FK (ERDCloud 내보내기에서 빠지는 것들) ──────────
 ALTER TABLE `dept` ADD CONSTRAINT `FK_users_TO_dept_1` FOREIGN KEY (`head_user_id`) REFERENCES `users` (`id`);
+ALTER TABLE `login_session` ADD CONSTRAINT `FK_users_TO_login_session_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`);
+ALTER TABLE `agent` ADD CONSTRAINT `FK_users_TO_agent_2` FOREIGN KEY (`disabled_by`) REFERENCES `users` (`id`);
+ALTER TABLE `agent_share_request` ADD CONSTRAINT `FK_users_TO_agent_share_request_3` FOREIGN KEY (`decided_by`) REFERENCES `users` (`id`);
 ALTER TABLE `users` ADD CONSTRAINT `FK_dept_TO_users_1` FOREIGN KEY (`dept_id`) REFERENCES `dept` (`id`);
 ALTER TABLE `agent_template` ADD CONSTRAINT `FK_users_TO_agent_template_1` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`);
 ALTER TABLE `agent` ADD CONSTRAINT `FK_users_TO_agent_1` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`);
@@ -419,8 +452,7 @@ ALTER TABLE `message` ADD CONSTRAINT `FK_chat_session_TO_message_1` FOREIGN KEY 
 ALTER TABLE `message` ADD CONSTRAINT `FK_agent_run_TO_message_1` FOREIGN KEY (`run_id`) REFERENCES `agent_run` (`id`);
 ALTER TABLE `tool_call` ADD CONSTRAINT `FK_message_TO_tool_call_1` FOREIGN KEY (`message_id`) REFERENCES `message` (`id`);
 ALTER TABLE `approval_request` ADD CONSTRAINT `FK_tool_call_TO_approval_request_1` FOREIGN KEY (`call_id`) REFERENCES `tool_call` (`call_id`);
-ALTER TABLE `audit_log` ADD CONSTRAINT `FK_tool_call_TO_audit_log_1` FOREIGN KEY (`call_id`) REFERENCES `tool_call` (`call_id`);
-ALTER TABLE `audit_log` ADD CONSTRAINT `FK_policy_rule_TO_audit_log_1` FOREIGN KEY (`rule_id`) REFERENCES `policy_rule` (`policy_rule_id`);
+-- [0010] audit_log → tool_call, audit_log → policy_rule 외래키는 뺐다 (감사 기록은 실행 도중 쓰이고 대화를 지워도 남아야 한다)
 ALTER TABLE `doc` ADD CONSTRAINT `FK_users_TO_doc_1` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`);
 ALTER TABLE `doc` ADD CONSTRAINT `FK_dept_TO_doc_1` FOREIGN KEY (`owner_dept_id`) REFERENCES `dept` (`id`);
 ALTER TABLE `doc_version` ADD CONSTRAINT `FK_doc_TO_doc_version_1` FOREIGN KEY (`doc_id`) REFERENCES `doc` (`id`);
