@@ -5,6 +5,22 @@
 default: ask
 
 rules:
+  - id: report-template-search
+    tool: search_report_templates
+    decision: allow
+  - id: report-template-read
+    tool: get_report_template
+    decision: allow
+  - id: market-snapshot-read
+    tool: market_snapshot
+    decision: allow
+  - id: market-report-save
+    tool: save_morning_report
+    decision: allow
+  - id: market-report-read
+    tool: get_morning_report
+    decision: allow
+
   # 메일 발송은 관리자도 요청 내용을 확인하고 승인한다.
   - id: gmail-send-confirm
     tool: send_mail

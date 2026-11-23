@@ -18,6 +18,7 @@ from contracts.permission import ToolCall
 from services.uploads import UploadStore
 from knowledge.ingestion.parsers import DocParser, ParseResult
 from knowledge.ingestion.parsers.pipeline import PARSER_VERSION
+from tools.document_passages import select_passages
 
 MAX_CHARS = 20_000  # LLM 에게 돌려줄 본문 글자 수 상한. 넘으면 자르고 잘렸다고 알린다
 DEFAULT_TIMEOUT = 600.0  # 이 툴만의 실행 제한시간(초). 러너가 tool.timeout 을 보고 기본값 대신 쓴다
@@ -29,12 +30,18 @@ PARSE_DOC_SPEC = ToolSpec(
     domain="문서",
     description=(
         "사용자가 첨부한 파일 목록의 file_id로 문서를 읽어 본문을 마크다운으로 돌려줍니다. 표는 마크다운 표로 들어 있습니다. "
-        "문서가 길면 앞부분만 돌려주고 truncated=true 로 알려주므로, 필요하면 pages 로 쪽 범위를 좁혀 다시 부르세요."
+        "query로 질문에 관련된 문단을 찾고 section으로 절 제목을 지정할 수 있습니다. "
+        "쪽 정보가 없는 HWPX는 pages 대신 query·section을 사용하세요. 부분 결과만으로 문서 전체에 없다고 단정하지 마세요."
     ),
     parameters={
         "type": "object",
         "properties": {
             "file_id": {"type": "string", "description": "첨부 목록의 file_id 전체를 복사하세요. 끝의 확장자(.hwpx 등)도 포함해야 합니다. 이름이나 경로를 추측하지 마세요."},
+            "query": {"type": "string", "maxLength": 2000, "description": "이 첨부 문서 안에서 찾을 질문/검색어. 사내 문서 검색과 별개입니다."},
+            "section": {"type": "string", "maxLength": 200, "description": "읽을 절 제목의 일부"},
+            "offset": {"type": "integer", "minimum": 0, "description": "결과의 next_offset으로 이어 읽기"},
+            "char_offset": {"type": "integer", "minimum": 0, "maximum": 700, "description": "next_char_offset으로 잘린 문단의 나머지 읽기. query·section은 그대로 유지"},
+            "max_chars": {"type": "integer", "minimum": 256, "maximum": MAX_CHARS, "description": "반환할 본문 분량. 작은 컨텍스트에서는 1800 권장"},
             "pages": {
                 "type": "array",
                 "items": {"type": "integer", "minimum": 1},
@@ -100,7 +107,9 @@ def element_text(el: dict) -> str:
     return text
 
 
-def build_payload(file_id: str, d: dict, page_range: tuple[int, int] | None, cached: bool) -> dict:
+def build_payload(file_id: str, d: dict, page_range: tuple[int, int] | None, cached: bool, *,
+                  query: str = "", section: str = "", offset: int = 0, char_offset: int = 0,
+                  max_chars: int | None = None) -> dict:
     """파싱 결과 dict → 툴 결과. 쪽 범위가 있으면 그 쪽에 걸친 요소만 모아 본문을 만든다."""
     elements = d.get("elements") or []
     if page_range:
@@ -110,15 +119,29 @@ def build_payload(file_id: str, d: dict, page_range: tuple[int, int] | None, cac
         text = "\n\n".join(t for t in map(element_text, elements) if t)
     else:
         text = d.get("markdown") or ""
-    truncated = len(text) > MAX_CHARS
+    limit = max_chars if max_chars is not None else MAX_CHARS
+    evidence = []
+    if query or section or offset or char_offset or max_chars is not None:
+        evidence, read_status = select_passages({**d, "elements": elements, "markdown": text}, query=query, section=section,
+                                                 offset=offset, char_offset=char_offset, max_chars=limit)
+        text = "\n\n".join(f"【{p['location'][-160:]}】\n{p['text']}" for p in evidence)
+        truncated = read_status["has_more"]
+    else:
+        truncated = len(text) > limit
+        all_pages = page_range is None or (page_range[0] == 1 and page_range[1] >= (d.get("pages") or 0))
+        read_status = {"scope": "pages" if page_range else "document", "document_complete": not truncated and all_pages,
+                       "has_more": truncated, "next_offset": None}
     return {
         "file_id": file_id,
         "pages": d.get("pages"),  # 문서 전체 쪽수 (HWPX 처럼 쪽 개념이 없으면 null)
         "page_range": list(page_range) if page_range else None,
         "tables": sum(1 for e in elements if "table" in e),
         "truncated": truncated,
-        "text": text[:MAX_CHARS],
+        "text": text[:limit],
         "cached": cached,
+        "read_status": read_status,
+        "passages": [{"passage_id": p["passage_id"], "location": p["location"]} for p in evidence],
+        "_evidence": evidence,
     }
 
 
@@ -162,6 +185,14 @@ class ParseDocTool:
         page_range = parse_pages(call.arguments.get("pages"))
         if isinstance(page_range, str):
             return ToolResult(call.call_id, False, page_range)
+        query, section = call.arguments.get("query", ""), call.arguments.get("section", "")
+        offset, limit = call.arguments.get("offset", 0), call.arguments.get("max_chars")
+        char_offset = call.arguments.get("char_offset", 0)
+        if (not isinstance(query, str) or len(query) > 2000 or not isinstance(section, str) or len(section) > 200
+                or type(offset) is not int or offset < 0
+                or type(char_offset) is not int or not 0 <= char_offset <= 700
+                or (limit is not None and (type(limit) is not int or not 256 <= limit <= MAX_CHARS))):
+            return ToolResult(call.call_id, False, "문서 검색어·절 제목·읽기 범위를 확인해 주세요.")
 
         file_id = path.name
         cache = path.parent / "parsed" / f"{file_id}.json"
@@ -175,12 +206,17 @@ class ParseDocTool:
                                   data={"file_id": file_id, "status": result.status, "reason": result.reason})
             d = result.to_dict(include_docling=False)
 
-        if page_range is not None and d.get("pages") is None:
-            return ToolResult(call.call_id, False, "이 문서는 페이지 구분 정보가 없어 지정한 쪽만 읽을 수 없습니다. "
-                              "pages 인자를 생략하고 문서 전체를 다시 읽어 주세요.")
-
-        payload = build_payload(file_id, d, page_range, cached)
+        no_pages = page_range is not None and d.get("pages") is None
+        if no_pages:
+            page_range = None
+        payload = await asyncio.to_thread(build_payload, file_id, d, page_range, cached,
+                                          query=query.strip(), section=section.strip(),
+                                          offset=offset, char_offset=char_offset, max_chars=limit)
+        evidence = payload.pop("_evidence")
+        if no_pages:
+            payload["processing_status"] = {"page_filter_applied": False,
+                                            "notice": "쪽 정보가 없어 문단 기준으로 읽었습니다. 문서 본문이 아닌 처리 상태입니다."}
         if attachment is not None:
             payload["filename"] = attachment["filename"]
         return ToolResult(call.call_id, True, json.dumps(payload, ensure_ascii=False),
-                          data={**payload, "status": d.get("status"), "elements": d.get("elements")})
+                          data={**payload, "status": d.get("status"), "elements": d.get("elements"), "evidence": evidence})

@@ -22,6 +22,7 @@ from permission.approval import FutureApprovalHandler
 from permission.audit import JsonlAuditLogger
 from permission.policy import load_policy
 from services.container import AppServices, build_from_env
+from services.mail_accounts import GmailAccountLink
 from services.users import UserDirectory
 from tests.fakes import ScriptedLLM
 from tools.gmail import GmailMCPConnection, GmailTool, build_gmail_tools
@@ -122,7 +123,10 @@ def test_build_from_env_registers_all_tools(monkeypatch, tmp_path):
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setenv("PARSE_TOOL_TIMEOUT_SECONDS", "123")
     monkeypatch.setenv("REVIEW_REQUEST_DB_PATH", str(tmp_path / "review.sqlite3"))
-    services = build_from_env()
+    async def resolve(user_id):
+        return GmailAccountLink(user_id, "login-account")
+
+    services = build_from_env(gmail_account_resolver=resolve)
     async def verify():
         specs = await services.tools.specs()
         assert {spec.name for spec in specs} >= {
@@ -130,6 +134,7 @@ def test_build_from_env_registers_all_tools(monkeypatch, tmp_path):
             "search_mail", "read_mail", "send_mail",
         }
         assert (await services.tools.get("parse_doc")).timeout == 123
+        assert await (await services.tools.get("send_mail")).connection.requester_id_for(USER) == "login-account"
     asyncio.run(verify())
 
 
@@ -153,3 +158,100 @@ async def test_transport_failure_does_not_retry_send():
     connection = GmailMCPConnection("http://127.0.0.1:8001/mcp", client_factory=failing_client)
     result = await GmailTool("send_mail", connection).run(call("send_mail", {"to": [LEE], "subject": "테스트", "body": "본문"}))
     assert not result.ok and len(attempts) == 1 and "보낸편지함" in result.content
+
+
+async def test_login_account_resolver_sends_from_each_users_mailbox(bridge):
+    _, service, boxes = bridge
+    looked_up = []
+
+    async def resolve(user_id):
+        looked_up.append(user_id)
+        return GmailAccountLink(user_id, {"kim": KIM_ID, "choi": CHOI_ID}[user_id])
+
+    connection = GmailMCPConnection(
+        "http://127.0.0.1:8001/mcp", account_resolver=resolve,
+        # Resolver wins over the old environment mapping.
+        user_map={"kim": CHOI_ID}, client_factory=lambda: Client(build_server(service)),
+    )
+    tool = GmailTool("send_mail", connection)
+    for user in (USER, Principal("choi")):
+        result = await tool.run(call("send_mail", {"to": [LEE], "subject": "계정별 검증", "body": "가상 발송"}, user))
+        assert result.ok and result.data["status"] == "simulated"
+    assert looked_up == ["kim", "choi"]
+    assert len(boxes[KIM_ID].sent) == len(boxes[CHOI_ID].sent) == 1
+
+
+@pytest.mark.parametrize("name,args", [
+    ("search_mail", {}), ("read_mail", {"thread_id": "kt1"}),
+    ("send_mail", {"to": [LEE], "subject": "제목", "body": "본문"}),
+])
+async def test_unlinked_login_account_never_calls_mcp_or_falls_back(name, args):
+    async def resolve(user_id):
+        assert user_id == "kim"
+        return None
+
+    def unexpected_client():
+        pytest.fail("Unlinked accounts must not reach MCP")
+
+    connection = GmailMCPConnection("http://127.0.0.1:8001/mcp", account_resolver=resolve,
+                                    user_map={"kim": KIM_ID}, client_factory=unexpected_client)
+    result = await GmailTool(name, connection).run(call(name, args))
+    assert not result.ok and "연결되지 않았습니다" in result.content
+
+
+@pytest.mark.parametrize("link", [GmailAccountLink("choi", CHOI_ID), GmailAccountLink("kim", "../other"),
+                                      GmailAccountLink("kim", "someone@gmail.com")])
+async def test_invalid_login_account_link_is_not_used(link):
+    async def resolve(user_id):
+        return link
+
+    def unexpected_client():
+        pytest.fail("Invalid account links must not reach MCP")
+
+    connection = GmailMCPConnection("http://127.0.0.1:8001/mcp", account_resolver=resolve,
+                                    client_factory=unexpected_client)
+    result = await GmailTool("search_mail", connection).run(call("search_mail", {}))
+    assert not result.ok and "확인할 수 없습니다" in result.content
+
+
+@pytest.mark.parametrize("field", ["from", "sender", "requester_id", "mailbox_user_id"])
+async def test_model_cannot_choose_sender(field):
+    def unexpected_client():
+        pytest.fail("Spoofed sender input must not reach MCP")
+
+    connection = GmailMCPConnection("http://127.0.0.1:8001/mcp", client_factory=unexpected_client)
+    result = await GmailTool("send_mail", connection).run(call("send_mail", {
+        "to": [LEE], "subject": "제목", "body": "본문", field: CHOI_ID,
+    }))
+    assert not result.ok and "입력 형식" in result.content
+
+
+async def test_account_link_is_looked_up_again_after_disconnect(bridge):
+    _, service, _ = bridge
+    links = {"kim": GmailAccountLink("kim", KIM_ID)}
+
+    async def resolve(user_id):
+        return links.get(user_id)
+
+    connection = GmailMCPConnection("http://127.0.0.1:8001/mcp", account_resolver=resolve,
+                                    client_factory=lambda: Client(build_server(service)))
+    tool = GmailTool("search_mail", connection)
+    assert (await tool.run(call("search_mail", {}))).ok
+    del links["kim"]
+    result = await tool.run(call("search_mail", {}))
+    assert not result.ok and "연결되지 않았습니다" in result.content
+
+
+async def test_login_account_lookup_failure_does_not_send():
+    async def resolve(user_id):
+        raise RuntimeError("account service unavailable")
+
+    def unexpected_client():
+        pytest.fail("Account lookup failures must not reach MCP")
+
+    connection = GmailMCPConnection("http://127.0.0.1:8001/mcp", account_resolver=resolve,
+                                    client_factory=unexpected_client)
+    result = await GmailTool("send_mail", connection).run(call("send_mail", {
+        "to": [LEE], "subject": "제목", "body": "본문",
+    }))
+    assert not result.ok and "연결 정보를 확인할 수 없습니다" in result.content

@@ -65,6 +65,8 @@ class SourceOut(BaseModel):
     title: str  # 문서명
     location: str  # 조항·페이지
     opened: bool  # 원문을 열어 읽었는지
+    previewed: bool = False
+    partial: bool = False
 
 
 class ChatResponse(BaseModel):
@@ -126,10 +128,13 @@ async def post_message(
     if session is None:
         session = svc.sessions.create(user.user_id, agent.agent_id if agent else None)
     try:
-        turn = await send_message(svc, user, session, attachment_context(req.content, attachments), agent)
+        turn = await send_message(svc, user, session, attachment_context(req.content, attachments), agent,
+                                  attachments=attachments)
     except (APITimeoutError, APIConnectionError, APIError) as e:  # NFR-06: LLM 장애는 사용자에게 알린다
         log.warning("LLM 호출 실패: %s", e)
         raise HTTPException(502, "LLM 서버 응답이 없습니다. 잠시 후 다시 시도해 주세요.") from e
+    except (OSError, sqlite3.Error) as e:
+        raise HTTPException(503, "첨부 파일 정보를 읽을 수 없습니다.") from e
     return ChatResponse(
         session_id=turn.session_id,
         run_id=turn.run_id,

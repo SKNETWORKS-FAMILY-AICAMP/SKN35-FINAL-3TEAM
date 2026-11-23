@@ -59,6 +59,24 @@ def _last_user(messages: list[Message]) -> int:
 
 
 def _shorten(m: Message, keep: int, note: str) -> Message:
+    if m.role == "tool":
+        try:
+            data = json.loads(m.content)
+        except (ValueError, TypeError):
+            data = None
+        if isinstance(data, dict) and isinstance(data.get("text"), str):
+            # 본문에 시스템 안내를 섞거나 JSON 중간을 자르지 않는다.
+            compact = {key: data[key] for key in ("file_id", "filename", "title", "location") if key in data}
+            compact.update(text="", truncated=True,
+                           read_status={"document_complete": False, "context_truncated": True})
+            content = data["text"]
+            available = max(0, keep - len(json.dumps(compact, ensure_ascii=False)))
+            compact["text"] = content[:available]
+            packed = json.dumps(compact, ensure_ascii=False)
+            while len(packed) > keep and compact["text"]:
+                compact["text"] = compact["text"][:-(len(packed) - keep)]
+                packed = json.dumps(compact, ensure_ascii=False)
+            return replace(m, content=packed)
     return replace(m, content=m.content[:keep] + f"\n…({note}: 원래 {len(m.content):,}자)")
 
 

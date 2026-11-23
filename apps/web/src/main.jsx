@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import './style.css';
 import { failedToolSummary } from './tool-status';
+import { savedReports, ReportContent, ReportExport } from './report-export';
 import {
   emptyChatHistory, currentConversation, updateConversation,
   startNewConversation, openConversation, conversationTitle, recentConversations,
@@ -189,8 +190,17 @@ function summarize(event, denial) {
   if (!event.ok) return failedToolSummary(event, denial);
   const data = parseJson(event.result);
   const args = event.arguments ?? {};
+  if (event.tool_name === 'search_report_templates' && data?.matches) return `${data.matches.length}개 양식 찾음`;
+  if (event.tool_name === 'get_report_template' && data?.template) return `${data.template.name} · 버전 ${data.template.version} · 전체 항목 확인`;
+  if (event.tool_name === 'market_snapshot' && data?.fx) {
+    return `${data.base_date} · ${data.fx.filter(item => !item.missing).length}개 통화${data.mode === 'replay' ? ' · 기록 재생' : ''}`;
+  }
+  if (event.tool_name === 'save_morning_report' && data?.report_id) {
+    return `${data.template?.name ? data.template.name + ' · ' : ''}${data.base_date} · 저장 완료${data.check?.passed ? ' · 요약 검사 통과' : ' · 요약 제외'}${data.mode === 'replay' ? ' · 기록 재생' : ''}`;
+  }
+  if (event.tool_name === 'get_morning_report' && data?.report_id) return `${data.base_date} · 저장한 리포트 확인`;
   if (event.tool_name === 'parse_doc' && data?.filename) {
-    return `${data.filename} · 읽기 완료${data.tables ? ` · 표 ${data.tables}개` : ''}${data.truncated ? ' · 일부만 읽음' : ''}`;
+    return `${data.filename} · ${data.read_status?.scope === 'selected_passages' ? '관련 문단 확인' : '읽기 완료'}${data.tables ? ` · 표 ${data.tables}개` : ''}${data.truncated ? ' · 일부만 읽음' : ''}`;
   }
   if (event.tool_name === 'search_doc' && data?.matches) {
     return `"${args.query ?? data.query}" · ${data.matches.length ? data.matches.length + '건 찾음' : '찾지 못함'}`;
@@ -221,7 +231,7 @@ function ToolEvents({ events, denial }) {
 // 문서를 검색했거나 답에 "근거:"를 달았는데 원문을 하나도 열지 않았으면,
 // 모델이 제목만 보거나 아예 지어낸 내용일 수 있다 (qwen3:8b 에서 실제로 자주 생김)
 function Sources({ items = [], searched = false, cited = false }) {
-  const unread = (searched || cited) && !items.some(item => item.opened);
+  const unread = (searched || cited) && !items.some(item => item.opened || item.previewed);
   if (!items.length && !unread) return null;
   return <div className="sources">
     {unread && <p className="unread-warning"><CircleAlert size={14} />{items.length
@@ -232,7 +242,7 @@ function Sources({ items = [], searched = false, cited = false }) {
     {!!items.length && <>
     <span className="sources-title"><FileText size={14} />참고 문서</span>
     <ul>{items.map((item, index) => <li key={index} className={item.opened ? '' : 'muted'}>
-      {item.title}{item.location && <span className="loc"> · {item.location}</span>}{!item.opened && <span className="loc"> (검색 결과)</span>}
+      {item.title}{item.location && <span className="loc"> · {item.location}</span>}{item.partial && <span className="loc"> (일부 문단)</span>}{!item.opened && <span className="loc"> {item.previewed ? '(본문 미리보기)' : '(검색 결과)'}</span>}
     </li>)}</ul></>}
   </div>;
 }
@@ -366,7 +376,11 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, cha
             <span className="attachment-chip" key={file.file_id}><FileText size={15} />{file.filename}</span>
           )}</div>}
           <ToolEvents events={message.events} denial={message.denial} />
-          {message.role === 'agent' ? <Formatted text={message.content} /> : <div>{message.content}</div>}
+          {message.role === 'agent' && savedReports(message.events).length > 0
+            ? savedReports(message.events).map(report => <section key={report.report_id} className="saved-report">
+              <ReportContent document={report.document} markdown={report.markdown} /><ReportExport report={report} user={user} />
+            </section>)
+            : message.role === 'agent' ? <Formatted text={message.content} /> : <div>{message.content}</div>}
           {message.role === 'agent' && <Sources items={message.sources}
             searched={message.events?.some(event => event.tool_name === 'search_doc')}
             cited={/(^|\n)\s*\**근거\**\s*[:：]/.test(message.content)} />}

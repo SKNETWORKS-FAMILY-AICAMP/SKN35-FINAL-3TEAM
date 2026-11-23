@@ -63,6 +63,20 @@ async def test_bad_pages_argument_is_error(uploads, pages):
     assert not r.ok and "pages" in r.content
 
 
+async def test_hwpx_without_page_information_uses_passages_instead(uploads):
+    r = await ParseDocTool(uploads).run(call({"file_id": "규정.hwpx", "pages": [1, 2], "query": "총칙"}))
+    assert r.ok
+    payload = json.loads(r.content)
+    assert payload["page_range"] is None and payload["processing_status"]["page_filter_applied"] is False
+    assert "총칙" in payload["text"] and "쪽 정보가 없어" not in payload["text"]
+
+
+@pytest.mark.parametrize("args", [{"query": []}, {"section": 3}, {"offset": -1}, {"char_offset": True}, {"max_chars": 0}])
+async def test_invalid_passage_arguments_are_rejected(uploads, args):
+    result = await ParseDocTool(uploads).run(call({"file_id": "규정.hwpx", **args}))
+    assert not result.ok
+
+
 def test_page_range_keeps_only_overlapping_elements():
     # 쪽 범위: 그 쪽에 걸친 요소만, 여러 쪽 표는 한 쪽이라도 겹치면 넣는다
     d = {"pages": 3, "markdown": "전체", "elements": [
@@ -74,6 +88,9 @@ def test_page_range_keeps_only_overlapping_elements():
     assert out["text"] == "| 이어진 표 |" and out["tables"] == 1
     out = pd.build_payload("a.pdf", d, (1, 2), cached=True)
     assert out["text"].startswith("## 1쪽 제목") and "2쪽 본문" in out["text"]
+    assert not out["read_status"]["document_complete"]
+    empty = pd.build_payload("a.pdf", d, (4, 5), cached=True, query="전체", max_chars=600)
+    assert not empty["text"]  # 빈 쪽 범위를 문서 전체 markdown으로 대신하지 않는다.
 
 
 @pytest.mark.parametrize("content", ["[]", "null", '{"status":"ok","parser_version":"wrong"}'])

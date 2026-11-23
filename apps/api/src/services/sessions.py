@@ -20,6 +20,7 @@ class ChatSession:
     agent_id: str | None
     messages: list[Message] = field(default_factory=list)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    attachments: dict[str, dict] = field(default_factory=dict)
 
 
 class InMemorySessionStore:

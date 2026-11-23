@@ -1,0 +1,22 @@
+schema_version: "1.0"
+name: market
+version: 0.1.0
+description: 한국은행 ECOS 조회와 금리·환율 리포트
+endpoint: http://127.0.0.1:8002/mcp
+auth_token_env: MARKET_MCP_TOKEN
+tools:
+  - name: search_report_templates
+    side_effect: read
+    inject: {requester_id: user_id}
+  - name: get_report_template
+    side_effect: read
+    inject: {requester_id: user_id}
+  - name: market_snapshot
+    side_effect: read
+    inject: {requester_id: user_id}
+  - name: save_morning_report
+    side_effect: write
+    inject: {requester_id: user_id}
+  - name: get_morning_report
+    side_effect: read
+    inject: {requester_id: user_id}

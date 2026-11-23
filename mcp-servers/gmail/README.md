@@ -64,6 +64,49 @@ React의 도구 목록에 `search_mail`, `read_mail`, `send_mail`이 기본으�
 
 실제 Gmail은 첫 번째 CMD에서 `GMAIL_ADAPTER=google`로 설정하고 해당 사용자 ID로 계정을 연결해야 합니다. MCP 프로세스와 FastAPI 프로세스 양쪽에 같은 `GMAIL_MCP_TOKEN`을 설정하면 `/mcp` 요청에 Bearer 토큰 검사가 적용됩니다. Inspector에도 같은 Authorization 헤더가 필요합니다. 토큰은 비밀 값으로 관리합니다.
 
+### 로그인 담당자와 연결할 부분
+
+플랫폼 로그인과 Gmail OAuth 연결은 별개입니다. Gmail 주소를 사용자 정보에 저장하는 것만으로는 발송할 수 없습니다.
+Gmail MCP가 그 사용자의 `gmail.readonly`·`gmail.send` 권한을 가진 OAuth 자격증명을 읽을 수 있어야 합니다.
+현재 MCP는 `GMAIL_TOKENS_DIR/<mailbox_user_id>.json`을 읽습니다. 토큰을 DB에 저장하는 구현으로 바꾸면
+`google_auth.load_credentials()`도 그 저장소를 읽도록 연결해야 합니다. 토큰은 LLM·프런트·일반 로그에 넘기지 않습니다.
+
+플랫폼 측 연결 지점은 `build_from_env(gmail_account_resolver=...)`입니다.
+다음은 로그인 담당자의 계정 저장소에 맞춰 채울 연결 예시입니다(아직 존재하지 않는 `account_repository`는 팀원 구현으로 대체).
+
+```python
+from main import create_app
+from services.container import build_from_env
+from services.mail_accounts import GmailAccountLink
+
+async def resolve_gmail_account(user_id: str) -> GmailAccountLink | None:
+    row = await account_repository.find_active_gmail_link(user_id)
+    if row is None:
+        return None
+    return GmailAccountLink(
+        platform_user_id=str(row.user_id),
+        mailbox_user_id=str(row.mailbox_user_id),
+    )
+
+app = create_app(build=lambda: build_from_env(gmail_account_resolver=resolve_gmail_account))
+```
+
+- `routers/deps.py:current_user()`는 로그인 담당자가 인증 세션/JWT를 검증해 얻은 `Principal`을 반환하도록 교체합니다.
+  현재 `X-User-Id` 선택 방식은 개발용입니다.
+- `platform_user_id`는 그 `Principal.user_id`와 같아야 합니다. DB의 정수 사용자 ID도 `Principal`에는 문자열로 통일합니다.
+- `mailbox_user_id`는 MCP 계정·토큰의 소유자 키입니다. 같은 사용자 ID를 쓰면 관리가 단순합니다.
+  현재 허용 형태는 영문·숫자·밑줄·하이픈 1~64자이며 **Gmail 주소를 이 칸에 넣지 않습니다**.
+- 연결 테이블에는 사용자 ID, Gmail 주소(표시용), mailbox 소유자 키, 연결 상태를 묶어 저장합니다.
+  `None`(미연결/연결 해제) 또는 조회 실패면 MCP를 호출하지 않습니다. 매 호출마다 다시 조회합니다.
+- resolver를 주면 `GMAIL_MCP_USER_MAP`이나 기본 계정으로 대체하지 않습니다. resolver를 주지 않는 기존 개발 실행은 그대로 동작합니다.
+- 에이전트 입력은 수신자·참조·제목·본문뿐입니다. 발신자·`requester_id`는 입력할 수 없으며
+  실제 발신 계정은 인증된 사용자의 OAuth 자격증명으로 정해집니다.
+- 기존 채팅 내 발송 확인은 유지합니다. 로그인 구현이 붙어도 승인 전 발송하지 않습니다.
+
+통합 확인: 서로 다른 두 사용자로 발송 계정이 나뉘는지, 미연결/연결 해제 계정이 차단되는지,
+다른 사용자 연결 정보를 반환하면 거절되는지, 실제 모드에서 발송 결과가 `sent`로 오는지를 확인합니다.
+가상 테스트의 `simulated`는 실제 Gmail 전송 성공을 뜻하지 않습니다.
+
 파서 도구 `parse_doc`도 같은 플랫폼 목록에 등록됩니다. 해당 도구를 선택한 에이전트의 작업 채팅에서 클립 버튼으로 문서를 첨부하고 요청을 전송합니다. 파일은 `UPLOAD_DIR`(기본 `data/uploads`)에 임의 ID로 저장하고 SQLite 메타데이터로 소유자를 검사합니다. 폴더에 수동 복사한 파일은 등록된 첨부가 아니므로 채팅에서 다시 업로드해야 합니다. PDF·스캔은 사전에 준비한 모델 경로를 `PARSER_MODELS_DIR`로 지정해야 하며 실행 중 모델을 다운로드하지 않습니다.
 
 검증 명령입니다. 실제 Gmail 계정 대신 가상 메일함을 사용합니다.

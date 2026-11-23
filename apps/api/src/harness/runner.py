@@ -7,6 +7,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import json
+import uuid
+import re
 from dataclasses import dataclass
 
 from contracts.harness import (
@@ -17,6 +20,7 @@ from contracts.harness import (
     RunResult,
     RequiredToolLLMClient,
     ToolRegistry,
+    LLMToolCall,
 )
 from contracts.permission import (
     ApprovalHandler,
@@ -31,6 +35,8 @@ from contracts.permission import (
 from harness.denial import DoneTool, template_reply
 from harness.grounding import RequireSearch
 from harness.review_grounding import LOOKUP_TOOL, SUBMISSION_TOOL, ReviewLookupGuard
+from harness.attachment_grounding import compact_system, evidence_problem, extractive_reply, parse_record, read_call
+from harness.market_grounding import market_plan
 
 log = logging.getLogger(__name__)
 
@@ -84,10 +90,18 @@ class AgentRunner:
         *,
         agent_id: str | None = None,
         run_id: str | None = None,
+        attachments: list[dict] | None = None,
+        attachment_role: str = "",
     ) -> RunResult:
         messages: list[Message] = list(history or [])
         messages.append(Message(role="user", content=user_input))
         specs = await self.tools.specs()
+        if attachments and any(s.name == "parse_doc" for s in specs):
+            return await self._read_attachments(messages, user_input, attachments, principal, session_id,
+                                                agent_id, run_id, attachment_role)
+        market = market_plan(user_input, specs)
+        if market:
+            return await self._run_market(messages, user_input, market, principal, session_id, agent_id, run_id)
         review = ReviewLookupGuard.from_request(user_input, history or []) if self.require_review_lookup else None
         review_spec = next((spec for spec in specs if spec.name == LOOKUP_TOOL), None)
         submission_spec = next((spec for spec in specs if spec.name == SUBMISSION_TOOL), None)
@@ -220,6 +234,173 @@ class AgentRunner:
                     return RunResult(final, messages, turn, "completed")
 
         return RunResult(None, messages, self.max_turns, "max_turns")
+
+    async def _run_market(self, messages, question, plan, principal, session_id, agent_id, run_id):
+        action, arguments, wants_report = plan
+        done, calls_used = [], 0
+
+        def finish(text):
+            final = Message("assistant", text)
+            messages.append(final)
+            return RunResult(final, messages, calls_used, "completed")
+
+        async def execute(name, args):
+            ident = "market_" + uuid.uuid4().hex
+            messages.append(Message("assistant", "", tool_calls=(LLMToolCall(ident, name, args),)))
+            outcome = await self._handle_tool_call(ToolCall(ident, name, args, principal, session_id,
+                                                            agent_id=agent_id, run_id=run_id))
+            messages.append(outcome.message)
+            if outcome.ok:
+                done.append(DoneTool(outcome.label, outcome.message.content, name))
+            return outcome
+
+        if action == "clarify":
+            return finish("조회할 기준일을 YYYY-MM-DD로 알려 주세요. 날짜를 추측해서 리포트를 만들지 않습니다.")
+        selection = None
+        if wants_report and await self.tools.get("search_report_templates") and await self.tools.get("get_report_template"):
+            found = await execute("search_report_templates", {"query": question[:2000]})
+            if found.denial:
+                return await self._stop_denied(messages, found.denial, done, llm_calls=calls_used)
+            if not found.ok:
+                return finish("보고서 양식을 검색하지 못했습니다. " + found.message.content.removeprefix("error: "))
+            candidates = json.loads(found.message.content)
+            matches = candidates.get("matches", [])
+            if not matches:
+                return finish(candidates["markdown"] + "\n\n사용할 양식이 없어 보고서를 저장하지 않았습니다.")
+            if len(matches) > 1 and matches[0]["score"] == matches[1]["score"]:
+                return finish(candidates["markdown"] + "\n\n어느 양식을 사용할지 양식 이름을 알려 주세요.")
+            chosen = matches[0]
+            full = await execute("get_report_template", {"template_id": chosen["template_id"], "expected_hash": chosen["template_hash"]})
+            if full.denial:
+                return await self._stop_denied(messages, full.denial, done, llm_calls=calls_used)
+            if not full.ok:
+                return finish("선택한 보고서 양식을 읽지 못했습니다. " + full.message.content.removeprefix("error: "))
+            selection = json.loads(full.message.content)
+        outcome = await execute(action, arguments)
+        if outcome.denial:
+            return await self._stop_denied(messages, outcome.denial, done, llm_calls=calls_used)
+        if not outcome.ok:
+            return finish("시장 도구 실행을 완료하지 못했습니다.\n\n" + outcome.message.content.removeprefix("error: "))
+        data = json.loads(outcome.message.content)
+        if action in ("get_morning_report", "search_report_templates") or not wants_report:
+            return finish(data.get("text", data.get("markdown", "")))
+        if await self.tools.get("save_morning_report") is None:
+            return finish(data["markdown"] + "\n\n이 에이전트에 리포트 저장 도구가 없어 조회 결과만 표시했습니다.")
+        summary = ""
+        if not re.search(r"표만|요약\s*없이", question) and self.max_turns > 0:
+            try:
+                body = data["markdown"]
+                if selection:
+                    template = selection["template"]
+                    used = template["bindings"]
+                    values = {key: data[key] for key in ("base_date", "mode")}
+                    if "fx_table" in used or "data_quality" in used:
+                        values["fx"] = data["fx"]
+                    if "rates" in used or "data_quality" in used:
+                        values["rates"] = data["rates"]
+                    # 전체 양식은 서버가 보관/렌더링한다. 요약 모델에는 짧은 목차·작성 규칙만 줘 긴 양식도 자르지 않는다.
+                    outline = ("\n".join(s["text"] for s in template["sections"] if s["type"] == "heading")
+                               if "sections" in template else "\n".join(line for line in template["body_markdown"].splitlines() if line.startswith("#")))[:600]
+                    body = ("사용할 양식:\n" + template["name"] + "\n" + template["description"][:400]
+                            + "\n요약 작성 조건:\n" + template.get("summary_instructions", "")
+                            + "\n양식 목차:\n" + outline + "\n확인한 수치:\n" + json.dumps(values, ensure_ascii=False))
+                reply = (await self.llm.chat([
+                    Message("system", "은행 직원용 시장 리포트의 요약만 한국어 3문장 이내로 작성한다. 선택한 양식의 목적과 항목 범위만 다루고 양식 전체를 다시 쓰지 않는다. 표의 수치와 단위를 그대로 쓰고 전망·원인 추측·투자 권유를 쓰지 않는다. 기록 재생이면 실시간이라고 하지 않는다. 실제 기준일이 요청일보다 과거이면 관측일 이후에도 변동이 없었다고 단정하지 않는다."),
+                    Message("user", body),
+                ], [])).message
+                calls_used = 1
+                summary = reply.content if len(reply.content) <= 2000 else ""
+            except Exception:
+                # 시장 수치/표는 모델 없이도 확인 가능하다. 연결 실패 시 지어낸 요약을 사용하지 않는다.
+                calls_used = 1
+                log.warning("시장 요약 생성 실패, 요약 없이 저장")
+        save_args = {"snapshot_id": data["snapshot_id"], "summary": summary}
+        if selection:
+            save_args["template_selection_id"] = selection["template_selection_id"]
+        outcome = await execute("save_morning_report", save_args)
+        if outcome.denial:
+            return await self._stop_denied(messages, outcome.denial, done, llm_calls=calls_used)
+        if not outcome.ok:
+            return finish(data["markdown"] + "\n\n리포트 저장 성공을 확인하지 못했습니다. " + outcome.message.content.removeprefix("error: "))
+        saved = json.loads(outcome.message.content)
+        return finish(saved.get("text", saved.get("markdown", "")))
+
+    async def _read_attachments(self, messages, question, files, principal, session_id, agent_id, run_id, role):
+        """첨부 질의는 서버가 파일·문단을 선택한다. 모든 읽기는 기존 권한/감사 경로를 지난다."""
+        question = question.split("[사용자 첨부 파일 목록]", 1)[0]
+        known = {f["file_id"]: f for f in files}
+        records, done = [], []
+        focus = [Message("system", compact_system(role)), Message("user", question)]
+
+        async def execute(calls):
+            assistant = Message("assistant", "", tool_calls=tuple(calls))
+            messages.append(assistant)
+            focus.append(assistant)
+            for index, request in enumerate(calls):
+                call = ToolCall(request.call_id, request.tool_name, request.arguments, principal, session_id,
+                                agent_id=agent_id, run_id=run_id)
+                outcome = await self._handle_tool_call(call)
+                messages.append(outcome.message)
+                focus.append(outcome.message)
+                if outcome.denial:
+                    for pending in calls[index + 1:]:
+                        skipped = Message("tool", SKIPPED_CONTENT, tool_call_id=pending.call_id)
+                        messages.append(skipped)
+                        focus.append(skipped)
+                    return outcome.denial
+                if outcome.ok:
+                    record = parse_record(outcome.message.content, known[call.arguments["file_id"]]["filename"])
+                    if record:
+                        records.append(record)
+                    done.append(DoneTool(outcome.label, outcome.message.content, call.tool_name))
+            return None
+
+        denial = await execute([read_call(file, question) for file in files])
+        if denial:
+            return await self._stop_denied(messages, denial, done, llm_calls=0)
+        if len(records) != len(files):
+            final = Message("assistant", "첨부 문서를 읽는 과정에서 오류가 발생했습니다. 아래 도구 실행 결과를 확인해 주세요. 문서에 내용이 없다는 뜻은 아닙니다.")
+            messages.append(final)
+            return RunResult(final, messages, 0, "completed")
+        if not any(r["text"].strip() for r in records):
+            final = Message("assistant", extractive_reply(records))
+            messages.append(final)
+            return RunResult(final, messages, 0, "completed")
+
+        # 서버가 관련 문단을 이미 읽었다. 답변 생성에는 불필요한 도구 스키마를 보내지 않아
+        # 작은 컨텍스트에서도 원문이 잘리지 않게 한다. 잘못된 호출을 돌려주는 구현도 한 번만 처리한다.
+        answer, calls_used, reread = "", 0, False
+        for _ in range(min(self.max_turns, 2)):
+            reply = (await self.llm.chat(focus, [])).message
+            calls_used += 1
+            if reply.tool_calls:
+                reads = []
+                if not reread:
+                    for call in reply.tool_calls:
+                        if (call.tool_name == "parse_doc" and isinstance(call.arguments.get("file_id"), str)
+                                and call.arguments["file_id"] in known):
+                            args = {**call.arguments, "max_chars": 1800}
+                            args.setdefault("query", question[:2000])
+                            reads.append(LLMToolCall(call.call_id, call.tool_name, args))
+                if reads:
+                    reread = True
+                    denial = await execute(reads[:len(files)])
+                    if denial:
+                        return await self._stop_denied(messages, denial, done, llm_calls=calls_used)
+                    continue
+                focus.append(Message("system", "사내 검색이나 파일 ID 요청으로 바꾸지 말고, 이미 확인한 첨부 원문만으로 답하세요."))
+                continue
+            answer = reply.content
+            issue = evidence_problem(answer, records, question)
+            if issue is None:
+                break
+            log.info("첨부 답변 재검증: %s", issue)
+            focus += [reply, Message("system", f"이 답은 사용할 수 없습니다: {issue} 확인한 text에서 직접 인용해 다시 답하세요.")]
+        if not answer or evidence_problem(answer, records, question):
+            answer = extractive_reply(records)
+        final = Message("assistant", answer)
+        messages.append(final)
+        return RunResult(final, messages, calls_used, "completed")
 
     async def _ask_search(self, messages: list[Message], rs: RequireSearch, search_spec) -> Message | None:
         """검색 툴 하나만 주고 다시 묻는다. 안내 문구는 기록에 남기지 않는다. 실패하면 None (하네스가 직접 검색).

@@ -284,3 +284,12 @@ details[open] .more { display: none; }
 .template .actions { width: 100%; justify-content: flex-end; flex-wrap: wrap; }
 .template.unavailable { opacity: .82; }
 .tool-tags span.missing { color: #f6b273; border-style: dashed; }
+.saved-report { min-width: 0; }
+.saved-report table { display: block; overflow-x: auto; }
+.structured-report .report-table { overflow-x: auto; }
+.structured-report .report-table table { display: table; }
+.structured-report p, .structured-report li { white-space: pre-wrap; }
+.report-export { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }
+.report-export button { display: inline-flex; align-items: center; gap: 6px; }
+.report-export small { color: var(--muted); }
+.report-export [role=alert] { color: #f6b273; width: 100%; }

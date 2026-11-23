@@ -86,7 +86,7 @@ def edit_lock(a: Agent, svc: AppServices) -> str | None:
 
 
 def to_out(a: Agent, p: Principal, svc: AppServices) -> AgentOut:
-    pending = svc.share_requests.pending_for_agent(a.agent_id)
+    pending = svc.share_requests.pending_for_agent(a.agent_id)  
     widest = a.scope == "company"
     return AgentOut(
         agent_id=a.agent_id, owner_user_id=a.owner_user_id, name=a.name, description=a.description,

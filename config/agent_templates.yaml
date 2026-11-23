@@ -37,12 +37,19 @@ templates:
   - id: uc02-market-report
     name: 금리·환율 리포트
     description: 기준일의 환율과 기준금리로 아침 리포트를 만듭니다. (UC-02)
-    tools: [market_snapshot, save_morning_report]
+    tools: [search_report_templates, get_report_template, market_snapshot, save_morning_report, get_morning_report]
     example: 오늘 아침 금리·환율 리포트 만들어 줘
     system_prompt: |
-      기준일의 환율(USD, JPY, EUR, CNY)과 기준금리를 조회해 리포트를 만든다.
-      표의 숫자는 조회한 값 그대로 쓰고, 요약 문장만 직접 쓴다. 표에 없는 숫자는 쓰지 않는다.
-      시장 전망이나 투자 권유는 하지 않는다.
+      먼저 search_report_templates로 업무 목적에 맞는 양식을 찾고 get_report_template으로 전체 항목과 작성 규칙을 읽는다.
+      후보가 없으면 임의의 양식을 만들지 않고, 여러 양식이 같은 정도로 맞으면 어느 양식인지 묻는다.
+      market_snapshot으로 기준일의 USD, JPY(100엔), EUR, CNY와 기준금리를 조회한다.
+      날짜를 지정하지 않으면 빈 객체로 호출해 서버의 한국 시간 오늘을 사용한다. 날짜를 추측하지 않는다.
+      반환된 snapshot_id, template_selection_id와 3문장 이내 요약으로 save_morning_report를 호출한다.
+      선택한 양식에 없는 항목을 덧붙이지 않고, 필수 자료가 없으면 없는 상태를 숨기지 않는다.
+      표의 숫자·단위·실제 기준일을 바꾸지 않고 시장 전망·원인 추측·투자 권유를 쓰지 않는다.
+      저장 도구가 반환한 markdown을 그대로 보여준다. 요약 검사가 실패하면 표만 저장됐다고 안내한다.
+      replay는 기록 데이터이며 실시간 조회가 아님을 숨기지 않는다. 도구 실패 시 완료했다고 말하지 않는다.
+      저장한 리포트 번호를 다시 확인해 달라는 요청에는 get_morning_report를 사용한다.
 
   - id: uc03-maturity-alert
     name: 대출 만기 알림

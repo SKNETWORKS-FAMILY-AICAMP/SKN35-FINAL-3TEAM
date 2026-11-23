@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from typing import Callable
 from urllib.parse import urlsplit
@@ -13,7 +14,8 @@ from mcp.client.streamable_http import streamable_http_client
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from contracts.harness import ToolResult, ToolSpec
-from contracts.permission import ToolCall
+from contracts.permission import Principal, ToolCall
+from services.mail_accounts import GmailAccountLink, GmailAccountResolver
 
 log = logging.getLogger(__name__)
 
@@ -47,7 +49,8 @@ MAIL_TOOLS = {
 
 class GmailMCPConnection:
     def __init__(self, url: str, *, token: str | None = None, user_map: dict[str, str] | None = None,
-                 timeout: float = 25, client_factory: Callable[[], Client] | None = None) -> None:
+                 timeout: float = 25, client_factory: Callable[[], Client] | None = None,
+                 account_resolver: GmailAccountResolver | None = None) -> None:
         parts = urlsplit(url)
         if parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password:
             raise ValueError("GMAIL_MCP_URL은 사용자 정보가 없는 HTTP(S) 주소여야 합니다.")
@@ -56,6 +59,21 @@ class GmailMCPConnection:
         self.user_map = dict(user_map or {})
         self.timeout = timeout
         self._client_factory = client_factory
+        self._account_resolver = account_resolver
+
+    async def requester_id_for(self, principal: Principal) -> str | None:
+        """로그인 사용자의 연결만 조회한다. resolver가 있으면 개발용 매핑으로 대체하지 않는다."""
+        if self._account_resolver is not None:
+            link = await self._account_resolver(principal.user_id)
+            if link is None:
+                return None
+        else:
+            link = GmailAccountLink(principal.user_id, self.user_map.get(principal.user_id, principal.user_id))
+        if (not isinstance(link, GmailAccountLink) or link.platform_user_id != principal.user_id
+                or not isinstance(link.mailbox_user_id, str)
+                or re.fullmatch(r"[A-Za-z0-9_-]{1,64}", link.mailbox_user_id) is None):
+            raise ValueError("로그인 사용자와 Gmail 계정 연결 정보가 맞지 않습니다.")
+        return link.mailbox_user_id
 
     @asynccontextmanager
     async def session(self):
@@ -84,8 +102,15 @@ class GmailTool:
             arguments = self._model.model_validate(call.arguments).model_dump()
         except ValidationError:
             return ToolResult(call.call_id, False, "메일 도구의 입력 형식과 길이를 확인해 주세요.")
-        # requester_id is never accepted from the model, including on write calls.
-        arguments["requester_id"] = self.connection.user_map.get(call.principal.user_id, call.principal.user_id)
+        # 이메일 주소나 발신자를 LLM/요청 body에서 받지 않는다. 매번 서버의 연결 정보를 조회한다.
+        try:
+            requester_id = await self.connection.requester_id_for(call.principal)
+        except Exception as error:
+            log.warning("Gmail account lookup failed: %s", type(error).__name__)
+            return ToolResult(call.call_id, False, "로그인 사용자의 Gmail 연결 정보를 확인할 수 없습니다. 계정 연결 상태를 확인해 주세요.")
+        if requester_id is None:
+            return ToolResult(call.call_id, False, "본인 Gmail 계정이 연결되지 않았습니다. 계정을 연결한 뒤 다시 요청해 주세요.")
+        arguments["requester_id"] = requester_id
         try:
             async with self.connection.session() as client:
                 listing = await client.list_tools()
@@ -110,7 +135,7 @@ class GmailTool:
         return ToolResult(call.call_id, True, content, data=payload)
 
 
-def build_gmail_tools() -> list[GmailTool]:
+def build_gmail_tools(*, account_resolver: GmailAccountResolver | None = None) -> list[GmailTool]:
     url = os.environ.get("GMAIL_MCP_URL", "http://127.0.0.1:8001/mcp").strip()
     if not url:
         return []
@@ -120,5 +145,6 @@ def build_gmail_tools() -> list[GmailTool]:
         for key, value in mapping.items()
     ):
         raise ValueError("GMAIL_MCP_USER_MAP은 사용자 ID를 사번에 연결하는 JSON 객체여야 합니다.")
-    connection = GmailMCPConnection(url, token=os.environ.get("GMAIL_MCP_TOKEN"), user_map=mapping)
+    connection = GmailMCPConnection(url, token=os.environ.get("GMAIL_MCP_TOKEN"), user_map=mapping,
+                                    account_resolver=account_resolver)
     return [GmailTool(name, connection) for name in MAIL_TOOLS]
