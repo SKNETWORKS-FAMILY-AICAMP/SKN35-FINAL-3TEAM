@@ -27,7 +27,7 @@ from .config import Settings
 from .models import MailSearchResult, MailThread, SendResult
 from .service import InvalidRequest, MailService
 from .status_page import render_status_page
-from .store import MailStore
+from .store import open_store
 
 RequesterId = Annotated[str, Field(description="요청자 사번 (플랫폼이 채움)")]
 
@@ -126,10 +126,10 @@ def build_http_app(service: MailService, token: str | None = None):
 
 def main() -> None:
     settings = Settings.from_env()
-    service = MailService(MailStore(settings.db_path), factory(settings), settings)
+    service = MailService(open_store(settings), factory(settings), settings)
     # 어떤 메일함에 붙었는지 시작할 때 분명히 보여준다 (환경변수가 터미널에 남아 있어 헷갈리는 경우 방지)
     print(f"[gmail-mcp] 모드: {mode_label(service)}  (GMAIL_ADAPTER={settings.adapter})", file=sys.stderr, flush=True)
-    print(f"[gmail-mcp] 메일 DB: {settings.db_path}", file=sys.stderr, flush=True)
+    print(f"[gmail-mcp] 메일 DB: {'플랫폼 PostgreSQL' if settings.database_url else settings.db_path}", file=sys.stderr, flush=True)
     print(f"[gmail-mcp] 주소: http://{settings.host}:{settings.port}/mcp", file=sys.stderr, flush=True)
     import uvicorn
 

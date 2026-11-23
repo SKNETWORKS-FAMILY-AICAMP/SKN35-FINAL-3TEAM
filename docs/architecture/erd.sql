@@ -5,6 +5,9 @@
 --   신규: agent_template, agent_template_tool, agent_assignment, agent_knowledge, work_file, output_file, output_source
 --   삭제: session_document (→ work_file)
 --   변경: agent, message, tool_call, audit_log, document, document_version, chunk
+-- 2026-11-23 [alembic 0006 초안]: mail_archive 추가 — 직원(users)을 지우기 직전 트리거가 그 직원의 mail_message 를 복사해 둔다 (퇴사자 메일을 관리자가 관리). users 외래키 없음.
+-- 2026-11-23: 개인 메일 표 5개 추가 [alembic 0005 초안] — mail_account, mail_message, mail_sync_state, mail_sync_failure, mail_sync_run
+--   직원(users) 삭제 시 메일도 삭제 (ON DELETE CASCADE). 실제 DB 는 PostgreSQL 이라 JSON 은 JSONB, DATETIME 은 TIMESTAMPTZ 로 만든다.
 CREATE TABLE `department` (
 	`id`	BIGINT	NOT NULL	COMMENT '부서 ID',
 	`name`	VARCHAR(100)	NOT NULL	COMMENT '부서명',
@@ -250,6 +253,81 @@ CREATE TABLE `output_source` (
 	`document_version_id`	BIGINT	NULL	COMMENT '문서 버전 ID (work_file_id 와 둘 중 하나)'
 );
 
+CREATE TABLE `mail_account` (
+	`owner_user_id`	BIGINT	NOT NULL	COMMENT '직원 ID (users.id)',
+	`email`	VARCHAR(255)	NOT NULL	COMMENT '연결한 메일 주소',
+	`connected_at`	DATETIME	NOT NULL	DEFAULT CURRENT_TIMESTAMP	COMMENT '연결 시각'
+);
+
+CREATE TABLE `mail_message` (
+	`owner_user_id`	BIGINT	NOT NULL	COMMENT '메일함 주인 (users.id) — 이 사람만 조회 가능',
+	`message_id`	VARCHAR(64)	NOT NULL	COMMENT 'Gmail 메시지 ID',
+	`thread_id`	VARCHAR(64)	NOT NULL	COMMENT 'Gmail 스레드 ID',
+	`sender`	TEXT	NOT NULL	DEFAULT ''	COMMENT '보낸 사람',
+	`to_addrs`	JSON	NOT NULL	COMMENT '받는 사람 목록',
+	`cc_addrs`	JSON	NOT NULL	COMMENT '참조 목록',
+	`bcc_addrs`	JSON	NOT NULL	COMMENT '숨은참조 목록 (본인이 보낸 메일에만 있음)',
+	`subject`	TEXT	NOT NULL	DEFAULT ''	COMMENT '제목',
+	`sent_at`	DATETIME	NULL	COMMENT '보낸 시각',
+	`labels`	JSON	NOT NULL	COMMENT 'Gmail 라벨',
+	`body`	TEXT	NOT NULL	DEFAULT ''	COMMENT '본문 텍스트',
+	`body_omitted`	BOOLEAN	NOT NULL	DEFAULT FALSE	COMMENT '본문 일부가 너무 커서 생략됨',
+	`size_bytes`	INT	NOT NULL	DEFAULT 0	COMMENT '원본 크기',
+	`content_hash`	VARCHAR(80)	NOT NULL	COMMENT '저장 내용 해시 — 같으면 다시 쓰지 않음',
+	`synced_at`	DATETIME	NOT NULL	DEFAULT CURRENT_TIMESTAMP	COMMENT '마지막 저장 시각'
+);
+
+CREATE TABLE `mail_sync_state` (
+	`owner_user_id`	BIGINT	NOT NULL	COMMENT '직원 ID',
+	`last_sync_end`	DOUBLE	NULL	COMMENT '마지막으로 끝까지 성공한 동기화 창의 끝 (epoch 초)',
+	`window_start`	DOUBLE	NULL	COMMENT '진행 중인 창 시작 (epoch 초)',
+	`window_end`	DOUBLE	NULL	COMMENT '진행 중인 창 끝 (epoch 초)',
+	`checkpoint`	JSON	NULL	COMMENT '진행 중 체크포인트 (다음 페이지 토큰) — NULL 이면 진행 중 아님',
+	`job_id`	VARCHAR(64)	NULL	COMMENT '진행 중 작업 ID'
+);
+
+CREATE TABLE `mail_sync_failure` (
+	`id`	BIGINT	NOT NULL	COMMENT '실패 기록 ID',
+	`owner_user_id`	BIGINT	NOT NULL	COMMENT '직원 ID',
+	`job_id`	VARCHAR(64)	NOT NULL	COMMENT '동기화 작업 ID',
+	`message_id`	VARCHAR(64)	NULL	COMMENT 'Gmail 메시지 ID',
+	`reason`	VARCHAR(30)	NOT NULL	COMMENT '실패 사유 (fetch_error, too_large, invalid_message)',
+	`detail`	TEXT	NOT NULL	DEFAULT ''	COMMENT '상세',
+	`created_at`	DATETIME	NOT NULL	DEFAULT CURRENT_TIMESTAMP	COMMENT '기록 시각'
+);
+
+CREATE TABLE `mail_sync_run` (
+	`id`	BIGINT	NOT NULL	COMMENT '실행 기록 ID',
+	`owner_user_id`	BIGINT	NOT NULL	COMMENT '직원 ID',
+	`job_id`	VARCHAR(64)	NOT NULL	COMMENT '동기화 작업 ID',
+	`mode`	VARCHAR(20)	NOT NULL	COMMENT '방식 (incremental, full, prune)',
+	`summary`	JSON	NOT NULL	COMMENT '건수 · 사유별 실패 수',
+	`finished_at`	DATETIME	NOT NULL	DEFAULT CURRENT_TIMESTAMP	COMMENT '끝난 시각'
+);
+
+CREATE TABLE `mail_archive` (
+	`former_user_id`	BIGINT	NOT NULL	COMMENT '삭제된 직원의 users.id (FK 없음 — 직원이 이미 지워짐)',
+	`message_id`	VARCHAR(64)	NOT NULL	COMMENT 'Gmail 메시지 ID',
+	`former_login_id`	VARCHAR(100)	NOT NULL	COMMENT '삭제 당시 로그인 ID',
+	`former_name`	VARCHAR(100)	NOT NULL	COMMENT '삭제 당시 이름',
+	`former_dept_id`	BIGINT	NULL	COMMENT '삭제 당시 소속 부서 ID (FK 없음)',
+	`account_email`	VARCHAR(255)	NULL	COMMENT '연결해 두었던 메일 주소',
+	`thread_id`	VARCHAR(64)	NOT NULL	COMMENT 'Gmail 스레드 ID',
+	`sender`	TEXT	NOT NULL	DEFAULT ''	COMMENT '보낸 사람',
+	`to_addrs`	JSON	NOT NULL	COMMENT '받는 사람 목록',
+	`cc_addrs`	JSON	NOT NULL	COMMENT '참조 목록',
+	`bcc_addrs`	JSON	NOT NULL	COMMENT '숨은참조 목록',
+	`subject`	TEXT	NOT NULL	DEFAULT ''	COMMENT '제목',
+	`sent_at`	DATETIME	NULL	COMMENT '보낸 시각',
+	`labels`	JSON	NOT NULL	COMMENT 'Gmail 라벨',
+	`body`	TEXT	NOT NULL	DEFAULT ''	COMMENT '본문 텍스트',
+	`body_omitted`	BOOLEAN	NOT NULL	DEFAULT FALSE	COMMENT '본문 일부가 너무 커서 생략됨',
+	`size_bytes`	INT	NOT NULL	DEFAULT 0	COMMENT '원본 크기',
+	`content_hash`	VARCHAR(80)	NOT NULL	COMMENT '저장 내용 해시',
+	`synced_at`	DATETIME	NOT NULL	COMMENT '마지막 저장 시각',
+	`archived_at`	DATETIME	NOT NULL	DEFAULT CURRENT_TIMESTAMP	COMMENT '보관 시각 (직원이 삭제된 시각)'
+);
+
 ALTER TABLE `department` ADD CONSTRAINT `PK_DEPARTMENT` PRIMARY KEY (
 	`id`
 );
@@ -351,6 +429,32 @@ ALTER TABLE `output_source` ADD CONSTRAINT `PK_OUTPUT_SOURCE` PRIMARY KEY (
 	`id`
 );
 
+ALTER TABLE `mail_account` ADD CONSTRAINT `PK_MAIL_ACCOUNT` PRIMARY KEY (
+	`owner_user_id`
+);
+
+ALTER TABLE `mail_message` ADD CONSTRAINT `PK_MAIL_MESSAGE` PRIMARY KEY (
+	`owner_user_id`,
+	`message_id`
+);
+
+ALTER TABLE `mail_sync_state` ADD CONSTRAINT `PK_MAIL_SYNC_STATE` PRIMARY KEY (
+	`owner_user_id`
+);
+
+ALTER TABLE `mail_sync_failure` ADD CONSTRAINT `PK_MAIL_SYNC_FAILURE` PRIMARY KEY (
+	`id`
+);
+
+ALTER TABLE `mail_sync_run` ADD CONSTRAINT `PK_MAIL_SYNC_RUN` PRIMARY KEY (
+	`id`
+);
+
+ALTER TABLE `mail_archive` ADD CONSTRAINT `PK_MAIL_ARCHIVE` PRIMARY KEY (
+	`former_user_id`,
+	`message_id`
+);
+
 ALTER TABLE `user_role` ADD CONSTRAINT `FK_users_TO_user_role_1` FOREIGN KEY (
 	`user_id`
 )
@@ -433,3 +537,8 @@ ALTER TABLE `output_file` ADD CONSTRAINT `FK_agent_run_TO_output_file_1` FOREIGN
 ALTER TABLE `output_source` ADD CONSTRAINT `FK_output_file_TO_output_source_1` FOREIGN KEY (`output_id`) REFERENCES `output_file` (`id`);
 ALTER TABLE `output_source` ADD CONSTRAINT `FK_work_file_TO_output_source_1` FOREIGN KEY (`work_file_id`) REFERENCES `work_file` (`id`);
 ALTER TABLE `output_source` ADD CONSTRAINT `FK_document_version_TO_output_source_1` FOREIGN KEY (`document_version_id`) REFERENCES `document_version` (`id`);
+ALTER TABLE `mail_account` ADD CONSTRAINT `FK_users_TO_mail_account_1` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE;
+ALTER TABLE `mail_message` ADD CONSTRAINT `FK_users_TO_mail_message_1` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE;
+ALTER TABLE `mail_sync_state` ADD CONSTRAINT `FK_users_TO_mail_sync_state_1` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE;
+ALTER TABLE `mail_sync_failure` ADD CONSTRAINT `FK_users_TO_mail_sync_failure_1` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE;
+ALTER TABLE `mail_sync_run` ADD CONSTRAINT `FK_users_TO_mail_sync_run_1` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE;

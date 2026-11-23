@@ -95,7 +95,7 @@ def setup_main() -> None:
 
     from googleapiclient.discovery import build
 
-    from .store import MailStore
+    from .store import open_store
 
     settings = Settings.from_env()
     user_id = _arg("--user")
@@ -111,6 +111,17 @@ def setup_main() -> None:
     creds = load_credentials(settings, user_id, interactive=True)
     email = build("gmail", "v1", credentials=creds, cache_discovery=False).users().getProfile(userId="me").execute()[
         "emailAddress"].lower()
-    asyncio.run(MailStore(settings.db_path).set_account(user_id, email))
+    async def save() -> None:
+        store = open_store(settings)
+        try:
+            await store.set_account(user_id, email)
+        finally:
+            await store.close()
+
+    try:
+        asyncio.run(save())
+    except ValueError as exc:  # PostgreSQL: users 에 없는 로그인 ID
+        print(f"연결하지 못했습니다: {exc}")
+        sys.exit(1)
     print(f"연결 완료: {user_id} ↔ {email}")
     print("본인 계정이 맞는지 확인하세요. 아니라면 --force 로 다시 인증합니다.")

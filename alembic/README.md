@@ -15,6 +15,8 @@ STORAGE_ROOT=          # 원본 파일 저장 폴더. 비우면 data/storage
 | `versions/0002_db_hardening.py` | SSO 연결 칸, 보안등급 1~5, 감사 로그 추가만 허용, 앱 전용 역할 `agent_app` |
 | `versions/0003_rename_document_id.py` | `document_id` → `doc_id` (document_version·agent_knowledge), `document_version_id` → `doc_version_id` (chunk·output_source) |
 | `versions/0004_chunk_embedding_halfvec.py` | **[초안, DB 담당 확인 전]** `chunk.embedding` vector(1024) → halfvec(2048) (KURE-v3). 기존 벡터는 비워지므로 색인을 다시 돌린다 |
+| `versions/0005_mail_tables.py` | **[초안, DB 담당 확인 전]** 개인 메일 표 5개 (`mail_account`·`mail_message`·`mail_sync_state`·`mail_sync_failure`·`mail_sync_run`). 커넥터(`mcp-servers/gmail`)가 쓴다. `users` 에 외래키, 직원이 지워지면 메일도 같이 지워짐 |
+| `versions/0006_mail_archive.py` | **[초안, DB 담당 확인 전]** 직원(`users`)을 지우기 직전에 그 직원의 메일을 `mail_archive` 로 복사하는 트리거. 퇴사자 메일을 관리자가 따로 관리 |
 
 ## 자주 쓰는 명령
 

@@ -11,6 +11,7 @@ from gmail_mcp.config import Settings
 from gmail_mcp.fake import CHOI, CHOI_ID, KIM_ID, LEE, LEE_ID, PARK, make_message
 from gmail_mcp.server import build_server
 from gmail_mcp.service import NOT_CONNECTED, NOT_FOUND, InvalidRequest, MailService
+from gmail_mcp.store import MailStore
 
 
 # ── 검색 · 읽기: 본인 메일만, DB 에서 ──
@@ -128,7 +129,9 @@ async def test_send_mail_recipient_limits(store, clients):
 
 # ── 서버 상태 페이지 ──
 
-async def test_health_and_root_page(svc):
+def test_health_and_root_page(clients, tmp_path):
+    # TestClient 는 별도 이벤트 루프에서 요청을 처리해서, 루프에 묶이는 PostgreSQL 연결 풀과는 같이 쓰지 않는다 → SQLite 고정
+    svc = MailService(MailStore(tmp_path / "mail.sqlite3"), clients, Settings(adapter="fake"))
     app = build_server(svc).streamable_http_app()
     with TestClient(app) as client:
         body = client.get("/health").json()

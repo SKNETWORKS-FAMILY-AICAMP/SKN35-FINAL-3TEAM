@@ -25,6 +25,7 @@ class Settings:
     credentials_file: Path = DEFAULT_SECRETS_DIR / "credentials.json"  # 플랫폼의 OAuth 클라이언트 (모든 직원 공용)
     tokens_dir: Path = DEFAULT_SECRETS_DIR / "tokens"  # 직원별 토큰 <user_id>.json
     db_path: Path = Path("data/db/mail.sqlite3")  # 메일 저장 관계형 DB (개발용 SQLite)
+    database_url: str = ""  # 플랫폼 PostgreSQL (postgresql://… 또는 postgresql+asyncpg://…). 있으면 db_path 대신 사용
     host: str = "127.0.0.1"
     port: int = 8001  # FastAPI 플랫폼(8000)과 동시에 실행
     max_search_results: int = 20
@@ -47,6 +48,7 @@ class Settings:
             credentials_file=Path(e("GMAIL_CREDENTIALS_FILE", str(cls.credentials_file))),
             tokens_dir=Path(e("GMAIL_TOKENS_DIR", str(cls.tokens_dir))),
             db_path=Path(e("GMAIL_DB_PATH", str(cls.db_path))),
+            database_url=e("GMAIL_DATABASE_URL", cls.database_url).strip(),
             host=e("MCP_HOST", cls.host),
             port=int(e("MCP_PORT", str(cls.port))),
             max_search_results=int(e("GMAIL_MAX_SEARCH_RESULTS", str(cls.max_search_results))),

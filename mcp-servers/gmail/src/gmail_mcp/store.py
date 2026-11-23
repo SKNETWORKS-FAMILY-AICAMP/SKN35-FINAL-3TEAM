@@ -3,7 +3,8 @@
 권한 원칙: **모든 함수가 owner_user_id 를 필수로 받는다.** 주인 조건 없이 메일을 읽는 함수는 두지 않는다.
 LLM 이 고른 값이 아니라 플랫폼이 넘겨준 로그인 사용자만 owner_user_id 로 들어온다 (manifest 의 inject).
 
-플랫폼 DB 가 정해지면 같은 메서드를 가진 구현으로 바꾼다 (테이블 정의: sql/mail_schema.sql).
+플랫폼 PostgreSQL 에 붙일 때는 같은 메서드를 가진 store_pg.PostgresMailStore 를 쓴다 (open_store 가 설정으로 고른다).
+표 정의: sql/mail_schema.sql · alembic 0005.
 """
 
 from __future__ import annotations
@@ -266,3 +267,15 @@ class MailStore:
         rows = await self._run(lambda c: c.execute(
             "SELECT job_id, mode, summary FROM mail_sync_run WHERE owner_user_id=? ORDER BY id", (owner,)).fetchall())
         return [{"job_id": r["job_id"], "mode": r["mode"], **json.loads(r["summary"])} for r in rows]
+
+    async def close(self) -> None:  # PostgresMailStore 와 같은 모양 (SQLite 는 닫을 것이 없다)
+        return None
+
+
+def open_store(settings):
+    """설정에 맞는 저장소: GMAIL_DATABASE_URL 이 있으면 플랫폼 PostgreSQL, 없으면 개발용 SQLite."""
+    if getattr(settings, "database_url", ""):
+        from .store_pg import PostgresMailStore
+
+        return PostgresMailStore(settings.database_url)
+    return MailStore(settings.db_path)

@@ -2,7 +2,7 @@
 
 - 표를 만들고 바꾸는 건 alembic/ 마이그레이션이 한다. 이 파일은 코드에서 표를 읽고 쓰기 위한 지도다.
   그래서 CHECK 제약·트리거·부분 인덱스는 여기 다시 적지 않고 마이그레이션에만 둔다 (한 곳에서만 관리).
-- 팀 ERD 에서 바꾼 것은 [DB 추가](0002)·[0003] 처럼 마이그레이션 번호로 표시한다.
+- 팀 ERD 에서 바꾼 것은 [DB 추가](0002)·[0003]·[0005]·[0006] 처럼 마이그레이션 번호로 표시한다.
 - 칸을 바꿀 땐: 마이그레이션 추가 → 이 파일 수정 → tests/db 의 모델·DB 일치 테스트로 확인.
 """
 
@@ -12,8 +12,8 @@ import uuid
 from datetime import date, datetime
 
 from pgvector.sqlalchemy import HALFVEC
-from sqlalchemy import (CHAR, BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Identity, Integer, String, Text,
-                        text)
+from sqlalchemy import (CHAR, BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Identity, Index, Integer, String,
+                        Text, text)
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -331,3 +331,97 @@ class OutputSource(Base):
     output_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("output_file.id", ondelete="CASCADE"), nullable=False)
     work_file_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("work_file.id"))
     doc_version_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("document_version.id"))  # [0003]
+
+
+# ── 개인 메일 (커넥터 mcp-servers/gmail) — [0005 초안] ─────────
+# 직원이 연결한 개인 Gmail 을 관계형 DB 에만 저장한다 (벡터DB · chunk 대상 아님).
+# 읽고 쓰는 곳은 커넥터뿐이고, 모든 조회에 owner_user_id = 로그인 사용자 조건이 붙는다.
+
+class MailAccount(Base):
+    __tablename__ = "mail_account"
+    owner_user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class MailMessage(Base):
+    __tablename__ = "mail_message"
+    __table_args__ = (Index("ix_mail_owner_thread", "owner_user_id", "thread_id"),
+                      Index("ix_mail_owner_sent", "owner_user_id", text("sent_at DESC")))
+    owner_user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    message_id: Mapped[str] = mapped_column(String(64), primary_key=True)           # Gmail 메시지 ID
+    thread_id: Mapped[str] = mapped_column(String(64), nullable=False)              # Gmail 스레드 ID
+    sender: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    to_addrs: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    cc_addrs: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    bcc_addrs: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    subject: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    labels: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    body: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    body_omitted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    content_hash: Mapped[str] = mapped_column(String(80), nullable=False)           # 같으면 다시 쓰지 않음
+    synced_at: Mapped[datetime] = _now()
+
+
+class MailSyncState(Base):
+    __tablename__ = "mail_sync_state"
+    owner_user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    last_sync_end: Mapped[float | None] = mapped_column(Float)    # epoch 초
+    window_start: Mapped[float | None] = mapped_column(Float)
+    window_end: Mapped[float | None] = mapped_column(Float)
+    checkpoint: Mapped[dict | None] = mapped_column(JSONB)        # NULL 이면 진행 중 아님
+    job_id: Mapped[str | None] = mapped_column(String(64))
+
+
+class MailSyncFailure(Base):
+    __tablename__ = "mail_sync_failure"
+    __table_args__ = (Index("ix_mail_failure_owner_job", "owner_user_id", "job_id"),)
+    id: Mapped[int] = _id()
+    owner_user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    job_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    message_id: Mapped[str | None] = mapped_column(String(64))
+    reason: Mapped[str] = mapped_column(String(30), nullable=False)  # fetch_error | too_large | invalid_message
+    detail: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    created_at: Mapped[datetime] = _now()
+
+
+class MailSyncRun(Base):
+    __tablename__ = "mail_sync_run"
+    __table_args__ = (Index("ix_mail_run_owner", "owner_user_id", "id"),)
+    id: Mapped[int] = _id()
+    owner_user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    job_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    mode: Mapped[str] = mapped_column(String(20), nullable=False)    # incremental | full | prune
+    summary: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    finished_at: Mapped[datetime] = _now()
+
+
+class MailArchive(Base):
+    """[0006 초안] 퇴사(삭제)한 직원의 메일. users 를 지우기 직전에 트리거(trg_users_archive_mail)가 복사한다.
+    직원이 이미 없으므로 users 외래키는 없다. 관리자만 본다 (MCP 툴로 열지 않음)."""
+    __tablename__ = "mail_archive"
+    __table_args__ = (Index("ix_mail_archive_user_thread", "former_user_id", "thread_id"),
+                      Index("ix_mail_archive_user_sent", "former_user_id", text("sent_at DESC")),
+                      Index("ix_mail_archive_login", "former_login_id"))
+    former_user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    message_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    former_login_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    former_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    former_dept_id: Mapped[int | None] = mapped_column(BigInteger)
+    account_email: Mapped[str | None] = mapped_column(String(255))
+    thread_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    sender: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    to_addrs: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    cc_addrs: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    bcc_addrs: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    subject: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    labels: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    body: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    body_omitted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    content_hash: Mapped[str] = mapped_column(String(80), nullable=False)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    archived_at: Mapped[datetime] = _now()
