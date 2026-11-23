@@ -256,11 +256,11 @@ CREATE TABLE chunk (
     scope                VARCHAR(20) NOT NULL CHECK (scope IN ('dept', 'company')),  -- 문서에서 상속
     security_grade       INT NOT NULL,     -- 문서에서 상속
     heading_path         TEXT[],           -- parse_result elements.heading_path (예: {제3장, 제42조})
-    embedding            vector(1024),     -- bge-m3 (EMBEDDING_DIM=1024)
+    embedding            halfvec(2048),    -- [0004] KURE-v3 (EMBEDDING_DIM=2048)
     UNIQUE (document_version_id, chunk_index)
 );
 
-CREATE INDEX idx_chunk_embedding ON chunk USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX idx_chunk_embedding ON chunk USING hnsw (embedding halfvec_cosine_ops);  -- [0004]
 CREATE INDEX idx_chunk_access    ON chunk (scope, owner_dept_id, security_grade);
 
 CREATE TABLE citation (

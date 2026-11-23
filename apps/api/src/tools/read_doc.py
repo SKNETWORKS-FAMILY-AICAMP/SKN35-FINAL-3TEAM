@@ -24,7 +24,7 @@ def can_read_chunk(chunk: dict, principal: Principal) -> bool:
     if scope == "company":
         return True
 
-    if scope == "department":
+    if scope == "dept":
         user_dept = principal.attributes.get("dept_id")
         doc_dept = chunk.get("dept_id")
 

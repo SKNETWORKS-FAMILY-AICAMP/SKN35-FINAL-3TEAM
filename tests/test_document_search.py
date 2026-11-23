@@ -20,7 +20,7 @@ async def test_search_preview_and_access_filter(tmp_path, length):
         "security_grade": 1,
     }
     restricted = [
-        {**public, "doc_id": "other-dept", "scope": "department", "dept_id": 20, "text": "부서 제한 원문"},
+        {**public, "doc_id": "other-dept", "scope": "dept", "dept_id": 20, "text": "부서 제한 원문"},
         {**public, "doc_id": "higher-grade", "security_grade": 3, "text": "등급 제한 원문"},
     ]
     path = tmp_path / "chunks.json"

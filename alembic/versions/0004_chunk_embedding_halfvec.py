@@ -1,4 +1,4 @@
-"""[초안 — DB 담당 확인 전] chunk.embedding: vector(1024) → halfvec(2048) (2026-11-20, 청킹 담당 제안)
+"""chunk.embedding: vector(1024) → halfvec(2048) (2026-11-20 제안, 2026-11-23 확정 — 이형민, DB 담당 대행)
 
 이유
 - 임베딩 모델이 KURE-v3 로 정해졌다(2,048차원). 0001 의 vector(1024) 는 이전 후보 bge-m3 기준.

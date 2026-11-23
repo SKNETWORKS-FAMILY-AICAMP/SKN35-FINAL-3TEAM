@@ -14,7 +14,7 @@ STORAGE_ROOT=          # 원본 파일 저장 폴더. 비우면 data/storage
 | `versions/0001_team_erd.py` | 팀 ERD 그대로 (`docs/architecture/schema.postgres.sql`, 24개 표). 손으로 고치지 않는다 |
 | `versions/0002_db_hardening.py` | SSO 연결 칸, 보안등급 1~5, 감사 로그 추가만 허용, 앱 전용 역할 `agent_app` |
 | `versions/0003_rename_document_id.py` | `document_id` → `doc_id` (document_version·agent_knowledge), `document_version_id` → `doc_version_id` (chunk·output_source) |
-| `versions/0004_chunk_embedding_halfvec.py` | **[초안, DB 담당 확인 전]** `chunk.embedding` vector(1024) → halfvec(2048) (KURE-v3). 기존 벡터는 비워지므로 색인을 다시 돌린다 |
+| `versions/0004_chunk_embedding_halfvec.py` | `chunk.embedding` vector(1024) → halfvec(2048) (KURE-v3). 기존 벡터는 비워지므로 색인을 다시 돌린다 |
 
 ## 자주 쓰는 명령
 

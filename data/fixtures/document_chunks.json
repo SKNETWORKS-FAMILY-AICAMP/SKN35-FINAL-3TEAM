@@ -15,7 +15,7 @@
     "title": "부서 10 서류 처리 지침",
     "location": "제3절 2항",
     "text": "서류 반려 사유를 등록할 때에는 누락된 항목과 재제출이 필요한 서류를 명시한다.",
-    "scope": "department",
+    "scope": "dept",
     "dept_id": 10,
     "security_grade": 2
   },
@@ -25,7 +25,7 @@
     "title": "부서 10 서류 예외 처리 지침",
     "location": "제4절 1항",
     "text": "서류 반려 건의 예외 승인이 필요한 경우 부서 운영 책임자가 처리 근거와 승인 내역을 검토한다.",
-    "scope": "department",
+    "scope": "dept",
     "dept_id": 10,
     "security_grade": 3
   }
