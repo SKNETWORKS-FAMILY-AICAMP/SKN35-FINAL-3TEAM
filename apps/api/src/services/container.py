@@ -238,7 +238,7 @@ def stores_from_env() -> dict:
             "sessions": DbSessionStore(session_scope)}
 
 
-def build_from_env() -> AppServices:
+def build_from_env(*, gmail_account_resolver: GmailAccountResolver | None = None) -> AppServices:
     env = os.environ.get
     rules, default = load_policy(
         env("PERMISSION_POLICY_PATH", "config/permissions.yaml"),

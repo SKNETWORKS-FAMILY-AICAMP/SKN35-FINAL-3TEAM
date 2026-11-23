@@ -419,7 +419,6 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, cha
             searched={message.events?.some(event => event.tool_name === 'search_doc')}
             cited={/(^|\n)\s*\**근거\**\s*[:：]/.test(message.content)} />}
         </article>)}
-        <ThreadMessages messages={conversation.messages} />
         {sending && <article className="message agent pending"><LoaderCircle size={16} className="spin" /> 답을 만드는 중입니다…</article>}
         <ApprovalCards user={user} approvals={approvals} onAnswered={pollApprovals} />
         <div ref={chatEnd} />
