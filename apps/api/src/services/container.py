@@ -17,6 +17,7 @@ from harness.local_math import LocalMathClient
 from permission import create_checker
 from permission.approval import FutureApprovalHandler
 from permission.audit import JsonlAuditLogger
+from permission.customer_mail import CustomerMailRule
 from permission.policy import load_policy
 from services.agents import InMemoryAgentStore, InMemoryShareRequestStore
 from services.inbox import InboxStore
@@ -39,6 +40,7 @@ from tools.gmail import build_gmail_tools
 from tools.loans import LoanStore, LoansMaturingTool
 from tools.market import build_market_tools
 from tools.maturity_alert import SendMaturityAlertTool
+from tools.maturity_notice import PrepareMaturityNoticesTool, SendMaturityNoticeTool
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 log = logging.getLogger("uvicorn.error")
@@ -169,13 +171,15 @@ def build_tools(doc_path: str | Path = FIXTURES / "doc_chunks.json", upload_dir:
     )
     loan_store = loan_store or LoanStore(FIXTURES / "loans_demo.json")
     inbox = inbox or InboxStore(REPO_ROOT / "data/inbox.sqlite3")
+    gmail = build_gmail_tools(account_resolver=gmail_account_resolver)
+    mailer = next((tool for tool in gmail if tool.spec.name == "send_mail"), None)
     return [
         *arithmetic_tools(), *(doc_tools or [SearchDocsTool(doc), ReadDocTool(doc)]),
         TodayTool(Path(holiday_path) if holiday_path is not None else None),
         ParseDocTool(uploads, timeout=parse_timeout, uploads=upload_store),
         GetReviewCaseTool(review_store), SubmitReviewRequestTool(review_store),
-        LoansMaturingTool(loan_store), SendMaturityAlertTool(loan_store, inbox),
-        *build_gmail_tools(account_resolver=gmail_account_resolver),
+        LoansMaturingTool(loan_store), SendMaturityAlertTool(loan_store, inbox), PrepareMaturityNoticesTool(loan_store), SendMaturityNoticeTool(loan_store, mailer),
+        *gmail,
         *build_market_tools(),
     ]
 
@@ -221,7 +225,7 @@ def build_from_env(*, gmail_account_resolver: GmailAccountResolver | None = None
         )),
         inbox=inbox,
         uploads=uploads,
-        checker=create_checker(rules=rules, default=default),
+        checker=CustomerMailRule(create_checker(rules=rules, default=default), loan_store),
         approvals=FutureApprovalHandler(float(env("PERMISSION_APPROVAL_TIMEOUT_SECONDS", "120"))),
         audit=JsonlAuditLogger(env("PERMISSION_AUDIT_LOG_PATH", "logs/permission_audit.jsonl")),
         users=UserDirectory.from_yaml(env("DEV_USERS_PATH", "config/dev_users.yaml")),

@@ -51,6 +51,17 @@ rules:
     tool: loans_maturing
     decision: allow
 
+  # 안내문 준비는 글만 만든다 (보내지 않음). 고객 메일 본문 검사는 permission/customer_mail.py
+  - id: maturity-notice-prepare
+    tool: prepare_maturity_notices
+    decision: allow
+
+  # 고객 만기 안내 메일: 요청자가 채팅에서 승인 (결정사항 2번). 미리보기와 담당자 검사는 permission/customer_mail.py
+  - id: maturity-notice-confirm
+    tool: send_maturity_notice
+    decision: ask
+    reason: 고객에게 만기 안내 메일이 발송됩니다.
+
   # 만기 알림은 본인 알림함으로만 간다 (받는 사람을 고르는 입력이 없음)
   - id: maturity-alert-self
     tool: send_maturity_alert

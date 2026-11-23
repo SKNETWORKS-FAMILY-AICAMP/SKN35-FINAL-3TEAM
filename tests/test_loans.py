@@ -1,4 +1,4 @@
-"""UC-03 만기 알림."""
+"""UC-03 만기 알림, UC-05 고객 메일 수신자 검사."""
 
 import json
 from datetime import date
@@ -12,12 +12,16 @@ from main import create_app
 from permission import create_checker
 from permission.approval import FutureApprovalHandler
 from permission.audit import JsonlAuditLogger
+from permission.customer_mail import CustomerMailRule
+from permission.policy import load_policy
 from services.container import AppServices
 from services.inbox import InboxStore
 from services.users import UserDirectory
 from tests.fakes import ScriptedLLM
 from tools.loans import LoansMaturingTool, LoanStore, mask_name, won
 from tools.maturity_alert import SendMaturityAlertTool
+from contracts.harness import ToolResult
+from tools.maturity_notice import PrepareMaturityNoticesTool, SendMaturityNoticeTool, render_notice
 from tools.number_check import unknown_numbers
 from tools.registry import SimpleToolRegistry
 
@@ -25,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 KIM = Principal("kim", ("member",), {"dept_id": 10, "security_grade": 2})
 PARK = Principal("park", ("member",), {"dept_id": 20, "security_grade": 2})
 LEE = Principal("lee", ("dept_head",), {"dept_id": 10, "security_grade": 3})
+ADMIN = Principal("admin", ("admin",), {"dept_id": 1, "security_grade": 5})
 
 
 @pytest.fixture
@@ -121,3 +126,86 @@ async def test_inbox_api_only_shows_own_alerts(loans, inbox, tmp_path):
         assert opened.status_code == 200 and opened.json()["read_at"]
         assert (await client.get("/api/inbox", headers={"X-User-Id": "park"})).json() == []
         assert (await client.get(f"/api/inbox/{alert_id}", headers={"X-User-Id": "park"})).status_code == 404
+
+
+@pytest.fixture
+def mail_checker(loans):
+    rules, default = load_policy(ROOT / "config/permissions.yaml")
+    return CustomerMailRule(create_checker(rules=rules, default=default), loans)
+
+
+def mail(to, cc=(), principal=KIM, subject="만기 안내", body="안내"):
+    return call("send_mail", {"to": list(to), "cc": list(cc), "subject": subject, "body": body}, principal)
+
+
+async def prepared(loans, days=7, principal=KIM):
+    return (await PrepareMaturityNoticesTool(loans).run(call("prepare_maturity_notices", {"days": days}, principal))).data
+
+
+async def test_prepare_notices_one_per_customer(loans):
+    data = await prepared(loans, 30)
+    assert data["count"] == 5 and [s["customer"] for s in data["skipped"]] == ["이*준"]  # 이메일 없는 고객
+    assert all(len(n["to"]) == 1 for n in data["notices"])
+    overdue, soon = data["notices"][0], data["notices"][1]
+    assert overdue["to"] == ["hong.gildong@example.com"] and "만기일(2026-11-18)이 지났습니다" in overdue["body"]
+    assert "2026-11-26" in soon["body"] and "5억원" in soon["body"] and "홍길동" not in overdue["body"]
+    assert (await prepared(loans, 30, LEE))["notices"] == []
+    # 같은 입력이면 같은 글 (본문 검사의 전제)
+    assert data == await prepared(loans, 30)
+
+
+async def test_customer_mail_must_be_the_prepared_notice(loans, mail_checker):
+    notice = (await prepared(loans))["notices"][1]
+    ok = await mail_checker.check(mail(notice["to"], subject=notice["subject"], body=notice["body"] + "\n"))
+    assert ok.decision is Decision.ASK  # 줄 끝 공백 차이는 같은 글로 본다
+    changed = notice["body"].replace("2026-11-26", "2026-12-26")
+    for bad in (mail(notice["to"], subject=notice["subject"], body=changed),
+                mail(notice["to"], subject=notice["subject"], body=notice["body"] + "\n연장은 승인될 예정입니다."),
+                mail(notice["to"], subject="다른 제목", body=notice["body"])):
+        verdict = await mail_checker.check(bad)
+        assert verdict.decision is Decision.DENY and verdict.rule_id == "customer-mail-notice-only"
+
+
+async def test_one_customer_per_mail_and_own_customers_only(loans, mail_checker):
+    notice = render_notice(loans.items_for_email(KIM, "hong.gildong@example.com")[0])
+    one = await mail_checker.check(mail(["Hong.Gildong@example.com"], ["colleague@bank.example"], subject=notice["subject"], body=notice["body"]))
+    assert one.decision is Decision.ASK  # 원래 정책(승인 카드)으로 넘어간다
+    mixed = await mail_checker.check(mail(["hong.gildong@example.com"], ["minji.kim@example.com"]))
+    assert mixed.decision is Decision.DENY and mixed.rule_id == "customer-mail-one-per-customer"
+    other = await mail_checker.check(mail(["sua.jung@example.com"]))
+    assert other.decision is Decision.DENY and other.rule_id == "customer-mail-own-only"
+    # 관리자도 섞어 보낼 수 없다
+    assert (await mail_checker.check(mail(["hong.gildong@example.com", "sua.jung@example.com"], principal=ADMIN))).decision is Decision.DENY
+    # 고객이 아닌 메일과 다른 툴은 원래 정책 그대로
+    assert (await mail_checker.check(mail(["a@bank.example", "b@bank.example"]))).decision is Decision.ASK
+    assert (await mail_checker.check(call("loans_maturing", {}))).decision is Decision.ALLOW
+    assert (await mail_checker.check(call("send_maturity_alert", {}))).decision is Decision.ALLOW
+
+
+class FakeMailer:
+    def __init__(self):
+        self.calls = []
+
+    async def run(self, call):
+        self.calls.append(call)
+        return ToolResult(call.call_id, True, "{}", data={"status": "simulated"})
+
+
+async def test_notice_card_shows_mail_and_send_uses_template(loans, mail_checker):
+    card = await mail_checker.check(call("send_maturity_notice", {"loan_id": "L-1002"}))
+    assert card.decision is Decision.ASK
+    assert "finance@hanbit-precision.example.com" in card.reason and "2026-11-26" in card.reason and "5억원" in card.reason
+    for loan_id, who in (("L-2001", KIM), ("L-1004", KIM), ("L-1002", PARK), ("L-1002", ADMIN)):
+        assert (await mail_checker.check(call("send_maturity_notice", {"loan_id": loan_id}, who))).decision is Decision.DENY
+
+    mailer = FakeMailer()
+    tool = SendMaturityNoticeTool(loans, mailer)
+    sent = await tool.run(call("send_maturity_notice", {"loan_id": "L-1002"}))
+    assert sent.ok and sent.data["to"] == ["finance@hanbit-precision.example.com"]
+    args = mailer.calls[0].arguments
+    assert mailer.calls[0].tool_name == "send_mail" and args["cc"] == []
+    assert args["body"] == render_notice(loans.own_item(KIM, "L-1002"))["body"]
+    assert not (await tool.run(call("send_maturity_notice", {"loan_id": "L-2001"}))).ok  # 남의 고객
+    assert not (await tool.run(call("send_maturity_notice", {"loan_id": "L-1002", "body": "x"}))).ok  # 본문은 못 넘긴다
+    assert not (await SendMaturityNoticeTool(loans).run(call("send_maturity_notice", {"loan_id": "L-1002"}))).ok
+    assert len(mailer.calls) == 1

@@ -293,6 +293,7 @@ details[open] .more { display: none; }
 .inbox-detail .badge + .badge { margin-left: 6px; }
 .inbox-summary { margin: 12px 0; padding: 12px 14px; border-left: 3px solid #ffd166; background: #1c1a14; border-radius: 8px; }
 .inbox-item { padding: 14px 16px; list-style: none; margin-bottom: 10px; }
+.approval p.muted { white-space: pre-line; }  /* 만기 안내 메일 미리보기 (받는 사람·제목·본문) */
 .saved-report { min-width: 0; }
 .saved-report table { display: block; overflow-x: auto; }
 .structured-report .report-table { overflow-x: auto; }
