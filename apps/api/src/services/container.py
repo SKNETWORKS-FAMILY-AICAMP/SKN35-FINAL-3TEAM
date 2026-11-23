@@ -19,6 +19,7 @@ from permission.approval import FutureApprovalHandler
 from permission.audit import JsonlAuditLogger
 from permission.policy import load_policy
 from services.agents import InMemoryAgentStore, InMemoryShareRequestStore
+from services.inbox import InboxStore
 from services.mail_accounts import GmailAccountResolver
 from services.sessions import InMemorySessionStore
 from services.templates import InMemoryTemplateStore, load_templates
@@ -35,7 +36,9 @@ from tools.search_doc import SearchDocsTool
 from tools.submit_review_request import SubmitReviewRequestTool
 from tools.today import TodayTool
 from tools.gmail import build_gmail_tools
+from tools.loans import LoanStore, LoansMaturingTool
 from tools.market import build_market_tools
+from tools.maturity_alert import SendMaturityAlertTool
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 log = logging.getLogger("uvicorn.error")
@@ -73,6 +76,7 @@ class AppServices:
     share_requests: InMemoryShareRequestStore = field(default_factory=InMemoryShareRequestStore)
     uploads: UploadStore = field(default_factory=lambda: UploadStore(REPO_ROOT / "data/uploads"))
     templates: InMemoryTemplateStore = field(default_factory=InMemoryTemplateStore)
+    inbox: InboxStore = field(default_factory=lambda: InboxStore(REPO_ROOT / "data/inbox.sqlite3"))
     draft_llm: LLMClient | None = None  # 에이전트 초안 전용 (더 큰 모델). 없으면 llm 을 쓴다
     max_turns: int = 10
     tool_timeout: float | None = 30.0
@@ -152,6 +156,7 @@ def build_tools(doc_path: str | Path = FIXTURES / "doc_chunks.json", upload_dir:
                 parse_timeout: float | None = DEFAULT_PARSE_TIMEOUT,
                 holiday_path: str | Path | None = FIXTURES / "business_holidays_demo.json", review_store: ReviewStore | None = None,
                 upload_store: UploadStore | None = None, doc_tools: list | None = None,
+                loan_store: LoanStore | None = None, inbox: InboxStore | None = None,
                 gmail_account_resolver: GmailAccountResolver | None = None) -> list:
     """로컬 도구와 환경변수로 활성화한 Gmail MCP 도구를 함께 등록한다.
     doc_tools 를 주면 파일 예시 대신 그 문서 검색·열람 도구를 쓴다 (DOC_STORE=db → tools/db_docs.py)."""
@@ -162,11 +167,14 @@ def build_tools(doc_path: str | Path = FIXTURES / "doc_chunks.json", upload_dir:
         REPO_ROOT / "data/fixtures/review_cases.json",
         Path(os.environ.get("REVIEW_REQUEST_DB_PATH", str(REPO_ROOT / "data/review_requests.sqlite3"))),
     )
+    loan_store = loan_store or LoanStore(FIXTURES / "loans_demo.json")
+    inbox = inbox or InboxStore(REPO_ROOT / "data/inbox.sqlite3")
     return [
         *arithmetic_tools(), *(doc_tools or [SearchDocsTool(doc), ReadDocTool(doc)]),
         TodayTool(Path(holiday_path) if holiday_path is not None else None),
         ParseDocTool(uploads, timeout=parse_timeout, uploads=upload_store),
         GetReviewCaseTool(review_store), SubmitReviewRequestTool(review_store),
+        LoansMaturingTool(loan_store), SendMaturityAlertTool(loan_store, inbox),
         *build_gmail_tools(account_resolver=gmail_account_resolver),
         *build_market_tools(),
     ]
@@ -198,6 +206,8 @@ def build_from_env(*, gmail_account_resolver: GmailAccountResolver | None = None
         Path(env("REVIEW_CASES_PATH", str(FIXTURES / "review_cases.json"))),
         Path(env("REVIEW_REQUEST_DB_PATH", str(REPO_ROOT / "data" / "review_requests.sqlite3"))),
     )
+    loan_store = LoanStore(Path(env("LOANS_PATH", str(FIXTURES / "loans_demo.json"))))
+    inbox = InboxStore(Path(env("INBOX_DB_PATH", str(REPO_ROOT / "data" / "inbox.sqlite3"))))
     llm = llm_from_env()
     return AppServices(
         llm=llm,
@@ -206,9 +216,10 @@ def build_from_env(*, gmail_account_resolver: GmailAccountResolver | None = None
             doc_path, upload_dir=env("UPLOAD_DIR"),
             parse_timeout=float(env("PARSE_TOOL_TIMEOUT_SECONDS", str(DEFAULT_PARSE_TIMEOUT))),
             holiday_path=holiday_path, review_store=review_store, upload_store=uploads,
-            doc_tools=db_doc_tools_from_env(),
+            doc_tools=db_doc_tools_from_env(), loan_store=loan_store, inbox=inbox,
             gmail_account_resolver=gmail_account_resolver,
         )),
+        inbox=inbox,
         uploads=uploads,
         checker=create_checker(rules=rules, default=default),
         approvals=FutureApprovalHandler(float(env("PERMISSION_APPROVAL_TIMEOUT_SECONDS", "120"))),

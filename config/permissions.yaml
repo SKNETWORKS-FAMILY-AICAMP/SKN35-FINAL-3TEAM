@@ -46,6 +46,16 @@ rules:
     tool: get_review_case
     decision: allow
 
+  # 내 담당 대출 조회 (UC-03·05). 담당자 필터는 툴 안에서 로그인 신원으로 강제한다.
+  - id: loans-maturing
+    tool: loans_maturing
+    decision: allow
+
+  # 만기 알림은 본인 알림함으로만 간다 (받는 사람을 고르는 입력이 없음)
+  - id: maturity-alert-self
+    tool: send_maturity_alert
+    decision: allow
+
   - id: admin-all
     tool: "*"
     decision: allow

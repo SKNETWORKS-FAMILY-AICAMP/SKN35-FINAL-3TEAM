@@ -284,6 +284,15 @@ details[open] .more { display: none; }
 .template .actions { width: 100%; justify-content: flex-end; flex-wrap: wrap; }
 .template.unavailable { opacity: .82; }
 .tool-tags span.missing { color: #f6b273; border-style: dashed; }
+/* 알림함 (inbox.jsx) */
+.inbox-item.selected { border-color: #ffd166; }
+.inbox-open { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; width: 100%; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.inbox-open strong { display: inline-flex; align-items: center; gap: 8px; }
+.inbox-counts { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.inbox-detail { margin-top: 18px; padding: 20px; }
+.inbox-detail .badge + .badge { margin-left: 6px; }
+.inbox-summary { margin: 12px 0; padding: 12px 14px; border-left: 3px solid #ffd166; background: #1c1a14; border-radius: 8px; }
+.inbox-item { padding: 14px 16px; list-style: none; margin-bottom: 10px; }
 .saved-report { min-width: 0; }
 .saved-report table { display: block; overflow-x: auto; }
 .structured-report .report-table { overflow-x: auto; }
