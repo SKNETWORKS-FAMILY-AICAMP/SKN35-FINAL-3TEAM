@@ -10,8 +10,7 @@ from harness import create_harness
 from market_mcp.ecos import MarketError
 from market_mcp.report_templates import ReportTemplateCatalog, render_template, validate_template
 from tests.fakes import FixedApprover, MemoryAudit, ScriptedChecker, ScriptedLLM
-from tests.test_market_tools import KIM, bridge, service  # noqa: F401
-from tools.market import MARKET_TOOLS, MarketTool
+from tests.test_market_tools import KIM, bridge, market_tools, service  # noqa: F401
 from tools.registry import SimpleToolRegistry
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -123,8 +122,8 @@ async def test_required_summary_is_not_silently_replaced(service, templates):  #
     assert not (service.root / "reports").exists()
 
 
-def runner_for(connection, script=()):
-    return create_harness(llm=ScriptedLLM(list(script)), tools=SimpleToolRegistry([MarketTool(name, connection) for name in MARKET_TOOLS]),
+def runner_for(service, connection, script=()):  # noqa: F811
+    return create_harness(llm=ScriptedLLM(list(script)), tools=SimpleToolRegistry(market_tools(service, connection)),
         checker=ScriptedChecker({}), approver=FixedApprover(True), audit=MemoryAudit(), max_turns=3)
 
 
@@ -133,8 +132,8 @@ def runner_for(connection, script=()):
     ("2026-11-18 간단 환율 브리핑 양식으로 표만 작성해줘", "환율 간단 브리핑"),
     ("2026-11-18 금리·환율 점검 보고서로 표만 작성해줘", "금리·환율 자료 점검 보고서"),
 ])
-async def test_agent_uses_search_read_data_save_order(bridge, question, title):  # noqa: F811
-    result = await runner_for(bridge).run(question, KIM, "s")
+async def test_agent_uses_search_read_data_save_order(service, bridge, question, title):  # noqa: F811
+    result = await runner_for(service, bridge).run(question, KIM, "s")
     names = [c.tool_name for message in result.messages for c in message.tool_calls]
     assert names == ["search_report_templates", "get_report_template", "market_snapshot", "save_morning_report"]
     assert title in result.final_message.content
@@ -142,7 +141,7 @@ async def test_agent_uses_search_read_data_save_order(bridge, question, title): 
 
 
 async def test_missing_template_does_not_fabricate_report(bridge, service):  # noqa: F811
-    result = await runner_for(bridge).run("회의록 양식으로 작성해줘", KIM, "s")
+    result = await runner_for(service, bridge).run("회의록 양식으로 작성해줘", KIM, "s")
     assert "양식을 찾지 못했습니다" in result.final_message.content
     assert not (service.root / "reports").exists() and not (service.root / "snapshots").exists()
 
@@ -151,13 +150,13 @@ async def test_ambiguous_template_asks_before_fetching_data(bridge, service, tem
     path = templates / "market-daily.json"
     changed = json.loads(path.read_text(encoding="utf-8")); changed["priority"] = 0
     path.write_text(json.dumps(changed, ensure_ascii=False), encoding="utf-8")
-    result = await runner_for(bridge).run("금리·환율 리포트 만들어줘", KIM, "s")
+    result = await runner_for(service, bridge).run("금리·환율 리포트 만들어줘", KIM, "s")
     assert "어느 양식을 사용할지" in result.final_message.content
     assert not (service.root / "snapshots").exists()
 
 
 async def test_template_listing_does_not_fetch_market_data(bridge, service):  # noqa: F811
-    result = await runner_for(bridge).run("보고서 양식 목록 보여줘", KIM, "s")
+    result = await runner_for(service, bridge).run("보고서 양식 목록 보여줘", KIM, "s")
     assert "일일 금리·환율 보고서" in result.final_message.content and "간단 환율 브리핑" in result.final_message.content
     assert not (service.root / "snapshots").exists()
 
@@ -168,7 +167,7 @@ async def test_long_template_is_kept_in_full_without_overloading_summary_context
     padding = "회사 고정 안내 문구입니다. " * 500
     raw["sections"].append({"type": "paragraph", "text": padding})
     path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
-    runner = runner_for(bridge, [{"content": "USD는 1,338.80원입니다."}])
+    runner = runner_for(service, bridge, [{"content": "USD는 1,338.80원입니다."}])
     result = await runner.run("2026-11-18 일일 금리·환율 보고서 작성해줘", KIM, "s")
     assert padding in result.final_message.content
     model_input = runner.llm.calls[0][0][-1].content

@@ -162,6 +162,8 @@ async def test_download_pdf_and_docx_only_for_owner(tool, store, tmp_path):
         park = {"X-User-Id": "park"}
         assert (await client.get(f"/api/documents/{doc_id}/download?format=pdf", headers=park)).status_code == 404
         assert (await client.get("/api/documents", headers=park)).json() == []
+        # 브라우저가 보낸 내용을 변환하던 길은 없다
+        assert (await client.post("/api/reports/export/docx", headers=kim, json=example())).status_code in (404, 405)
     assert find_font().is_file()
 
 

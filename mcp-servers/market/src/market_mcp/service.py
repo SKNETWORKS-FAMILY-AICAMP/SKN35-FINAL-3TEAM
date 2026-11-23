@@ -1,4 +1,11 @@
-"""ECOS → 날짜/수치 검증 → 스냅샷 → 요약 검사 → 소유자별 리포트 파일. PostgreSQL은 사용하지 않는다."""
+"""ECOS → 날짜/수치 검증 → 스냅샷 → 요약 검사 → 소유자별 리포트.
+
+저장은 store 에 맡긴다 (write(kind, payload) / read(kind, ident, owner)).
+- 시장 MCP 서버: store 없음. market_snapshot 만 열고 아무것도 저장하지 않는다 (데이터 조회 전용).
+- 플랫폼 API: 이 클래스를 라이브러리로 써서 양식 검색·리포트 작성·저장을 하고, store 는 API 문서 저장소다
+  (apps/api/src/tools/market.py). 모든 서류의 저장·내려받기를 API 한 곳에 모은다.
+- FileStore: 파일 저장 (테스트·단독 실행용).
+"""
 
 from __future__ import annotations
 
@@ -129,9 +136,35 @@ def check_summary(summary: str, snapshot: dict) -> dict:
             "numbers_not_in_table": bad, "forbidden_words": forbidden, "sentences": len(sentences)}
 
 
+class FileStore:
+    """소유자별 JSON 파일 저장소 (테스트·단독 실행용)."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+
+    def write(self, kind: str, payload: dict) -> None:
+        directory = self.root / kind
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / (payload["id"] + ".json")
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(path)
+
+    def read(self, kind: str, ident: str, owner: str) -> dict:
+        try:
+            payload = json.loads((self.root / kind / (ident + ".json")).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raise MarketError("열람 가능한 시장 자료를 찾을 수 없습니다.") from None
+        if payload.get("owner_user_id") != owner:
+            raise MarketError("열람 가능한 시장 자료를 찾을 수 없습니다.")
+        return payload
+
+
 class MarketService:
-    def __init__(self, provider, root: Path, *, today=None, templates_dir: Path | None = None) -> None:
+    def __init__(self, provider, root: Path | None = None, *, store=None, today=None,
+                 templates_dir: Path | None = None) -> None:
         self.provider, self.root = provider, root
+        self.store = store if store is not None else (FileStore(root) if root is not None else None)
         self.today = today or (lambda: datetime.now(ZoneInfo("Asia/Seoul")).date())
         self.templates = ReportTemplateCatalog(templates_dir or Path(os.environ.get("REPORT_TEMPLATES_DIR", "config/report_templates")))
         self.default_template = os.environ.get("REPORT_DEFAULT_TEMPLATE", "market-daily")
@@ -161,24 +194,15 @@ class MarketService:
         return owner
 
     def _write(self, kind: str, payload: dict) -> None:
-        directory = self.root / kind
-        directory.mkdir(parents=True, exist_ok=True)
-        path = directory / (payload["id"] + ".json")
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(path)
+        if self.store is None:
+            return  # 시장 MCP 서버는 저장하지 않는다
+        self.store.write(kind, payload)
 
     def _read(self, kind: str, ident: str, owner: str) -> dict:
         self._owner(owner)
-        if not isinstance(ident, str) or not re.fullmatch(r"[0-9a-f]{32}", ident):
+        if not isinstance(ident, str) or not re.fullmatch(r"[0-9a-f]{32}", ident) or self.store is None:
             raise MarketError("열람 가능한 시장 자료를 찾을 수 없습니다.")
-        try:
-            payload = json.loads((self.root / kind / (ident + ".json")).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            raise MarketError("열람 가능한 시장 자료를 찾을 수 없습니다.") from None
-        if payload.get("owner_user_id") != owner:
-            raise MarketError("열람 가능한 시장 자료를 찾을 수 없습니다.")
-        return payload
+        return self.store.read(kind, ident, owner)
 
     async def market_snapshot(self, requester_id: str, base_date: str | None = None) -> dict:
         self._owner(requester_id)

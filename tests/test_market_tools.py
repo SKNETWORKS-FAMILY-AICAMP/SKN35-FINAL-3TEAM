@@ -23,7 +23,7 @@ from services.container import AppServices, build_from_env
 from services.templates import InMemoryTemplateStore, load_templates
 from services.users import UserDirectory
 from tests.fakes import ScriptedLLM
-from tools.market import MarketMCPConnection, MarketTool, build_market_tools
+from tools.market import LOCAL_TOOLS, LocalReportTool, MarketMCPConnection, MarketTool, build_market_tools
 from tools.registry import SimpleToolRegistry
 
 SAMPLE = Path(__file__).resolve().parents[1] / "mcp-servers/market/src/market_mcp/resources/ecos_delivery_sample.json"
@@ -38,8 +38,16 @@ def service(tmp_path):
 
 @pytest.fixture
 def bridge(service):
-    server = build_server(service)
+    # 실제 배치처럼 MCP 서버는 저장소 없이 조회만 한다
+    server = build_server(MarketService(service.provider, today=service.today))
     return MarketMCPConnection("http://127.0.0.1:8002/mcp", client_factory=lambda: Client(server))
+
+
+def market_tools(service, bridge, names=("market_snapshot", *LOCAL_TOOLS)):
+    """플랫폼 배치: 조회는 MCP(결과를 플랫폼 저장소에 보관), 양식·저장·열람은 플랫폼 안에서."""
+    tools = {"market_snapshot": MarketTool("market_snapshot", bridge, service.store),
+             **{name: LocalReportTool(name, service) for name in LOCAL_TOOLS}}
+    return [tools[name] for name in names]
 
 
 def call(name, args, user=KIM):
@@ -123,26 +131,63 @@ async def test_live_provider_builds_fixed_url_and_sanitizes_key_errors():
         await EcosProvider().fetch(SERIES[0], date(2026, 11, 1), date(2026, 11, 18))
 
 
-async def test_bridge_three_tools_and_identity_cannot_be_spoofed(bridge):
-    snapshot = await MarketTool("market_snapshot", bridge).run(call("market_snapshot", {"base_date": "2026-11-18"}))
+async def test_bridge_three_tools_and_identity_cannot_be_spoofed(service, bridge):
+    tools = {tool.spec.name: tool for tool in market_tools(service, bridge)}
+    snapshot = await tools["market_snapshot"].run(call("market_snapshot", {"base_date": "2026-11-18"}))
     assert snapshot.ok and snapshot.data["mode"] == "replay"
-    saved = await MarketTool("save_morning_report", bridge).run(call("save_morning_report", {
+    saved = await tools["save_morning_report"].run(call("save_morning_report", {
         "snapshot_id": snapshot.data["snapshot_id"], "summary": "USD는 1,338.80원입니다.",
     }))
-    assert saved.ok
-    read = await MarketTool("get_morning_report", bridge).run(call("get_morning_report", {"report_id": saved.data["report_id"]}))
+    assert saved.ok and saved.data["document_id"] == saved.data["report_id"]  # 다른 서류와 같은 내려받기 버튼
+    read = await tools["get_morning_report"].run(call("get_morning_report", {"report_id": saved.data["report_id"]}))
     assert read.ok and read.data["text"] == saved.data["text"]
-    denied = await MarketTool("get_morning_report", bridge).run(call("get_morning_report", {"report_id": saved.data["report_id"]}, PARK))
+    denied = await tools["get_morning_report"].run(call("get_morning_report", {"report_id": saved.data["report_id"]}, PARK))
     assert not denied.ok
+    # 다른 사용자는 남의 조회 결과로 저장할 수 없다
+    assert not (await tools["save_morning_report"].run(call("save_morning_report", {"snapshot_id": snapshot.data["snapshot_id"]}, PARK))).ok
     for extra in ({"requester_id": "park"}, {"url": "https://example.invalid"}, {"api_key": "bad"}):
-        assert not (await MarketTool("market_snapshot", bridge).run(call("market_snapshot", extra))).ok
+        assert not (await tools["market_snapshot"].run(call("market_snapshot", extra))).ok
 
 
-async def test_chat_runs_mcp_lookup_and_save_then_pins_server_report_text(bridge, tmp_path):
+async def test_mcp_only_looks_up_and_stores_nothing(service, tmp_path):
+    server = build_server(MarketService(service.provider, today=service.today))
+    async with Client(server) as client:
+        assert {tool.name for tool in (await client.list_tools()).tools} == {"market_snapshot"}
+    stateless = MarketService(service.provider, today=service.today)
+    result = await stateless.market_snapshot("kim", "2026-11-18")
+    assert result["snapshot_id"] and stateless.store is None
+    with pytest.raises(MarketError):
+        await stateless.save_morning_report("kim", result["snapshot_id"], "")
+
+
+async def test_reports_are_saved_in_platform_store_and_downloaded_like_other_documents(bridge, tmp_path):
+    from services.documents import DocumentStore
+    from tools.market import report_service
+
+    store = DocumentStore(tmp_path / "docs.sqlite3")
+    reports = report_service(store, Path("config/report_templates"))
+    tools = {tool.spec.name: tool for tool in market_tools(reports, bridge)}
+    snapshot = await tools["market_snapshot"].run(call("market_snapshot", {"base_date": "2026-11-18"}))
+    assert store.get_record("snapshots", snapshot.data["snapshot_id"], "kim")["fx"][0]["value"] == 1338.8
+    saved = await tools["save_morning_report"].run(call("save_morning_report", {"snapshot_id": snapshot.data["snapshot_id"]}))
+    record = store.get("kim", saved.data["document_id"])
+    assert record["kind"] == "market_report" and record["document"]["blocks"]
+    assert store.list("kim")[0]["title"] == record["document"]["title"] and store.get("park", saved.data["document_id"]) is None
+    svc = AppServices(llm=ScriptedLLM([]), tools=SimpleToolRegistry([]), checker=create_checker(rules=[], default=Decision.ASK),
+                      approvals=FutureApprovalHandler(1), audit=JsonlAuditLogger(tmp_path / "audit.jsonl"),
+                      users=UserDirectory({"kim": KIM, "park": PARK}), documents=store)
+    app = create_app(build=lambda: svc); app.state.services = svc
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        docx = await client.get(f"/api/documents/{saved.data['document_id']}/download?format=docx", headers={"X-User-Id": "kim"})
+        assert docx.status_code == 200 and docx.content[:2] == b"PK"
+        other = await client.get(f"/api/documents/{saved.data['document_id']}/download?format=docx", headers={"X-User-Id": "park"})
+        assert other.status_code == 404
+
+
+async def test_chat_runs_mcp_lookup_and_save_then_pins_server_report_text(service, bridge, tmp_path):
     rules, default = load_policy("config/permissions.yaml")
     svc = AppServices(llm=ScriptedLLM([{"content": "USD는 1,338.80원입니다. 기준금리는 3.00%입니다."}]),
-                      tools=SimpleToolRegistry([MarketTool(n, bridge) for n in (
-                          "search_report_templates", "get_report_template", "market_snapshot", "save_morning_report", "get_morning_report")]),
+                      tools=SimpleToolRegistry(market_tools(service, bridge)),
                       checker=create_checker(rules=rules, default=default), approvals=FutureApprovalHandler(1),
                       audit=JsonlAuditLogger(tmp_path / "audit.jsonl"), users=UserDirectory({"kim": KIM, "park": PARK}))
     svc.templates = InMemoryTemplateStore(load_templates("config/agent_templates.yaml"))
@@ -164,7 +209,8 @@ async def test_chat_runs_mcp_lookup_and_save_then_pins_server_report_text(bridge
 
 
 def test_registration_and_disable(monkeypatch):
-    tools = build_market_tools()
+    assert [t.spec.name for t in build_market_tools()] == ["market_snapshot"]
+    tools = build_market_tools(MarketService(None))
     assert {t.spec.name for t in tools} == {
         "search_report_templates", "get_report_template", "market_snapshot", "save_morning_report", "get_morning_report"}
     assert all("requester_id" not in t.spec.parameters["properties"] for t in tools)
@@ -174,7 +220,7 @@ def test_registration_and_disable(monkeypatch):
 
 def test_market_explanations_do_not_implicitly_create_reports():
     from harness.market_grounding import market_plan
-    specs = [tool.spec for tool in build_market_tools()]
+    specs = [tool.spec for tool in build_market_tools(MarketService(None))]
     assert market_plan("금리·환율 리포트란 무슨 의미야?", specs) is None
     assert market_plan("금리·환율 조회", specs)[2] is False
     assert market_plan("금리·환율 리포트 만들어줘", specs)[2] is True
@@ -210,7 +256,7 @@ async def test_save_denial_does_not_create_report(bridge, service, tmp_path):
     from tests.fakes import FixedApprover, MemoryAudit, ScriptedChecker
     from harness import create_harness
     runner = create_harness(llm=ScriptedLLM([]),
-        tools=SimpleToolRegistry([MarketTool(n, bridge) for n in ("market_snapshot", "save_morning_report")]),
+        tools=SimpleToolRegistry(market_tools(service, bridge, ("market_snapshot", "save_morning_report"))),
         checker=ScriptedChecker({"save_morning_report": Decision.DENY}), approver=FixedApprover(True),
         audit=MemoryAudit(), max_turns=3)
     result = await runner.run("2026-11-18 금리·환율 리포트 표만 저장", KIM, "s")
@@ -228,14 +274,15 @@ async def test_snapshot_only_does_not_call_llm(bridge, tmp_path):
     assert "1,338.80" in result.final_message.content and not model.calls
 
 
-async def test_connection_error_does_not_retry_report_save():
+async def test_connection_error_is_reported_without_retry_or_record(service):
     calls = []
     def down():
         calls.append(1)
         raise OSError("down")
     connection = MarketMCPConnection("http://127.0.0.1:8002/mcp", client_factory=down)
-    result = await MarketTool("save_morning_report", connection).run(call("save_morning_report", {"snapshot_id": "a" * 32}))
-    assert not result.ok and len(calls) == 1 and "자동 재시도하지 않았습니다" in result.content
+    result = await MarketTool("market_snapshot", connection, service.store).run(call("market_snapshot", {"base_date": "2026-11-18"}))
+    assert not result.ok and len(calls) == 1 and "서버 실행 상태" in result.content
+    assert not (service.root / "snapshots").exists()
 
 
 def test_replay_file_hash_is_checked(tmp_path):

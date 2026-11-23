@@ -9,7 +9,7 @@ import './style.css';
 import { failedToolSummary } from './tool-status';
 import { InboxPage } from './inbox';
 import { DocumentDownloads, DocumentsPage, documentsFromEvents } from './documents';
-import { savedReports, ReportContent, ReportExport } from './report-export';
+import { savedReports, ReportContent } from './report-export';
 import {
   emptyChatHistory, currentConversation, updateConversation,
   startNewConversation, openConversation, conversationTitle, recentConversations,
@@ -382,7 +382,7 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, cha
           <ToolEvents events={message.events} denial={message.denial} />
           {message.role === 'agent' && savedReports(message.events).length > 0
             ? savedReports(message.events).map(report => <section key={report.report_id} className="saved-report">
-              <ReportContent document={report.document} markdown={report.markdown} /><ReportExport report={report} user={user} />
+              <ReportContent document={report.document} markdown={report.markdown} />
             </section>)
             : message.role === 'agent' ? <Formatted text={message.content} /> : <div>{message.content}</div>}
           {message.role === 'agent' && <DocumentDownloads user={user} documents={documentsFromEvents(message.events)} notify={notify} />}

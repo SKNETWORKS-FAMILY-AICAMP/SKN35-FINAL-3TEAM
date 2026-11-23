@@ -2,17 +2,21 @@
 
 에이전트 → 플랫폼 `ToolSpec` → **시장 MCP(8002)** → 한국은행 ECOS API.
 외부 API 키와 통계 코드 선택은 MCP에 둔다. 에이전트가 URL·인증키·통계 코드를 만들거나 입력하지 않는다.
-Gmail MCP(8001)와 별도 프로세스다. PostgreSQL 연결 없이 파일 저장소로 동작한다.
+Gmail MCP(8001)와 별도 프로세스다. **MCP 서버는 조회만 하고 아무것도 저장하지 않는다.**
 
 ## 등록 도구
 
-| 도구 | 화면 이름 | 역할 |
-|---|---|---|
-| `search_report_templates` | 보고서 양식 검색 | 목적·양식명으로 후보 검색. 현재 DB 없이 로컬 키워드 검색 |
-| `get_report_template` | 보고서 양식 전체 읽기 | 전체 항목·필수 입력·버전 읽기 및 선택 버전 고정 |
-| `market_snapshot` | 금리·환율 조회 | USD, JPY(100엔), EUR, CNY, 한국은행 기준금리 조회. 실제 기준일·직전 관측값 대비를 코드로 계산 |
-| `save_morning_report` | 아침 리포트 저장 | 조회 결과 ID·양식 선택 ID·요약으로 선택한 양식에 작성. 필수 자료 검사 및 요약 검증 |
-| `get_morning_report` | 저장한 리포트 읽기 | 본인 리포트를 번호로 다시 읽기 |
+| 도구 | 화면 이름 | 실행 위치 | 역할 |
+|---|---|---|---|
+| `market_snapshot` | 금리·환율 조회 | **시장 MCP** | USD, JPY(100엔), EUR, CNY, 한국은행 기준금리 조회. 실제 기준일·직전 관측값 대비를 코드로 계산. 받은 결과는 플랫폼이 보관 |
+| `search_report_templates` | 보고서 양식 검색 | 플랫폼 | 목적·양식명으로 후보 검색. 현재 DB 없이 로컬 키워드 검색 |
+| `get_report_template` | 보고서 양식 전체 읽기 | 플랫폼 | 전체 항목·필수 입력·버전 읽기 및 선택 버전 고정 |
+| `save_morning_report` | 아침 리포트 저장 | 플랫폼 | 플랫폼이 보관한 조회 결과·양식 선택·요약으로 작성. 필수 자료 검사 및 요약 검증 |
+| `get_morning_report` | 저장한 리포트 읽기 | 플랫폼 | 본인 리포트를 번호로 다시 읽기 |
+
+플랫폼 도구는 이 패키지의 작성 코드(`MarketService`, `report_templates.py`, `report_documents.py`)를 라이브러리로 쓰고,
+저장은 플랫폼 문서 저장소(`apps/api/src/services/documents.py`)에 한다 (`apps/api/src/tools/market.py`).
+저장한 리포트는 다른 서류와 같이 **내 문서**와 채팅의 PDF·DOCX 버튼으로 받는다 (`GET /api/documents/{id}/download`).
 
 플랫폼에서 로그인 사용자 ID를 `requester_id`에 넣는다. 모델 입력에는 없다.
 다른 사용자의 스냅샷으로 저장하거나 다른 사용자의 리포트를 읽을 수 없다.
@@ -106,7 +110,8 @@ uv run --no-sync --env-file mcp-servers/market/.env --package market-mcp market-
 - `MARKET_MCP_TOKEN`: 사용하면 플랫폼과 MCP 프로세스 양쪽에 같은 값을 설정한다.
 - `ECOS_API_KEY`: **MCP 프로세스에만** 설정한다.
 - `MARKET_DATA_MODE`: MCP의 `live` 또는 `replay`.
-- `MARKET_STORAGE_ROOT`: 기본 `data/storage/market`. snapshots·reports JSON을 소유자 정보와 함께 저장한다.
+- 저장 위치: 플랫폼의 `DOCUMENT_DB_PATH`(기본 `data/documents.sqlite3`). 조회 결과·양식 선택·리포트를 소유자와 함께 저장한다.
+  (이전의 `MARKET_STORAGE_ROOT` 는 쓰지 않는다. MCP 는 저장하지 않는다.)
 - `MARKET_REPLAY_FILE`: 명시적인 replay 모드에서 사용할 기록 파일 경로.
 - `REPORT_TEMPLATES_DIR`: 양식 JSON 폴더. 기본 `config/report_templates`.
 - `REPORT_DEFAULT_TEMPLATE`: 양식 도구 없이 기존 3개 시장 도구만 쓰는 경우의 기본 양식 ID. 기본 `market-daily`.
@@ -136,12 +141,14 @@ MCP에 도달한 요청자 ID는 신뢰된 플랫폼이 채운다는 계약이�
 - 급변 보류 값의 관리자 확인·승인 화면.
 - 실제 운영 시 문서 보관 정책·데이터 최신성 기준·API 호출 캐시 및 호출량 제한.
 - 실제 양식 RAG/벡터 검색 저장소, 회사·부서별 양식 접근 권한, 원본 HWPX/DOCX 서식을 유지하는 파일 출력.
+- 시장 리포트 양식(`config/report_templates`)과 업무 서류 양식(`config/document_forms`)의 파일 형식 통일 (문서 형식·내려받기는 이미 같다).
 
 ## 회사 양식으로 교체하기
 
 테스트용 세 양식은 `config/report_templates`에 있다. 제목·항목 순서·고정 문구·표 위치는 양식 JSON만 수정하면 다음 검색부터 반영된다.
 기존 보고서는 당시 양식 버전과 본문을 보관하므로 바뀌지 않는다. 상세 입력 위치와 변경 절차는 `config/report_templates/README.md`를 참고한다.
-새 양식은 `sections`로 제목·문단·필드·표의 배치를 정의한다. 새 보고서는 구조화 `document` JSON으로 저장하고 화면/PDF/DOCX가 이를 직접 사용한다.
+새 양식은 `sections`로 제목·문단·필드·표의 배치를 정의한다. 새 보고서는 구조화 `document` JSON으로 저장하고 화면/PDF/DOCX가 이를 직접 사용한다
+(PDF·DOCX 는 서버가 저장된 문서로 만든다: `apps/api/src/services/document_render.py`).
 새 보고서 응답은 `document` JSON과 일반 텍스트 `text`를 반환하며 Markdown으로 변환하지 않는다. 이전 저장 파일과 양식은 호환 읽기를 유지한다.
 현재는 로컬 키워드 검색이며 실제 RAG 연결을 완료한 것은 아니다. 검색 후보의 ID·해시로 원본을 읽는 계약은 검색 저장소를 교체해도 유지한다.
 
@@ -151,7 +158,7 @@ MCP에 도달한 요청자 ID는 신뢰된 플랫폼이 채운다는 계약이�
 ## 테스트
 
 ```cmd
-.venv\Scripts\python.exe -B -X utf8 -m pytest -p no:cacheprovider tests/test_market_tools.py
+.venv\Scripts\python.exe -B -X utf8 -m pytest -p no:cacheprovider tests/test_market_tools.py tests/test_report_templates.py
 ```
 
 실제 API 키 대신 모의 ECOS 응답과 전달 기록 파일을 사용한다.

@@ -40,7 +40,7 @@ from tools.today import TodayTool
 from tools.gmail import build_gmail_tools
 from tools.fill_document import FillDocumentTool
 from tools.loans import LoanStore, LoansMaturingTool
-from tools.market import build_market_tools
+from tools.market import build_market_tools, report_service
 from tools.maturity_alert import SendMaturityAlertTool
 from tools.maturity_notice import PrepareMaturityNoticesTool, SendMaturityNoticeTool
 
@@ -156,6 +156,7 @@ def draft_llm_from_env(chat_llm: LLMClient) -> LLMClient:
 
 FIXTURES = REPO_ROOT / "data/fixtures"
 DOCUMENT_FORMS = REPO_ROOT / "config/document_forms"
+REPORT_TEMPLATES = REPO_ROOT / "config/report_templates"  # 시장 리포트 양식 (dy)
 
 
 def build_tools(doc_path: str | Path = FIXTURES / "doc_chunks.json", upload_dir: str | Path | None = None,
@@ -189,7 +190,7 @@ def build_tools(doc_path: str | Path = FIXTURES / "doc_chunks.json", upload_dir:
         LoansMaturingTool(loan_store), SendMaturityAlertTool(loan_store, inbox), PrepareMaturityNoticesTool(loan_store), SendMaturityNoticeTool(loan_store, mailer),
         FillDocumentTool(documents, providers),
         *gmail,
-        *build_market_tools(),
+        *build_market_tools(report_service(documents, Path(os.environ.get("REPORT_TEMPLATES_DIR", str(REPORT_TEMPLATES))))),
     ]
 
 
