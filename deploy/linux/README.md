@@ -80,7 +80,7 @@ sudo -u postgres bash deploy/linux/setup_db.sh agent_platform agent_platform_app
 ## ⑤ 문서 등록 (서버)
 
 ```bash
-.venv/bin/python scripts/db/register_document.py /data/내규/ --category 내규 --owner admin --scope company --grade 1
+.venv/bin/python scripts/db/register_doc.py /data/내규/ --category 내규 --owner admin --scope company --grade 1
 ```
 
 원본은 `STORAGE_ROOT/documents/{문서}/v{버전}/` 에, 파싱 결과는 그 옆 `parsed/` 에 남는다.
@@ -88,7 +88,7 @@ KURE-v3 는 CPU 로 돈다 (내규 17개 기준 약 50분이 걸렸다 — 처�
 
 ## ⑥ 앱을 서비스로 등록 (서버)
 
-`.env` 에 `DOCUMENT_STORE=db` 를 넣고 `deploy/linux/agent-platform.service` 를 복사해 경로를 맞춘다.
+`.env` 에 `DOC_STORE=db` 를 넣고 `deploy/linux/agent-platform.service` 를 복사해 경로를 맞춘다.
 
 ```bash
 sudo cp deploy/linux/agent-platform.service /etc/systemd/system/
@@ -107,8 +107,8 @@ journalctl -u agent-platform -f            # "문서 도구: 팀 DB(pgvector) �
 
 - ② PGDG 저장소로 PostgreSQL 16.16 + pgvector 0.8.7 설치 (인터넷 연결 상태에서 — 반입 꾸러미 방식 ①은 아직 안 해 봄)
 - ④ `setup_db.sh`: DB · 확장 · 표(0001~0004, `chunk.embedding` = halfvec(2048)) · 앱 계정까지 끝남
-- `seed_users.py` → `register_document.py` 로 내규 HWP 1개(청크 24개)·FAQ HWPX 1개(청크 23개) 등록
-- `DOCUMENT_STORE=db` 로 앱을 띄우면 문서 도구가 DB 를 쓴다. 검색 한 번 약 0.1~0.2초(CPU, 모델은 미리 올림, 첫 검색 약 1초)
+- `seed_users.py` → `register_doc.py` 로 내규 HWP 1개(청크 24개)·FAQ HWPX 1개(청크 23개) 등록
+- `DOC_STORE=db` 로 앱을 띄우면 문서 도구가 DB 를 쓴다. 검색 한 번 약 0.1~0.2초(CPU, 모델은 미리 올림, 첫 검색 약 1초)
 - 권한: 부서 문서(dept)는 같은 부서 사용자만 검색·열람됨, 등급 없는 사용자는 아무것도 못 봄
 - 확인 못 한 것: ③ 인터넷 없는 패키지 설치, ⑥ systemd 서비스, LLM(Ollama)까지 붙인 채팅 흐름
 - 서버 배포판·버전은 미정 (우분투 기준으로 씀)

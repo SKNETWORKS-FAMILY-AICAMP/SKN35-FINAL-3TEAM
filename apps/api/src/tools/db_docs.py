@@ -1,12 +1,12 @@
 """사내 문서 검색·원문 열람을 팀 DB(PostgreSQL + pgvector)에서 하는 도구.
 
-파일 예시(data/fixtures/document_chunks.json)를 읽는 SearchDocumentsTool·ReadDocumentTool 과
+파일 예시(data/fixtures/doc_chunks.json)를 읽는 SearchDocsTool·ReadDocTool 과
 이름(search_doc, get_doc_chunk)·설명·입력·결과 모양이 같다. 그래서 하네스·근거 확인 코드는 그대로 쓴다.
 
 - 검색: 질문 → KURE-v3 질문 벡터 → 볼 수 있는 청크만 뜻이 가까운 순 (knowledge.retrieval)
 - 권한: 하네스 can_read_chunk 와 같은 규칙을 SQL 에서 먼저 건다
   (보안등급 사용자 ≥ 청크, scope 'company' 는 누구나, 'dept' 는 같은 dept_id 만)
-- 켜기: 환경변수 DOCUMENT_STORE=db (services/container.py). 끄면 지금처럼 파일 예시를 읽는다.
+- 켜기: 환경변수 DOC_STORE=db (services/container.py). 끄면 지금처럼 파일 예시를 읽는다.
 """
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ def _session_factory():
     return session_scope()
 
 
-class DbSearchDocumentsTool:
+class DbSearchDocsTool:
     spec = SEARCH_DOC_SPEC
 
     def __init__(self, embedder, *, session_factory=_session_factory, top_k: int = DEFAULT_TOP_K) -> None:
@@ -106,7 +106,7 @@ class DbSearchDocumentsTool:
         return ToolResult(call.call_id, True, json.dumps(payload, ensure_ascii=False), data=payload)
 
 
-class DbReadDocumentTool:
+class DbReadDocTool:
     spec = READ_DOC_SPEC
 
     def __init__(self, *, session_factory=_session_factory) -> None:

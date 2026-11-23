@@ -7,7 +7,7 @@
 권한(사용자가 볼 수 있는 청크만) — tools/read_doc.can_read_chunk 와 같은 규칙, DB 값 이름에 맞춤:
   - 보안등급: 사용자 security_grade ≥ 청크 security_grade
   - 공개 범위: scope = 'company' 이면 누구나, 'dept' 이면 owner_dept_id = 사용자 dept_id (하네스 can_read_chunk 와 같은 값)
-문서 상태: 현재 버전(document_version.is_current) · 처리 끝남(status = 'ready') · 문서 사용 중(document.status = 'active')만.
+문서 상태: 현재 버전(doc_version.is_current) · 처리 끝남(status = 'ready') · 문서 사용 중(doc.status = 'active')만.
 
 pgvector HNSW 는 거리 순으로 후보를 뽑은 뒤 WHERE 조건을 거르므로, 권한 조건이 많이 걸러내면 결과가 k개보다 적을 수 있다.
 그래서 pgvector 0.8 의 반복 탐색(hnsw.iterative_scan = strict_order)을 이 트랜잭션에서만 켠다(SET LOCAL).
@@ -17,22 +17,22 @@ from __future__ import annotations
 from sqlalchemy import and_, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import Chunk, Document, DocumentVersion
+from db.models import Chunk, Doc, DocVersion
 
 
 def readable_conditions(*, dept_id: int | None, security_grade: int) -> list:
     """사용자가 볼 수 있는 청크 조건 (권한 + 문서 상태). 검색과 원문 열람이 같은 조건을 쓴다."""
     readable_scope = (Chunk.scope == "company" if dept_id is None
                       else or_(Chunk.scope == "company", and_(Chunk.scope == "dept", Chunk.owner_dept_id == dept_id)))
-    return [DocumentVersion.is_current.is_(True), DocumentVersion.status == "ready", Document.status == "active",
+    return [DocVersion.is_current.is_(True), DocVersion.status == "ready", Doc.status == "active",
             Chunk.security_grade <= security_grade, readable_scope]
 
 
 def _base_select(*extra):
     return (select(Chunk.id, Chunk.doc_version_id, Chunk.chunk_index, Chunk.page, Chunk.content, Chunk.heading_path,
-                   Document.id.label("doc_id"), Document.title, DocumentVersion.file_name, *extra)
-            .join(DocumentVersion, Chunk.doc_version_id == DocumentVersion.id)
-            .join(Document, DocumentVersion.doc_id == Document.id))
+                   Doc.id.label("doc_id"), Doc.title, DocVersion.file_name, *extra)
+            .join(DocVersion, Chunk.doc_version_id == DocVersion.id)
+            .join(Doc, DocVersion.doc_id == Doc.id))
 
 
 def build_query(qvec: list[float], *, dept_id: int | None, security_grade: int, k: int):

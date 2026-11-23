@@ -1,8 +1,8 @@
-"""개발용 사용자(config/dev_users.yaml)를 DB 의 department · users · user_role 에 맞춰 넣는다.
+"""개발용 사용자(config/dev_users.yaml)를 DB 의 dept · users · user_role 에 맞춰 넣는다.
 
 로그인(COM-01)이 붙기 전까지 하네스는 yaml 의 사용자 속성(dept_id, security_grade)으로 권한을 판단한다.
 문서 검색은 DB 의 owner_dept_id 와 사용자 dept_id 를 비교하므로, 부서 번호가 yaml 과 DB 에서 같아야 한다.
-그래서 yaml 의 dept_id 를 그대로 department.id 로 쓴다 (없으면 만들고, 있으면 둔다).
+그래서 yaml 의 dept_id 를 그대로 dept.id 로 쓴다 (없으면 만들고, 있으면 둔다).
 
     uv run python scripts/db/seed_users.py                       # config/dev_users.yaml
     uv run python scripts/db/seed_users.py --users 다른.yaml
@@ -37,7 +37,7 @@ async def seed(users_path: Path) -> None:
             if type(dept) is not int:
                 print(f"건너뜀 {u.get('user_id')}: dept_id 없음")
                 continue
-            await s.execute(text("INSERT INTO department (id, name) OVERRIDING SYSTEM VALUE VALUES (:i, :n) "
+            await s.execute(text("INSERT INTO dept (id, name) OVERRIDING SYSTEM VALUE VALUES (:i, :n) "
                                  "ON CONFLICT (id) DO NOTHING"), {"i": dept, "n": f"부서 {dept}"})
             uid = await s.scalar(text(
                 "INSERT INTO users (login_id, name, dept_id, position, security_grade) VALUES (:l, :l, :d, :p, :g) "
@@ -49,8 +49,8 @@ async def seed(users_path: Path) -> None:
                 await s.execute(text("INSERT INTO user_role (user_id, role) VALUES (:u, :r)"), {"u": uid, "r": role})
             print(f"{u['user_id']}: users.id={uid}, 부서 {dept}, 등급 {a.get('security_grade', 1)}, 역할 {u.get('roles', [])}")
         # 부서 번호를 직접 넣었으므로, 다음 자동 번호가 겹치지 않게 맞춘다
-        await s.execute(text("SELECT setval(pg_get_serial_sequence('department', 'id'), "
-                             "GREATEST((SELECT max(id) FROM department), 1))"))
+        await s.execute(text("SELECT setval(pg_get_serial_sequence('dept', 'id'), "
+                             "GREATEST((SELECT max(id) FROM dept), 1))"))
         await s.commit()
     await dispose_engine()
 
