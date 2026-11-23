@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from .client import GmailClient
 from .config import Settings
 from .models import ChangeKind, DeletedCandidate, MailCheckpoint, SyncFailure
-from .store import MailStore
+from .store import MailStore, open_store
 from .sync import GmailSyncConnector
 
 
@@ -162,7 +162,14 @@ async def _sync_user(settings: Settings, store: MailStore, user_id: str, argv: l
 
 async def _main(argv: list[str]) -> int:
     settings = Settings.from_env()
-    store = MailStore(settings.db_path)
+    store = open_store(settings)
+    try:
+        return await _run_users(settings, store, argv)
+    finally:
+        await store.close()
+
+
+async def _run_users(settings: Settings, store: MailStore, argv: list[str]) -> int:
     if "--all" in argv:
         users = await store.connected_users()
     elif user := _arg(argv, "--user"):

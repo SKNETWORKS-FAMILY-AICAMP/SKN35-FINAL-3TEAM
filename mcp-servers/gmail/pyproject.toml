@@ -11,10 +11,14 @@ dependencies = [
     "google-auth-oauthlib>=1.1.0",
 ]
 
+[project.optional-dependencies]
+postgres = ["asyncpg>=0.29"]  # 플랫폼 PostgreSQL 에 저장할 때 (GMAIL_DATABASE_URL)
+
 [project.scripts]
 gmail-mcp = "gmail_mcp.server:main"
 gmail-mcp-auth = "gmail_mcp.google_auth:setup_main"
 gmail-sync = "gmail_mcp.runner:main"
+gmail-archive = "gmail_mcp.archive:main"
 
 [build-system]
 requires = ["hatchling"]

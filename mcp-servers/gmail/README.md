@@ -132,6 +132,7 @@ uv run --all-packages python -X utf8 -m pytest tests mcp-servers/gmail/tests -q
 | `GMAIL_CREDENTIALS_FILE` | `mcp-servers/gmail/.secrets/credentials.json` | 플랫폼 OAuth 클라이언트 |
 | `GMAIL_TOKENS_DIR` | `mcp-servers/gmail/.secrets/tokens` | 직원별 토큰 `<사번>.json` |
 | `GMAIL_DB_PATH` | `data/db/mail.sqlite3` | 메일 DB (개발용 SQLite) |
+| `GMAIL_DATABASE_URL` | (없음) | 플랫폼 PostgreSQL 주소 (`postgresql://사용자:비밀번호@호스트:5432/DB`). 있으면 SQLite 대신 이 DB 의 `mail_*` 표에 저장. 실제 값은 커밋하지 않음 |
 | `GMAIL_SYNC_ON_SEARCH` | `true` | `search_mail` 전에 그 직원의 새 메일을 먼저 가져옴 |
 | `GMAIL_SEARCH_SYNC_MAX_PAGES` | `2` | 검색 전 동기화 최대 페이지 (툴 30초 제한 안에서) |
 | `GMAIL_ALLOWED_RECIPIENT_DOMAINS` | (제한 없음) | 쉼표로 구분한 허용 수신 도메인 |
@@ -141,7 +142,37 @@ uv run --all-packages python -X utf8 -m pytest tests mcp-servers/gmail/tests -q
 | `GMAIL_MCP_TOKEN` | — | 플랫폼 → MCP 서버 접속 토큰 (manifest 의 `auth_token_env`) |
 
 ## 저장 구조 (관계형 DB)
-플랫폼 DB 용 테이블 정의: [`sql/mail_schema.sql`](sql/mail_schema.sql) (ERD 추가 제안). 개발 중에는 같은 구조를 SQLite 로 씁니다.
+표 5개는 플랫폼 ERD 에 추가돼 있습니다 (`alembic/versions/0005_mail_tables.py` **[초안, DB 담당 확인 전]**, `apps/api/src/db/models.py`, `docs/architecture/erd.sql`). 읽기용 사본: [`sql/mail_schema.sql`](sql/mail_schema.sql) (PostgreSQL 문법).
+
+| 쓰는 곳 | 설정 | 저장소 |
+|---|---|---|
+| 플랫폼 (운영·통합) | `GMAIL_DATABASE_URL` 설정 | PostgreSQL 16 `mail_*` 표 (`store_pg.py`) |
+| 개발·테스트 | 설정 없음 | SQLite 파일 `GMAIL_DB_PATH` (`store.py`) |
+
+- PostgreSQL 사용 전에 `uv run alembic upgrade head` 로 표를 만들고, 커넥터 의존성에 `asyncpg` 가 필요합니다 (`uv sync --all-packages` 에 포함, 단독 설치는 `gmail-mcp[postgres]`).
+- **사용자 연결**: 툴이 받는 `requester_id` 는 `users.login_id` 입니다. 저장소가 SQL 안에서 `users.id` 로 바꿔 `owner_user_id` 조건으로 씁니다.
+  `users` 에 없는 로그인 ID 는 아무것도 읽지 못하고 계정 연결도 거부됩니다.
+  → `gmail-mcp-auth --user <login_id>` 의 값도 같은 로그인 ID 로 맞춥니다. 로그인이 `users` 표로 바뀌면 하네스의 `GMAIL_MCP_USER_MAP` 은 필요 없습니다.
+
+### 퇴사(삭제)한 직원의 메일 — 관리자 보관
+직원이 `users` 에서 삭제되면 DB 트리거(`alembic 0006`)가 **지우기 직전에** 그 직원의 메일을 `mail_archive` 로 복사하고, 원래 표(`mail_*`)에서는 지웁니다.
+앱이 어떤 경로로 직원을 지워도 DB 가 보관하므로 코드에서 빼먹을 수 없습니다.
+
+- 보관 행에는 삭제 당시 `former_user_id` · `former_login_id` · `former_name` · `former_dept_id` · 연결했던 메일 주소(`account_email`)가 같이 적힙니다.
+  직원이 이미 없으므로 `users` 외래키는 없습니다. `users.id` 는 다시 쓰이지 않아 `former_user_id` 로 구분됩니다.
+- **에이전트(MCP 툴)는 보관 메일을 읽을 수 없습니다.** 같은 로그인 ID 를 새 직원이 받아도 퇴사자의 메일은 보이지 않습니다.
+- 관리자는 CLI 로만 봅니다 (`GMAIL_DATABASE_URL` 필요):
+  ```powershell
+  uv run gmail-archive list                       # 보관된 직원과 메일 수
+  uv run gmail-archive search <직원> [검색어]     # <직원> = former_user_id 또는 삭제 당시 로그인 ID
+  uv run gmail-archive read <직원> <thread_id>    # 스레드 읽기
+  uv run gmail-archive purge <직원> --yes         # 영구 삭제 (보존 기간 후, 되돌릴 수 없음)
+  ```
+- 보관하지 않는 것: `mail_account` · `mail_sync_*` (그대로 삭제). **Gmail 연결 토큰 파일(`.secrets/tokens/<로그인ID>.json`)은 따로 지워야 합니다.**
+- 보존 기간 · 열람 기록(누가 퇴사자 메일을 봤는지)은 아직 정해지지 않았습니다 (정책 합의 필요).
+
+- 저장소 두 개를 같은 테스트로 검증합니다. PostgreSQL 쪽은 쓰고 지워도 되는 DB 를 지정할 때만 돕니다:
+  `$env:GMAIL_TEST_DATABASE_URL="postgresql://사용자@127.0.0.1:5432/테스트DB"; uv run pytest mcp-servers/gmail`
 
 | 테이블 | 내용 |
 |---|---|
@@ -180,11 +211,13 @@ uv run --package gmail-mcp gmail-sync --user E1001 --prune --force  # 비율 가
 ```
 gmail/
 ├── manifest.yaml        search_mail · read_mail (read/medium), send_mail (write/high), inject requester_id
-├── sql/mail_schema.sql  플랫폼 DB 테이블 정의 (ERD 추가 제안)
+├── sql/mail_schema.sql  PostgreSQL 테이블 정의 (읽기용 사본 — 실제 생성은 alembic 0005)
 ├── src/gmail_mcp/
 │   ├── server.py        MCP 툴 정의 · 상태 페이지
 │   ├── service.py       본인 메일만 조회 · 입력 검증 · 본인 계정 발송
-│   ├── store.py         관계형 DB 저장소 (모든 함수가 owner_user_id 필수)
+│   ├── store.py         관계형 DB 저장소 SQLite (모든 함수가 owner_user_id 필수) · open_store
+│   ├── store_pg.py      관계형 DB 저장소 PostgreSQL (같은 메서드, 사용자는 users.login_id 로 연결) + 퇴사자 보관 조회
+│   ├── archive.py       관리자용 퇴사자 메일 보관 CLI (gmail-archive)
 │   ├── accounts.py      사번 → 그 직원의 메일함 클라이언트
 │   ├── google_auth.py   직원별 OAuth (gmail-mcp-auth --user)
 │   ├── client.py        Gmail API 계층 (GoogleGmailClient / 인터페이스)

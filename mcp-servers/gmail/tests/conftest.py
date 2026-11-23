@@ -1,3 +1,7 @@
+import os
+import uuid
+from contextlib import asynccontextmanager
+
 import pytest
 
 from gmail_mcp.config import Settings
@@ -7,9 +11,57 @@ from gmail_mcp.service import MailService
 from gmail_mcp.store import MailStore
 
 
+# PostgreSQL 에서도 같은 테스트를 돌린다. 쓰고 지워도 되는 DB 를 GMAIL_TEST_DATABASE_URL 로 직접 지정할 때만 실행
+# (alembic upgrade head 까지 마친 DB). 예: postgresql://postgres@127.0.0.1:5432/agent_platform_test
+PG_LOGINS = ("E1", "E2", "E1001", "E1002", "E2001", "E2002")  # 테스트가 owner 로 쓰는 로그인 ID → users 에 미리 만든다
+
+
+def _pg_url() -> str:
+    url = os.environ.get("GMAIL_TEST_DATABASE_URL", "").strip()
+    if not url:
+        pytest.skip("GMAIL_TEST_DATABASE_URL 없음 — PostgreSQL 저장소 테스트 건너뜀")
+    return url
+
+
+@asynccontextmanager
+async def open_pg_store(url: str):
+    import asyncpg
+
+    from gmail_mcp.store_pg import PostgresMailStore, to_asyncpg_dsn
+
+    admin = await asyncpg.connect(to_asyncpg_dsn(url))
+    dept = await admin.fetchval("INSERT INTO department (name) VALUES ($1) RETURNING id",
+                                f"mail-test-{uuid.uuid4().hex[:8]}")
+    for login in PG_LOGINS:
+        await admin.execute("DELETE FROM users WHERE login_id = $1", login)  # 이전 실행 찌꺼기
+        await admin.execute("DELETE FROM mail_archive WHERE former_login_id = $1", login)  # (삭제하면 트리거가 보관함)
+        await admin.execute("INSERT INTO users (login_id, name, dept_id) VALUES ($1, $2, $3)", login, f"test-{login}",
+                            dept)
+    store = PostgresMailStore(url)
+    try:
+        yield store
+    finally:
+        await store.close()
+        await admin.execute("DELETE FROM users WHERE login_id = ANY($1::text[])", list(PG_LOGINS))  # 메일은 보관함으로
+        await admin.execute("DELETE FROM mail_archive WHERE former_login_id = ANY($1::text[])", list(PG_LOGINS))
+        await admin.execute("DELETE FROM department WHERE id = $1", dept)
+        await admin.close()
+
+
 @pytest.fixture
-def store(tmp_path) -> MailStore:
-    return MailStore(tmp_path / "mail.sqlite3")
+async def pg_store():
+    async with open_pg_store(_pg_url()) as store:
+        yield store
+
+
+@pytest.fixture(params=["sqlite", "postgres"])
+async def store(request, tmp_path):
+    """같은 저장소 테스트를 SQLite · PostgreSQL 양쪽에 돌린다."""
+    if request.param == "sqlite":
+        yield MailStore(tmp_path / "mail.sqlite3")
+    else:
+        async with open_pg_store(_pg_url()) as pg:
+            yield pg
 
 
 @pytest.fixture

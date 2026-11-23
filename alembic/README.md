@@ -20,6 +20,8 @@ STORAGE_ROOT=          # 원본 파일 저장 폴더. 비우면 data/storage
 | `versions/0007_login.py` | 로그인: `users` 에 비밀번호 해시·사용 여부·연속 실패·잠금·마지막 로그인 칸, `login_session` 표(쿠키 토큰의 SHA-256 만 저장), `audit_log.event_type` 에 `login`·`login_failed`·`logout` 추가 |
 | `versions/0008_agent_decision_columns.py` | 에이전트·공유 요청 저장 칸: `agent.disabled_by`, `agent_share_request.decided_by`·`decision_comment`, `chat_session.agent_removed` |
 | `versions/0009_agent_run_denial.py` | `agent_run.denial` (JSONB): 권한 거부로 멈춘 요청의 거부 내용. 지난 대화를 다시 열 때 거부 안내를 다시 그린다 |
+| `versions/0005_mail_tables.py` | **[초안, DB 담당 확인 전]** 개인 메일 표 5개 (`mail_account`·`mail_message`·`mail_sync_state`·`mail_sync_failure`·`mail_sync_run`). 커넥터(`mcp-servers/gmail`)가 쓴다. `users` 에 외래키, 직원이 지워지면 메일도 같이 지워짐 |
+| `versions/0006_mail_archive.py` | **[초안, DB 담당 확인 전]** 직원(`users`)을 지우기 직전에 그 직원의 메일을 `mail_archive` 로 복사하는 트리거. 퇴사자 메일을 관리자가 따로 관리 |
 
 ## 자주 쓰는 명령
 
