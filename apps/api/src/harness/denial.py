@@ -37,7 +37,7 @@ def _done_summary(done: DoneTool) -> str:
             lines = [f"- {done.tool_name}", f"  - 상태: {_clip(data['status'])}"]
             if isinstance(data.get("case_id"), str):
                 lines.insert(1, f"  - 심사 건: {_clip(data['case_id'])}")
-            missing = data.get("missing_documents")
+            missing = data.get("missing_docs")
             if isinstance(missing, list) and all(isinstance(item, str) for item in missing):
                 lines.append(f"  - 누락 서류: {_clip(', '.join(missing)) if missing else '없음'}")
             return "\n".join(lines)

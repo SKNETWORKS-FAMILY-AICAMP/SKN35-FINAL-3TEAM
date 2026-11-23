@@ -24,13 +24,13 @@ from services.templates import InMemoryTemplateStore, load_templates
 from services.users import UserDirectory
 from services.uploads import UploadStore
 from tools.arithmetic import arithmetic_tools
-from tools.parse_document import DEFAULT_TIMEOUT as DEFAULT_PARSE_TIMEOUT
-from tools.parse_document import ParseDocumentTool
+from tools.parse_doc import DEFAULT_TIMEOUT as DEFAULT_PARSE_TIMEOUT
+from tools.parse_doc import ParseDocTool
 from tools.registry import SimpleToolRegistry
-from tools.read_doc import ReadDocumentTool
+from tools.read_doc import ReadDocTool
 from tools.get_review_case import GetReviewCaseTool
 from tools.review_store import ReviewStore
-from tools.search_doc import SearchDocumentsTool
+from tools.search_doc import SearchDocsTool
 from tools.submit_review_request import SubmitReviewRequestTool
 from tools.today import TodayTool
 from tools.gmail import build_gmail_tools
@@ -129,12 +129,12 @@ def draft_llm_from_env(chat_llm: LLMClient) -> LLMClient:
 FIXTURES = REPO_ROOT / "data/fixtures"
 
 
-def build_tools(document_path: str | Path = FIXTURES / "document_chunks.json", upload_dir: str | Path | None = None,
+def build_tools(doc_path: str | Path = FIXTURES / "doc_chunks.json", upload_dir: str | Path | None = None,
                 parse_timeout: float | None = DEFAULT_PARSE_TIMEOUT,
                 holiday_path: str | Path | None = FIXTURES / "business_holidays_demo.json", review_store: ReviewStore | None = None,
                 upload_store: UploadStore | None = None) -> list:
     """로컬 도구와 환경변수로 활성화한 Gmail MCP 도구를 함께 등록한다."""
-    doc = Path(document_path)
+    doc = Path(doc_path)
     uploads = Path(upload_dir) if upload_dir else REPO_ROOT / "data/uploads"
     upload_store = upload_store or UploadStore(uploads)
     review_store = review_store or ReviewStore(
@@ -142,8 +142,8 @@ def build_tools(document_path: str | Path = FIXTURES / "document_chunks.json", u
         Path(os.environ.get("REVIEW_REQUEST_DB_PATH", str(REPO_ROOT / "data/review_requests.sqlite3"))),
     )
     return [
-        *arithmetic_tools(), SearchDocumentsTool(doc), ReadDocumentTool(doc), TodayTool(Path(holiday_path) if holiday_path is not None else None),
-        ParseDocumentTool(uploads, timeout=parse_timeout, uploads=upload_store),
+        *arithmetic_tools(), SearchDocsTool(doc), ReadDocTool(doc), TodayTool(Path(holiday_path) if holiday_path is not None else None),
+        ParseDocTool(uploads, timeout=parse_timeout, uploads=upload_store),
         GetReviewCaseTool(review_store), SubmitReviewRequestTool(review_store),
         *build_gmail_tools(),
     ]
@@ -155,7 +155,7 @@ def build_from_env() -> AppServices:
         env("PERMISSION_POLICY_PATH", "config/permissions.yaml"),
         default=Decision(env("PERMISSION_DEFAULT_DECISION", "ask")),
     )
-    document_path = env("DOCUMENT_CHUNKS_PATH", str(REPO_ROOT / "data/fixtures/document_chunks.json"))
+    doc_path = env("DOC_CHUNKS_PATH", str(REPO_ROOT / "data/fixtures/doc_chunks.json"))
     holiday_path = Path(env("BUSINESS_HOLIDAYS_PATH", str(FIXTURES / "business_holidays_demo.json")))
     uploads = UploadStore(Path(env("UPLOAD_DIR", str(REPO_ROOT / "data/uploads"))))
     review_store = ReviewStore(
@@ -167,7 +167,7 @@ def build_from_env() -> AppServices:
         llm=llm,
         draft_llm=draft_llm_from_env(llm),
         tools=SimpleToolRegistry(build_tools(
-            document_path, upload_dir=env("UPLOAD_DIR"),
+            doc_path, upload_dir=env("UPLOAD_DIR"),
             parse_timeout=float(env("PARSE_TOOL_TIMEOUT_SECONDS", str(DEFAULT_PARSE_TIMEOUT))),
             holiday_path=holiday_path, review_store=review_store, upload_store=uploads,
         )),

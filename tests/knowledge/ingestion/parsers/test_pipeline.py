@@ -6,7 +6,7 @@ import zipfile
 
 import pytest
 
-from knowledge.ingestion.parsers.pipeline import DocumentParser, ParseResult
+from knowledge.ingestion.parsers.pipeline import DocParser, ParseResult
 
 HP = 'xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"'
 
@@ -35,7 +35,7 @@ def _hwpx(encrypted=False) -> bytes:
 
 @pytest.fixture(scope="module")
 def parser():
-    return DocumentParser()
+    return DocParser()
 
 
 def test_hwpx_bytes_parsed_with_heading_path_and_table(parser):
@@ -55,7 +55,7 @@ def test_encrypted_hwpx_rejected(parser):
 
 
 def test_unknown_bytes_rejected_not_raised(parser):
-    r = parser.parse(b"\x00\x01\x02 not a document", file_name="이상한.bin")
+    r = parser.parse(b"\x00\x01\x02 not a doc", file_name="이상한.bin")
     assert r.status == "rejected" and r.reason and r.route["handler"] == "reject"
 
 
@@ -85,14 +85,14 @@ def test_save_beside_writes_parsed_json(parser, tmp_path):
     src = tmp_path / "규정.hwpx"
     src.write_bytes(_hwpx())
     r = parser.parse(src)
-    out = r.save_beside(src, document_version_id=42)
+    out = r.save_beside(src, doc_version_id=42)
     assert out == tmp_path / "parsed" / "42.json"
     d = json.loads(out.read_text(encoding="utf-8"))
-    assert d["document_version_id"] == 42 and d["status"] == "ok" and d["db_status"] == "ready"
-    assert d["schema"].startswith("parse_result/") and "docling_document" in d and d["elements"]
+    assert d["doc_version_id"] == 42 and d["status"] == "ok" and d["db_status"] == "ready"
+    assert d["schema"].startswith("parse_result/") and "docling_doc" in d and d["elements"]
 
 
-def test_failed_result_has_no_document():
+def test_failed_result_has_no_doc():
     r = ParseResult("failed", "테스트")
-    d = r.to_dict(document_version_id=1)
-    assert d["db_status"] == "failed" and "docling_document" not in d
+    d = r.to_dict(doc_version_id=1)
+    assert d["db_status"] == "failed" and "docling_doc" not in d

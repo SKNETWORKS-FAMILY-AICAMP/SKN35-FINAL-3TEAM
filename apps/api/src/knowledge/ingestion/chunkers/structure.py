@@ -38,7 +38,7 @@ import re
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
-from .document import Doc, Seg, norm
+from .doc import Doc, Seg, norm
 
 _COUNT: ContextVar = ContextVar("chunker_count_tokens")
 

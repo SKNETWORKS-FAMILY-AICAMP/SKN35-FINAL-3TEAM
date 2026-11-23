@@ -129,7 +129,7 @@ def system_prompt(svc: AppServices, agent: Agent | None) -> str:
         prompt += f"\n\n[이 에이전트의 역할: {agent.name}]\n{agent.system_prompt}"
     return prompt + (
         "\n\n[첨부 문서 처리]\n"
-        "첨부 문서의 내용이 필요한 요청에는 parse_document가 제공된 경우 이 도구로 읽은 뒤 답한다. "
+        "첨부 문서의 내용이 필요한 요청에는 parse_doc가 제공된 경우 이 도구로 읽은 뒤 답한다. "
         "제공되지 않았다면 첨부 파일을 읽을 수 있다고 주장하지 않는다. "
         "file_id는 대화의 [사용자 첨부 파일 목록]에서 받은 문자열 전체를 그대로 복사한다. "
         "file_id 끝의 .hwpx, .pdf 같은 확장자도 ID의 일부이므로 절대 제거하지 않는다. "

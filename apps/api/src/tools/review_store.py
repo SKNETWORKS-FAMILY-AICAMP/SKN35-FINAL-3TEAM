@@ -22,8 +22,8 @@ class ReviewCase(BaseModel):
     status: str
     dept_id: int
     security_grade: int = Field(ge=0)
-    submitted_documents: list[str]
-    missing_documents: list[str]
+    submitted_docs: list[str]
+    missing_docs: list[str]
 
 
 def load_review_cases(path: Path) -> list[dict]:
@@ -43,11 +43,11 @@ def find_review_case(cases: list[dict], case_id: str) -> dict | None:
 
 
 def can_read_case(case: dict, principal: Principal) -> bool:
-    department = principal.attributes.get("dept_id")
+    dept = principal.attributes.get("dept_id")
     grade = principal.attributes.get("security_grade")
     return (
-        type(department) is int
-        and department == case["dept_id"]
+        type(dept) is int
+        and dept == case["dept_id"]
         and type(grade) is int
         and grade >= case["security_grade"]
     )
@@ -127,5 +127,5 @@ class ReviewStore:
         } | {
             "already_registered": already_registered,
             "storage": "local_demo",
-            "missing_documents": json.loads(row["case_snapshot"])["missing_documents"],
+            "missing_docs": json.loads(row["case_snapshot"])["missing_docs"],
         }

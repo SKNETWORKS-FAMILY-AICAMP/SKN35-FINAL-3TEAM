@@ -19,7 +19,7 @@ class UploadOut(BaseModel):
 
 
 @router.post("", status_code=201, response_model=UploadOut)
-async def upload_document(
+async def upload_doc(
     file: UploadFile,
     user: Principal = Depends(current_user),
     svc: AppServices = Depends(get_services),

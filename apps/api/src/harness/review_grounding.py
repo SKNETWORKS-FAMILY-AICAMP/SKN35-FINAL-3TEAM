@@ -168,7 +168,7 @@ class ReviewLookupGuard:
         for case_id in self.case_ids:
             data = self.records[case_id]
             lines += [f"\n심사 건: {case_id}", f"- 상태: {data['status']}"]
-            for key, label in (("submitted_documents", "제출 서류"), ("missing_documents", "누락 서류")):
+            for key, label in (("submitted_docs", "제출 서류"), ("missing_docs", "누락 서류")):
                 values = data.get(key)
                 if isinstance(values, list) and all(isinstance(value, str) for value in values):
                     lines.append(f"- {label}: {', '.join(values) if values else '없음'}")

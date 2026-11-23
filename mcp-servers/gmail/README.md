@@ -64,7 +64,7 @@ React의 도구 목록에 `search_mail`, `read_mail`, `send_mail`이 기본으�
 
 실제 Gmail은 첫 번째 CMD에서 `GMAIL_ADAPTER=google`로 설정하고 해당 사용자 ID로 계정을 연결해야 합니다. MCP 프로세스와 FastAPI 프로세스 양쪽에 같은 `GMAIL_MCP_TOKEN`을 설정하면 `/mcp` 요청에 Bearer 토큰 검사가 적용됩니다. Inspector에도 같은 Authorization 헤더가 필요합니다. 토큰은 비밀 값으로 관리합니다.
 
-파서 도구 `parse_document`도 같은 플랫폼 목록에 등록됩니다. 해당 도구를 선택한 에이전트의 작업 채팅에서 클립 버튼으로 문서를 첨부하고 요청을 전송합니다. 파일은 `UPLOAD_DIR`(기본 `data/uploads`)에 임의 ID로 저장하고 SQLite 메타데이터로 소유자를 검사합니다. 폴더에 수동 복사한 파일은 등록된 첨부가 아니므로 채팅에서 다시 업로드해야 합니다. PDF·스캔은 사전에 준비한 모델 경로를 `PARSER_MODELS_DIR`로 지정해야 하며 실행 중 모델을 다운로드하지 않습니다.
+파서 도구 `parse_doc`도 같은 플랫폼 목록에 등록됩니다. 해당 도구를 선택한 에이전트의 작업 채팅에서 클립 버튼으로 문서를 첨부하고 요청을 전송합니다. 파일은 `UPLOAD_DIR`(기본 `data/uploads`)에 임의 ID로 저장하고 SQLite 메타데이터로 소유자를 검사합니다. 폴더에 수동 복사한 파일은 등록된 첨부가 아니므로 채팅에서 다시 업로드해야 합니다. PDF·스캔은 사전에 준비한 모델 경로를 `PARSER_MODELS_DIR`로 지정해야 하며 실행 중 모델을 다운로드하지 않습니다.
 
 검증 명령입니다. 실제 Gmail 계정 대신 가상 메일함을 사용합니다.
 

@@ -14,7 +14,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import EMBEDDING_DIM
-from knowledge.ingestion.indexer import index_document_version
+from knowledge.ingestion.indexer import index_doc_version
 from knowledge.retrieval import build_query, search_for_principal
 from tests.db.test_indexer import COUNT, FakeEmbedder, parsed_law
 from tests.db.test_schema import _user, conn  # noqa: F401
@@ -27,8 +27,8 @@ def _sql(**kw) -> str:
 
 def test_query_has_permission_and_status_filters():
     s = _sql(dept_id=7, security_grade=3, k=5)
-    for part in ("chunk.security_grade <=", "chunk.scope =", "chunk.owner_dept_id =", "document_version.is_current IS true",
-                 "document_version.status =", "document.status =", "<=>", "LIMIT"):
+    for part in ("chunk.security_grade <=", "chunk.scope =", "chunk.owner_dept_id =", "doc_version.is_current IS true",
+                 "doc_version.status =", "doc.status =", "<=>", "LIMIT"):
         assert part in s, part
 
 
@@ -44,15 +44,15 @@ async def test_principal_without_grade_sees_nothing():
 
 class QueryEmbedder(FakeEmbedder):
     def embed_query(self, t):
-        return self.embed_documents([t])[0]
+        return self.embed_docs([t])[0]
 
 
 async def _doc(conn, uid, dept, scope, grade, current=True):  # noqa: F811
     doc_id = await conn.scalar(text(
-        "INSERT INTO document (owner_user_id, owner_dept_id, title, category, scope, security_grade) "
+        "INSERT INTO doc (owner_user_id, owner_dept_id, title, category, scope, security_grade) "
         "VALUES (:u, :d, '가상 규정', '내규', :s, :g) RETURNING id"), {"u": uid, "d": dept, "s": scope, "g": grade})
     return await conn.scalar(text(
-        "INSERT INTO document_version (doc_id, version, is_current, file_name, mime_type, storage_path, sha256) "
+        "INSERT INTO doc_version (doc_id, version, is_current, file_name, mime_type, storage_path, sha256) "
         "VALUES (:d, 1, :c, '가상.hwpx', 'application/hwp+zip', 'docs/가상.hwpx', :h) RETURNING id"),
         {"d": doc_id, "c": current, "h": "0" * 64})
 
@@ -60,7 +60,7 @@ async def _doc(conn, uid, dept, scope, grade, current=True):  # noqa: F811
 async def test_search_respects_permissions_in_real_db(conn):  # noqa: F811
     uid = await _user(conn)
     dept = await conn.scalar(text("SELECT dept_id FROM users WHERE id = :u"), {"u": uid})
-    other = await conn.scalar(text("INSERT INTO department (name) VALUES ('다른 부서') RETURNING id"))
+    other = await conn.scalar(text("INSERT INTO dept (name) VALUES ('다른 부서') RETURNING id"))
     emb = QueryEmbedder()
     async with AsyncSession(bind=conn, join_transaction_mode="create_savepoint") as session:
         mine = await _doc(conn, uid, dept, "dept", 2)          # 내 부서 문서
@@ -68,7 +68,7 @@ async def test_search_respects_permissions_in_real_db(conn):  # noqa: F811
         secret = await _doc(conn, uid, dept, "company", 5)     # 등급 5 → 등급 2 사용자에게 안 보여야 함
         old = await _doc(conn, uid, dept, "company", 1, current=False)   # 옛 버전 → 안 보여야 함
         for v in (mine, theirs, secret, old):
-            await index_document_version(session, v, parsed_law(), embedder=emb, count_tokens=COUNT)
+            await index_doc_version(session, v, parsed_law(), embedder=emb, count_tokens=COUNT)
         target = (await session.execute(text("SELECT content FROM chunk WHERE doc_version_id = :v ORDER BY chunk_index LIMIT 1"),
                                         {"v": mine})).scalar()
         p = SimpleNamespace(attributes={"dept_id": dept, "security_grade": 2})

@@ -415,7 +415,7 @@ def _fix_text(text, qs_in_box, log, kind, page):
     return new, new != text
 
 
-def fix_document(doc, quotes: dict[int, list], log: FidelityLog | None = None) -> FidelityLog:
+def fix_doc(doc, quotes: dict[int, list], log: FidelityLog | None = None) -> FidelityLog:
     """DoclingDocument 의 글 항목·표 칸 글자를 바로잡는다 (제자리 수정)."""
     from docling_core.types.doc import TableItem, TextItem
 

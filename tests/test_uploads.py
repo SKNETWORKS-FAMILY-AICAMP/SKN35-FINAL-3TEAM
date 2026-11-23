@@ -14,7 +14,7 @@ from services.uploads import UploadStore
 from services.users import UserDirectory
 from tests.fakes import ScriptedLLM
 from tests.knowledge.ingestion.parsers.test_pipeline import _hwpx
-from tools.parse_document import ParseDocumentTool
+from tools.parse_doc import ParseDocTool
 from tools.registry import SimpleToolRegistry
 
 KIM = Principal("kim", ("member",), {"dept_id": 10, "security_grade": 2})
@@ -25,7 +25,7 @@ HEADERS = {"X-User-Id": "kim"}
 @pytest.fixture
 def setup(tmp_path):
     uploads = UploadStore(tmp_path / "uploads")
-    tool = ParseDocumentTool(uploads.directory, uploads=uploads)
+    tool = ParseDocTool(uploads.directory, uploads=uploads)
     rules, default = load_policy("config/permissions.yaml")
     svc = AppServices(
         llm=ScriptedLLM([]), tools=SimpleToolRegistry([tool]),
@@ -46,12 +46,12 @@ async def test_upload_chat_parse_and_followup(setup):
         metadata = upload.json()
         assert metadata["filename"] == "업무지침.hwpx" and metadata["file_id"] != metadata["filename"]
         svc.llm = ScriptedLLM([
-            {"tool_calls": [{"id": "parse-1", "name": "parse_document", "arguments": {"file_id": metadata["file_id"]}}]},
+            {"tool_calls": [{"id": "parse-1", "name": "parse_doc", "arguments": {"file_id": metadata["file_id"]}}]},
             {"content": "개인정보 처리 기준과 표를 읽었습니다."},
             {"content": "앞서 첨부하신 문서입니다."},
         ])
         agent = (await client.post("/api/agents", headers=HEADERS, json={
-            "name": "파서", "system_prompt": "첨부를 읽으세요.", "tools": ["parse_document"],
+            "name": "파서", "system_prompt": "첨부를 읽으세요.", "tools": ["parse_doc"],
         })).json()
         response = await client.post("/api/chat/messages", headers=HEADERS, json={
             "agent_id": agent["agent_id"], "file_ids": [metadata["file_id"]],
@@ -63,7 +63,7 @@ async def test_upload_chat_parse_and_followup(setup):
         assert body["sources"][0]["title"] == "업무지침.hwpx"
         first_messages = svc.llm.calls[0][0]
         assert metadata["file_id"] in first_messages[-1].content
-        assert "parse_document" in first_messages[0].content
+        assert "parse_doc" in first_messages[0].content
         followup = await client.post("/api/chat/messages", headers=HEADERS, json={
             "session_id": body["session_id"], "content": "이 문서 제목은?",
         })
@@ -79,7 +79,7 @@ async def test_other_users_file_is_denied_by_chat_and_tool(setup):
             "content": "읽어줘", "file_ids": [item["file_id"]],
         })
         assert response.status_code == 404
-    result = await tool.run(ToolCall("c1", "parse_document", {"file_id": item["file_id"]}, PARK, "s1"))
+    result = await tool.run(ToolCall("c1", "parse_doc", {"file_id": item["file_id"]}, PARK, "s1"))
     assert not result.ok
     assert svc.llm.calls == []
 
@@ -126,5 +126,5 @@ async def test_existing_unregistered_files_cannot_bypass_ownership(setup):
     _, svc, tool = setup
     svc.uploads.directory.mkdir(parents=True, exist_ok=True)
     (svc.uploads.directory / "shared.hwpx").write_bytes(_hwpx())
-    result = await tool.run(ToolCall("c1", "parse_document", {"file_id": "shared.hwpx"}, KIM, "s1"))
+    result = await tool.run(ToolCall("c1", "parse_doc", {"file_id": "shared.hwpx"}, KIM, "s1"))
     assert not result.ok

@@ -24,7 +24,7 @@ def can_read_chunk(chunk: dict, principal: Principal) -> bool:
     if scope == "company":
         return True
 
-    if scope == "department":
+    if scope == "dept":
         user_dept = principal.attributes.get("dept_id")
         doc_dept = chunk.get("dept_id")
 
@@ -63,11 +63,11 @@ def find_readable_chunk(chunks : list[dict], chunk_id : str, principal : Princip
         return chunk
     return None
 
-class ReadDocumentTool:
+class ReadDocTool:
     spec = READ_DOC_SPEC
 
     def __init__(self, doc_path:Path)->None:
-        self.document_path = doc_path
+        self.doc_path = doc_path
 
     async def run(self, call : ToolCall) -> ToolResult:
         chunk_id = call.arguments.get("chunk_id")
@@ -82,7 +82,7 @@ class ReadDocumentTool:
         try:
             chunks = await asyncio.to_thread(
                 load_doc_chunks,
-                self.document_path,
+                self.doc_path,
             )
         except (OSError, UnicodeError, json.JSONDecodeError):
             return ToolResult(call.call_id, False, "문서 목록을 읽을 수 없습니다.")

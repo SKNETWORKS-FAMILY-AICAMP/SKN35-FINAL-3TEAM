@@ -189,7 +189,7 @@ function summarize(event, denial) {
   if (!event.ok) return failedToolSummary(event, denial);
   const data = parseJson(event.result);
   const args = event.arguments ?? {};
-  if (event.tool_name === 'parse_document' && data?.filename) {
+  if (event.tool_name === 'parse_doc' && data?.filename) {
     return `${data.filename} · 읽기 완료${data.tables ? ` · 표 ${data.tables}개` : ''}${data.truncated ? ' · 일부만 읽음' : ''}`;
   }
   if (event.tool_name === 'search_doc' && data?.matches) {
@@ -267,8 +267,8 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, cha
   const chatEnd = useRef(null);
   const usable = [DEFAULT_AGENT, ...agents.filter(agent => agent.status === 'active')];
   const active = usable.find(agent => agent.agent_id === activeId) ?? DEFAULT_AGENT;
-  const canParse = tools.some(tool => tool.name === 'parse_document') &&
-    (active.agent_id === null || active.tools?.includes('parse_document'));
+  const canParse = tools.some(tool => tool.name === 'parse_doc') &&
+    (active.agent_id === null || active.tools?.includes('parse_doc'));
   const busy = sending || uploading;
   const conversation = currentConversation(chatHistory, active.agent_id);
 

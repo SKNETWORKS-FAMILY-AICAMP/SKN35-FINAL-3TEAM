@@ -36,7 +36,7 @@ def call(name, arguments, principal=KIM):
 async def test_lookup_access_and_input(store):
     tool = GetReviewCaseTool(store)
     result = await tool.run(call("get_review_case", {"case_id": "REVIEW-001"}))
-    assert result.ok and result.data["missing_documents"] == ["납세증명서"]
+    assert result.ok and result.data["missing_docs"] == ["납세증명서"]
     for principal in (PARK, Principal("low", (), {"dept_id": 10, "security_grade": 1}), Principal("missing")):
         denied = await tool.run(call("get_review_case", {"case_id": "REVIEW-001"}, principal))
         assert not denied.ok and "가상고객A" not in denied.content

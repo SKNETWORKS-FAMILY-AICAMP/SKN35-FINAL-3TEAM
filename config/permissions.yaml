@@ -47,7 +47,7 @@ rules:
     decision: allow
 
   # 문서 검색은 누구나. 권한 필터(scope·보안등급)는 검색 툴 안에서 강제한다 (SYS-03).
-  - id: search-documents
+  - id: search-docs
     tool: search_doc
     decision: allow
 
@@ -82,7 +82,7 @@ rules:
     reason: 파일 삭제는 보안등급 3 이상 부서장만 가능합니다
 
   # 문서 원문 열람: 검색과 같은 필터를 툴 안에서 다시 적용한다
-  - id: read-document-chunk
+  - id: read-doc-chunk
     tool: get_doc_chunk
     decision: allow
 
@@ -91,6 +91,6 @@ rules:
     decision : allow
 
   # 업로드 문서 읽기: 업로드 폴더 안 파일만 읽는다 (경로 제한은 툴 안에서 강제)
-  - id: parse-document
-    tool: parse_document
+  - id: parse-doc
+    tool: parse_doc
     decision: allow

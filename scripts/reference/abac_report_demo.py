@@ -29,7 +29,7 @@ USERS = {
     },
 }
 
-DOCUMENTS = [
+DOCS = [
     {
         "id": "doc-001",
         "title": "상품 현황",
@@ -72,7 +72,7 @@ REPORT_PLAN = {
     "steps": [
         {
             "id": "search",
-            "capability": "document_search",
+            "capability": "doc_search",
             "inputs": {
                 "keyword": REPORT_REQUEST["subject"],
             },
@@ -81,7 +81,7 @@ REPORT_PLAN = {
             "id": "write",
             "capability": "report_writing",
             "inputs": {
-                "documents" : {"from_step" : "search"},
+                "docs" : {"from_step" : "search"},
             },
         },
     ],
@@ -91,66 +91,66 @@ REPORT_PROFILE = {
     "id": "report-profile-001",
     "version": 1,
     "allowed_capabilities": [
-        "document_search",
+        "doc_search",
         "report_writing",
     ],
 }
 
 # 다음 단계에서 실제 접근 검사 결과와 비교할 정답이다.
-EXPECTED_DOCUMENT_IDS = {
+EXPECTED_DOC_IDS = {
     "employee_a": ["doc-001", "doc-002"],
     "employee_b": ["doc-001"],
     "employee_c": ["doc-003"],
 }
 
-def can_read_document(user, document):
+def can_read_doc(user, doc):
     # 필수로 들어가는 값이 있는지
     if user.get("dept") is None or user.get("clearance") is None:
         return False
 
-    if document.get("dept") is None or document.get("classification") is None:
+    if doc.get("dept") is None or doc.get("classification") is None:
         return False
 
     # 다른 부서의 문서는 거부
-    if user["dept"] != document["dept"]:
+    if user["dept"] != doc["dept"]:
         return False
 
     # 같은 부서라면 사용자 등급이 문서 등급 이상인지 확인
-    return user["clearance"] >= document["classification"]
+    return user["clearance"] >= doc["classification"]
 
 # 읽을 수 있는 서류만 가져오기
-def get_readable_documents(user, documents):
-    readable_documents = []
+def get_readable_docs(user, docs):
+    readable_docs = []
 
-    for document in documents:
-        if can_read_document(user, document=document):
-            readable_documents.append(document)
+    for doc in docs:
+        if can_read_doc(user, doc=doc):
+            readable_docs.append(doc)
 
-    return readable_documents
+    return readable_docs
 
 # 서류 검색
-def search_documents(user, documents, keyword):
-    readable_documents = get_readable_documents(user,documents)
-    matched_documents = []
+def search_docs(user, docs, keyword):
+    readable_docs = get_readable_docs(user,docs)
+    matched_docs = []
 
-    for doc in  readable_documents:
+    for doc in  readable_docs:
         text = doc["title"] + " " + doc["content"]
 
         if keyword in text:
-            matched_documents.append(doc)
+            matched_docs.append(doc)
             
-    return matched_documents
+    return matched_docs
 
-def document_search_worker(user, inputs):
+def doc_search_worker(user, inputs):
     keyword = inputs["keyword"]
 
     # 기존 검색 함수를 호출한 결과를 반환하세요.
-    return search_documents(user, DOCUMENTS , keyword)
+    return search_docs(user, DOCS , keyword)
 
 def report_writing_worker(user, inputs):
-    documents = inputs["documents"]
+    docs = inputs["docs"]
 
-    if not documents:
+    if not docs:
         return {
             "status": "blocked",
             "reason": "접근 가능한 관련 근거 문서가 없습니다.",
@@ -159,32 +159,32 @@ def report_writing_worker(user, inputs):
     return {
         "status": "completed",
         "content": "\n".join(
-            document["content"] for document in documents
+            doc["content"] for doc in docs
         ),
-        "document_ids": [document["id"] for document in documents],
-        "classification": max(document["classification"] for document in documents),
+        "doc_ids": [doc["id"] for doc in docs],
+        "classification": max(doc["classification"] for doc in docs),
     }
 
-def prepare_report(user, documents, keyword):
-    found = search_documents(user, documents, keyword)
+def prepare_report(user, docs, keyword):
+    found = search_docs(user, docs, keyword)
 
     if not found:
         return {
             "status": "blocked",
             "reason": "접근 가능한 관련 근거 문서가 없습니다.",
-            "document_ids": [],
+            "doc_ids": [],
         }
 
-    report_classification = max(document["classification"] for document in found)
+    report_classification = max(doc["classification"] for doc in found)
 
     return {
         "status": "ready",
-        "document_ids": [document["id"] for document in found],
+        "doc_ids": [doc["id"] for doc in found],
         "classification" : report_classification,
     }
 
 WORKER_REGISTRY = {
-    "document_search": document_search_worker,
+    "doc_search": doc_search_worker,
     "report_writing": report_writing_worker,
 }    
 

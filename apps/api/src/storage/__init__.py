@@ -7,7 +7,7 @@
     store.read(key); store.delete(key); store.exists(key)
 
 키 규칙 (팀 ERD 주석과 같음)
-  knowledge/{doc_id}/{version}/원본   전사 문서        document_version.storage_path
+  knowledge/{doc_id}/{version}/원본   전사 문서        doc_version.storage_path
   work/{session_id}/…                      작업 파일        work_file.storage_path
   outputs/{user_id}/…                      산출물           output_file.storage_path
 나중에 고객사 NAS·오브젝트 저장소로 바꿀 땐 같은 메서드를 가진 클래스를 하나 더 만들면 된다 (DB 는 그대로).

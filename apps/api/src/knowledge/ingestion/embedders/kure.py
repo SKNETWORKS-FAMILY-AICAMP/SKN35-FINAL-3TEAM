@@ -18,7 +18,7 @@ from pathlib import Path
 
 MODEL_ENV = "EMBEDDING_MODEL_PATH"
 DEFAULT_DIM = 2048
-PROMPT = {"query": "query: ", "document": "passage: "}
+PROMPT = {"query": "query: ", "doc": "passage: "}
 
 
 class KureEmbedder:
@@ -55,9 +55,9 @@ class KureEmbedder:
                 out.extend(v.float().cpu().tolist())
         return out
 
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+    def embed_docs(self, texts: list[str]) -> list[list[float]]:
         """청크의 embed_text 목록 → 벡터 목록 (각 dim차원, 길이 1)."""
-        return self._encode(texts, "document")
+        return self._encode(texts, "doc")
 
     def embed_query(self, text: str) -> list[float]:
         """검색 질문 → 벡터."""

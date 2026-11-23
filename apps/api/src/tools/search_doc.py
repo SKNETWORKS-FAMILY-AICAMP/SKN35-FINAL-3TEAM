@@ -57,11 +57,11 @@ def search_chunks(chunks: list[dict], query:str, principal: Principal) -> list[d
 
     return matches
 
-class SearchDocumentsTool:
+class SearchDocsTool:
     spec = SEARCH_DOC_SPEC
 
     def __init__(self, doc_path : Path) -> None:
-        self.document_path = doc_path
+        self.doc_path = doc_path
 
     async def run(self, call: ToolCall) -> ToolResult:
         query = call.arguments.get("query")
@@ -77,7 +77,7 @@ class SearchDocumentsTool:
         try:
             chunks = await asyncio.to_thread(
                 load_doc_chunks,
-                self.document_path,
+                self.doc_path,
             )
         except (OSError, UnicodeError, json.JSONDecodeError):
             return ToolResult(call.call_id, False, "문서 목록을 읽을 수 없습니다.")

@@ -3,9 +3,9 @@
 --       ERDCloud 내보내기에서 빠진 비식별 관계 FK 를 파일 끝에 추가
 -- 2026-11-20: v5 제안 일부 반영 (schema.postgres.sql 머리 주석 참고)
 --   신규: agent_template, agent_template_tool, agent_assignment, agent_knowledge, work_file, output_file, output_source
---   삭제: session_document (→ work_file)
---   변경: agent, message, tool_call, audit_log, document, document_version, chunk
-CREATE TABLE `department` (
+--   삭제: session_doc (→ work_file)
+--   변경: agent, message, tool_call, audit_log, doc, doc_version, chunk
+CREATE TABLE `dept` (
 	`id`	BIGINT	NOT NULL	COMMENT '부서 ID',
 	`name`	VARCHAR(100)	NOT NULL	COMMENT '부서명',
 	`head_user_id`	BIGINT	NULL	COMMENT '부서장 사용자 ID'
@@ -80,8 +80,8 @@ CREATE TABLE `agent_assignment` (
 CREATE TABLE `agent_knowledge` (
 	`id`	BIGINT	NOT NULL	COMMENT '에이전트 지식 ID',
 	`agent_id`	BIGINT	NOT NULL	COMMENT '에이전트 ID',
-	`document_id`	BIGINT	NULL	COMMENT '문서 ID (category 와 둘 중 하나)',
-	`category`	VARCHAR(30)	NULL	COMMENT '문서 분류 (document_id 와 둘 중 하나)'
+	`doc_id`	BIGINT	NULL	COMMENT '문서 ID (category 와 둘 중 하나)',
+	`category`	VARCHAR(30)	NULL	COMMENT '문서 분류 (doc_id 와 둘 중 하나)'
 );
 
 CREATE TABLE `chat_session` (
@@ -148,12 +148,12 @@ CREATE TABLE `audit_log` (
 	`approval`	VARCHAR(20)	NULL	COMMENT 'ASK 일 때 승인 결과 (approved, rejected, timeout)',
 	`executed`	BOOLEAN	NOT NULL	DEFAULT FALSE	COMMENT '실행 여부',
 	`tool_ok`	BOOLEAN	NULL	COMMENT '실행했을 때 툴 성공 여부 (실행 안 했으면 NULL)',
-	`target_type`	VARCHAR(30)	NULL	COMMENT '대상 종류 (document, work_file, output_file, agent)',
+	`target_type`	VARCHAR(30)	NULL	COMMENT '대상 종류 (doc, work_file, output_file, agent)',
 	`target_id`	BIGINT	NULL	COMMENT '대상 ID (기록용, FK 없음)',
 	`ts`	DATETIME	NOT NULL	DEFAULT CURRENT_TIMESTAMP	COMMENT '판정 시각 (UTC)'
 );
 
-CREATE TABLE `document` (
+CREATE TABLE `doc` (
 	`id`	BIGINT	NOT NULL	COMMENT '문서 ID',
 	`owner_user_id`	BIGINT	NOT NULL	COMMENT '등록한 사용자 ID',
 	`owner_dept_id`	BIGINT	NOT NULL	COMMENT '관리 책임 부서 ID',
@@ -164,9 +164,9 @@ CREATE TABLE `document` (
 	`status`	VARCHAR(20)	NOT NULL	DEFAULT 'active'	COMMENT '상태 (active, retired)'
 );
 
-CREATE TABLE `document_version` (
+CREATE TABLE `doc_version` (
 	`id`	BIGINT	NOT NULL	COMMENT '문서 버전 ID',
-	`document_id`	BIGINT	NOT NULL	COMMENT '문서 ID',
+	`doc_id`	BIGINT	NOT NULL	COMMENT '문서 ID',
 	`version`	INT	NOT NULL	COMMENT '버전 번호',
 	`is_current`	BOOLEAN	NOT NULL	DEFAULT TRUE	COMMENT '현재 버전 여부',
 	`file_name`	VARCHAR(255)	NOT NULL	COMMENT '원본 파일명',
@@ -182,7 +182,7 @@ CREATE TABLE `document_version` (
 
 CREATE TABLE `chunk` (
 	`id`	BIGINT	NOT NULL	COMMENT '청크 ID',
-	`document_version_id`	BIGINT	NOT NULL	COMMENT '문서 버전 ID',
+	`doc_version_id`	BIGINT	NOT NULL	COMMENT '문서 버전 ID',
 	`chunk_index`	INT	NOT NULL	COMMENT '청크 순번',
 	`page`	INT	NULL	COMMENT '페이지',
 	`content`	TEXT	NOT NULL	COMMENT '청크 본문',
@@ -246,11 +246,11 @@ CREATE TABLE `output_file` (
 CREATE TABLE `output_source` (
 	`id`	BIGINT	NOT NULL	COMMENT '산출물 입력 ID',
 	`output_id`	BIGINT	NOT NULL	COMMENT '산출물 ID',
-	`work_file_id`	BIGINT	NULL	COMMENT '작업 파일 ID (document_version_id 와 둘 중 하나)',
-	`document_version_id`	BIGINT	NULL	COMMENT '문서 버전 ID (work_file_id 와 둘 중 하나)'
+	`work_file_id`	BIGINT	NULL	COMMENT '작업 파일 ID (doc_version_id 와 둘 중 하나)',
+	`doc_version_id`	BIGINT	NULL	COMMENT '문서 버전 ID (work_file_id 와 둘 중 하나)'
 );
 
-ALTER TABLE `department` ADD CONSTRAINT `PK_DEPARTMENT` PRIMARY KEY (
+ALTER TABLE `dept` ADD CONSTRAINT `PK_DEPT` PRIMARY KEY (
 	`id`
 );
 
@@ -318,11 +318,11 @@ ALTER TABLE `audit_log` ADD CONSTRAINT `PK_AUDIT_LOG` PRIMARY KEY (
 	`id`
 );
 
-ALTER TABLE `document` ADD CONSTRAINT `PK_DOCUMENT` PRIMARY KEY (
+ALTER TABLE `doc` ADD CONSTRAINT `PK_DOC` PRIMARY KEY (
 	`id`
 );
 
-ALTER TABLE `document_version` ADD CONSTRAINT `PK_DOCUMENT_VERSION` PRIMARY KEY (
+ALTER TABLE `doc_version` ADD CONSTRAINT `PK_DOC_VERSION` PRIMARY KEY (
 	`id`
 );
 
@@ -379,10 +379,10 @@ REFERENCES `agent` (
 	`id`
 );
 
-ALTER TABLE `agent_assignment` ADD CONSTRAINT `FK_department_TO_agent_assignment_1` FOREIGN KEY (
+ALTER TABLE `agent_assignment` ADD CONSTRAINT `FK_dept_TO_agent_assignment_1` FOREIGN KEY (
 	`dept_id`
 )
-REFERENCES `department` (
+REFERENCES `dept` (
 	`id`
 );
 
@@ -401,8 +401,8 @@ REFERENCES `chunk` (
 );
 
 -- ── 비식별 관계 FK (ERDCloud 내보내기에서 빠지는 것들) ──────────
-ALTER TABLE `department` ADD CONSTRAINT `FK_users_TO_department_1` FOREIGN KEY (`head_user_id`) REFERENCES `users` (`id`);
-ALTER TABLE `users` ADD CONSTRAINT `FK_department_TO_users_1` FOREIGN KEY (`dept_id`) REFERENCES `department` (`id`);
+ALTER TABLE `dept` ADD CONSTRAINT `FK_users_TO_dept_1` FOREIGN KEY (`head_user_id`) REFERENCES `users` (`id`);
+ALTER TABLE `users` ADD CONSTRAINT `FK_dept_TO_users_1` FOREIGN KEY (`dept_id`) REFERENCES `dept` (`id`);
 ALTER TABLE `agent_template` ADD CONSTRAINT `FK_users_TO_agent_template_1` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`);
 ALTER TABLE `agent` ADD CONSTRAINT `FK_users_TO_agent_1` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`);
 ALTER TABLE `agent` ADD CONSTRAINT `FK_agent_template_TO_agent_1` FOREIGN KEY (`template_id`) REFERENCES `agent_template` (`id`);
@@ -411,7 +411,7 @@ ALTER TABLE `agent_share_request` ADD CONSTRAINT `FK_users_TO_agent_share_reques
 ALTER TABLE `agent_share_request` ADD CONSTRAINT `FK_users_TO_agent_share_request_2` FOREIGN KEY (`approver_id`) REFERENCES `users` (`id`);
 ALTER TABLE `agent_assignment` ADD CONSTRAINT `FK_users_TO_agent_assignment_1` FOREIGN KEY (`assigned_by`) REFERENCES `users` (`id`);
 ALTER TABLE `agent_knowledge` ADD CONSTRAINT `FK_agent_TO_agent_knowledge_1` FOREIGN KEY (`agent_id`) REFERENCES `agent` (`id`);
-ALTER TABLE `agent_knowledge` ADD CONSTRAINT `FK_document_TO_agent_knowledge_1` FOREIGN KEY (`document_id`) REFERENCES `document` (`id`);
+ALTER TABLE `agent_knowledge` ADD CONSTRAINT `FK_doc_TO_agent_knowledge_1` FOREIGN KEY (`doc_id`) REFERENCES `doc` (`id`);
 ALTER TABLE `chat_session` ADD CONSTRAINT `FK_users_TO_chat_session_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`);
 ALTER TABLE `chat_session` ADD CONSTRAINT `FK_agent_TO_chat_session_1` FOREIGN KEY (`agent_id`) REFERENCES `agent` (`id`);
 ALTER TABLE `agent_run` ADD CONSTRAINT `FK_chat_session_TO_agent_run_1` FOREIGN KEY (`session_id`) REFERENCES `chat_session` (`id`);
@@ -421,10 +421,10 @@ ALTER TABLE `tool_call` ADD CONSTRAINT `FK_message_TO_tool_call_1` FOREIGN KEY (
 ALTER TABLE `approval_request` ADD CONSTRAINT `FK_tool_call_TO_approval_request_1` FOREIGN KEY (`call_id`) REFERENCES `tool_call` (`call_id`);
 ALTER TABLE `audit_log` ADD CONSTRAINT `FK_tool_call_TO_audit_log_1` FOREIGN KEY (`call_id`) REFERENCES `tool_call` (`call_id`);
 ALTER TABLE `audit_log` ADD CONSTRAINT `FK_policy_rule_TO_audit_log_1` FOREIGN KEY (`rule_id`) REFERENCES `policy_rule` (`policy_rule_id`);
-ALTER TABLE `document` ADD CONSTRAINT `FK_users_TO_document_1` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`);
-ALTER TABLE `document` ADD CONSTRAINT `FK_department_TO_document_1` FOREIGN KEY (`owner_dept_id`) REFERENCES `department` (`id`);
-ALTER TABLE `document_version` ADD CONSTRAINT `FK_document_TO_document_version_1` FOREIGN KEY (`document_id`) REFERENCES `document` (`id`);
-ALTER TABLE `chunk` ADD CONSTRAINT `FK_document_version_TO_chunk_1` FOREIGN KEY (`document_version_id`) REFERENCES `document_version` (`id`);
+ALTER TABLE `doc` ADD CONSTRAINT `FK_users_TO_doc_1` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`);
+ALTER TABLE `doc` ADD CONSTRAINT `FK_dept_TO_doc_1` FOREIGN KEY (`owner_dept_id`) REFERENCES `dept` (`id`);
+ALTER TABLE `doc_version` ADD CONSTRAINT `FK_doc_TO_doc_version_1` FOREIGN KEY (`doc_id`) REFERENCES `doc` (`id`);
+ALTER TABLE `chunk` ADD CONSTRAINT `FK_doc_version_TO_chunk_1` FOREIGN KEY (`doc_version_id`) REFERENCES `doc_version` (`id`);
 ALTER TABLE `work_file` ADD CONSTRAINT `FK_chat_session_TO_work_file_1` FOREIGN KEY (`session_id`) REFERENCES `chat_session` (`id`);
 ALTER TABLE `work_file` ADD CONSTRAINT `FK_users_TO_work_file_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`);
 ALTER TABLE `output_file` ADD CONSTRAINT `FK_users_TO_output_file_1` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`);
@@ -432,4 +432,4 @@ ALTER TABLE `output_file` ADD CONSTRAINT `FK_chat_session_TO_output_file_1` FORE
 ALTER TABLE `output_file` ADD CONSTRAINT `FK_agent_run_TO_output_file_1` FOREIGN KEY (`run_id`) REFERENCES `agent_run` (`id`);
 ALTER TABLE `output_source` ADD CONSTRAINT `FK_output_file_TO_output_source_1` FOREIGN KEY (`output_id`) REFERENCES `output_file` (`id`);
 ALTER TABLE `output_source` ADD CONSTRAINT `FK_work_file_TO_output_source_1` FOREIGN KEY (`work_file_id`) REFERENCES `work_file` (`id`);
-ALTER TABLE `output_source` ADD CONSTRAINT `FK_document_version_TO_output_source_1` FOREIGN KEY (`document_version_id`) REFERENCES `document_version` (`id`);
+ALTER TABLE `output_source` ADD CONSTRAINT `FK_doc_version_TO_output_source_1` FOREIGN KEY (`doc_version_id`) REFERENCES `doc_version` (`id`);

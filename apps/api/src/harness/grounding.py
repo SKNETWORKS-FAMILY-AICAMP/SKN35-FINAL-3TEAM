@@ -63,7 +63,7 @@ class RequireSearch:
 
     search_tool: str = "search_doc"
     query_arg: str = "query"
-    grounded_tools: frozenset[str] = field(default_factory=lambda: frozenset({"search_doc", "get_doc_chunk", "parse_document"}))
+    grounded_tools: frozenset[str] = field(default_factory=lambda: frozenset({"search_doc", "get_doc_chunk", "parse_doc"}))
 
     def needed(self, question: str, answer: str, used_other_tools: bool = False) -> bool:
         """used_other_tools: 이번 run 에서 문서가 아닌 툴(심사 조회 등)이 성공했는가.

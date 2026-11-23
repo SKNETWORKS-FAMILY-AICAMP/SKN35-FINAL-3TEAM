@@ -36,11 +36,11 @@ def _now() -> Mapped[datetime]:
 
 # ── 조직 ────────────────────────────────────────────────
 
-class Department(Base):
-    __tablename__ = "department"
+class Dept(Base):
+    __tablename__ = "dept"
     id: Mapped[int] = _id()
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    head_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id", name="fk_department_head",
+    head_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id", name="fk_dept_head",
                                                                                use_alter=True))
 
 
@@ -49,7 +49,7 @@ class User(Base):
     id: Mapped[int] = _id()
     login_id: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    dept_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("department.id"), nullable=False)
+    dept_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("dept.id"), nullable=False)
     position: Mapped[str | None] = mapped_column(String(50))
     security_grade: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))  # 1~5
     # [DB 추가] 사내 통합 로그인(SSO) 연결용. 로그인 방식이 정해지기 전까지 비어 있다.
@@ -119,7 +119,7 @@ class AgentShareRequest(Base):
 class AgentAssignment(Base):
     __tablename__ = "agent_assignment"
     agent_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("agent.id", ondelete="CASCADE"), primary_key=True)
-    dept_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("department.id", ondelete="CASCADE"),
+    dept_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("dept.id", ondelete="CASCADE"),
                                          primary_key=True)
     assigned_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False)
     assigned_at: Mapped[datetime] = _now()
@@ -222,11 +222,11 @@ class AuditLog(Base):
 
 # ── 문서 (사내 지식) ────────────────────────────────────
 
-class Document(Base):
-    __tablename__ = "document"
+class Doc(Base):
+    __tablename__ = "doc"
     id: Mapped[int] = _id()
     owner_user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False)
-    owner_dept_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("department.id"), nullable=False)
+    owner_dept_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("dept.id"), nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     category: Mapped[str] = mapped_column(String(30), nullable=False)  # 내규 | 매뉴얼 | 상품 | 법령 | 공문
     scope: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'company'"))
@@ -234,10 +234,10 @@ class Document(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'active'"))
 
 
-class DocumentVersion(Base):
-    __tablename__ = "document_version"
+class DocVersion(Base):
+    __tablename__ = "doc_version"
     id: Mapped[int] = _id()
-    doc_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("document.id", ondelete="CASCADE"), nullable=False)  # [0003] document_id → doc_id
+    doc_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("doc.id", ondelete="CASCADE"), nullable=False)  # [0003] document_id → doc_id
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     file_name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -255,7 +255,7 @@ class Chunk(Base):
     """청킹 확정 때 바뀔 수 있는 표 (벡터 위치·칸 구성)."""
     __tablename__ = "chunk"
     id: Mapped[int] = _id()
-    doc_version_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("document_version.id", ondelete="CASCADE"),
+    doc_version_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("doc_version.id", ondelete="CASCADE"),
                                                 nullable=False)  # [0003] document_version_id → doc_version_id
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     page: Mapped[int | None] = mapped_column(Integer)
@@ -278,7 +278,7 @@ class AgentKnowledge(Base):
     __tablename__ = "agent_knowledge"
     id: Mapped[int] = _id()
     agent_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("agent.id", ondelete="CASCADE"), nullable=False)
-    doc_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("document.id", ondelete="CASCADE"))  # [0003] document_id → doc_id
+    doc_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("doc.id", ondelete="CASCADE"))  # [0003] document_id → doc_id
     category: Mapped[str | None] = mapped_column(String(30))
 
 
@@ -330,4 +330,4 @@ class OutputSource(Base):
     id: Mapped[int] = _id()
     output_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("output_file.id", ondelete="CASCADE"), nullable=False)
     work_file_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("work_file.id"))
-    doc_version_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("document_version.id"))  # [0003]
+    doc_version_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("doc_version.id"))  # [0003]

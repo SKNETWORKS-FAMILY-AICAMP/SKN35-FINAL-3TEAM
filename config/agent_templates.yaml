@@ -24,7 +24,7 @@ templates:
       직원이 등록해 달라고 분명히 말한 경우에만 심사 요청을 등록한다. 등록 전에 빠진 서류가 있으면 먼저 알려 준다.
       대출 승인 여부는 판단하지 않는다.
 
-  - id: document-deadline
+  - id: doc-deadline
     name: 서류 보완 기한 계산
     description: 영업일 기준으로 서류 보완 기한이 언제인지 계산합니다.
     tools: [today, search_doc]

@@ -9,8 +9,8 @@ from harness.review_grounding import ReviewLookupGuard
 from tests.fakes import FakeRegistry, FakeTool, FixedApprover, MemoryAudit, ScriptedChecker, ScriptedLLM
 
 QUESTION = "REVIEW-001을 지금 실제로 조회해서 상태와 누락 서류를 알려줘."
-DATA = {"case_id": "REVIEW-001", "status": "서류 검토 중", "submitted_documents": ["사업자등록증", "재무제표"],
-        "missing_documents": ["납세증명서"], "review_request": None}
+DATA = {"case_id": "REVIEW-001", "status": "서류 검토 중", "submitted_docs": ["사업자등록증", "재무제표"],
+        "missing_docs": ["납세증명서"], "review_request": None}
 FAKE_ANSWER = "현재 처리 중이며 사업자등록증과 연체 이력 확인서가 누락되었습니다."
 
 

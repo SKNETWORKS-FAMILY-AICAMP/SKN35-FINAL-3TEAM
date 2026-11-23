@@ -113,7 +113,7 @@ async def post_message(
         agent = usable_agent(svc, user, session.agent_id, existing=True)
     attachments = []
     if req.file_ids:
-        if await svc.tools.get("parse_document") is None or (agent is not None and "parse_document" not in agent.tools):
+        if await svc.tools.get("parse_doc") is None or (agent is not None and "parse_doc" not in agent.tools):
             raise HTTPException(409, "이 에이전트에 업로드 문서 읽기 도구를 추가해 주세요.")
         try:
             for file_id in req.file_ids:

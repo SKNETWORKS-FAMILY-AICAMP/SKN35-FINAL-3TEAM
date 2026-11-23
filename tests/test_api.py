@@ -189,7 +189,7 @@ async def test_llm_outage_returns_502(tmp_path):
     assert r.status_code == 502
 
 
-async def test_sources_come_from_document_tools(tmp_path):
+async def test_sources_come_from_doc_tools(tmp_path):
     from services.chat import sources
     from contracts.harness import Message
 

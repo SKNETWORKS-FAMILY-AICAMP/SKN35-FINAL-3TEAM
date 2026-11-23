@@ -1,13 +1,13 @@
 import asyncio
 from pathlib import Path
 
-from apps.api.src.tools.search_doc import SearchDocumentsTool
+from apps.api.src.tools.search_doc import SearchDocsTool
 from contracts.permission import Principal, ToolCall
 
 
 async def main():
-    tool = SearchDocumentsTool(
-        Path("data/fixtures/document_chunks.json")
+    tool = SearchDocsTool(
+        Path("data/fixtures/doc_chunks.json")
     )
 
     principal = Principal(

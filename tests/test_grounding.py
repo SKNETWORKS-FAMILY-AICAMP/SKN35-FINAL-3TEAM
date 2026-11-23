@@ -51,7 +51,7 @@ async def test_harness_searches_itself_when_llm_still_refuses():
     assert forced.tool_calls[0].arguments == {"query": "서류 반려"}
 
 
-async def test_no_force_for_non_document_answers_or_when_already_searched():
+async def test_no_force_for_non_doc_answers_or_when_already_searched():
     harness, llm, log, _ = build([{"content": "안녕하세요!"}])
     assert (await harness.run("안녕", KIM, "s")).final_message.content == "안녕하세요!" and len(llm.calls) == 1
 
@@ -110,12 +110,12 @@ async def test_boilerplate_citation_after_other_tool_is_not_forced():
 
 async def test_parsed_attachment_is_grounded_without_forcing_internal_search():
     harness, llm, log, _ = build([
-        {"tool_calls": [{"id": "p1", "name": "parse_document", "arguments": {"file_id": "file.hwpx"}}]},
+        {"tool_calls": [{"id": "p1", "name": "parse_doc", "arguments": {"file_id": "file.hwpx"}}]},
         {"content": "첨부 규정의 내용입니다.\n근거: 업무지침.hwpx 제1장"},
-    ], tools=("search_doc", "parse_document"))
+    ], tools=("search_doc", "parse_doc"))
     result = await harness.run("첨부한 규정 요약해줘", KIM, "s")
     assert result.stop_reason == "completed"
-    assert log == ["parse_document"] and len(llm.calls) == 2
+    assert log == ["parse_doc"] and len(llm.calls) == 2
 
 
 def test_empty_citation_lines_are_removed():

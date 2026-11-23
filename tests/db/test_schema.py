@@ -65,7 +65,7 @@ async def test_models_match_database_columns(conn):
 
 
 async def _user(conn, grade=2) -> int:
-    dept = await conn.scalar(text("INSERT INTO department (name) VALUES ('여신심사팀') RETURNING id"))
+    dept = await conn.scalar(text("INSERT INTO dept (name) VALUES ('여신심사팀') RETURNING id"))
     return await conn.scalar(text(
         "INSERT INTO users (login_id, name, dept_id, security_grade) VALUES (:l, 'A대리', :d, :g) RETURNING id"),
         {"l": f"t-{uuid.uuid4().hex[:8]}", "d": dept, "g": grade})
@@ -94,7 +94,7 @@ async def test_security_grade_limited_to_1_to_5(conn):
 async def test_audit_log_is_append_only(conn, stmt):
     uid = await _user(conn)
     aid = await conn.scalar(text(
-        "INSERT INTO audit_log (event_type, user_id, target_type, target_id) VALUES ('doc_register', :u, 'document', 1) "
+        "INSERT INTO audit_log (event_type, user_id, target_type, target_id) VALUES ('doc_register', :u, 'doc', 1) "
         "RETURNING id"), {"u": uid})
     with pytest.raises(DBAPIError, match="추가만"):
         async with conn.begin_nested():

@@ -126,10 +126,10 @@ def test_build_from_env_registers_all_tools(monkeypatch, tmp_path):
     async def verify():
         specs = await services.tools.specs()
         assert {spec.name for spec in specs} >= {
-            "parse_document", "get_review_case", "submit_review_request", "today",
+            "parse_doc", "get_review_case", "submit_review_request", "today",
             "search_mail", "read_mail", "send_mail",
         }
-        assert (await services.tools.get("parse_document")).timeout == 123
+        assert (await services.tools.get("parse_doc")).timeout == 123
     asyncio.run(verify())
 
 

@@ -8,8 +8,8 @@ import os
 
 import pytest
 
-from knowledge.ingestion.chunkers import chunk_document, token_counter
-from knowledge.ingestion.chunkers.document import Doc, norm
+from knowledge.ingestion.chunkers import chunk_doc, token_counter
+from knowledge.ingestion.chunkers.doc import Doc, norm
 
 REAL = bool(os.environ.get("CHUNKER_TOKENIZER_PATH"))
 COUNT = token_counter() if REAL else (lambda t: len(t) if t else 0)
@@ -33,11 +33,11 @@ def tbl(cells, nr, nc):
 
 
 def parsed(name, elements):
-    return {"status": "ok", "file_name": name, "document_version_id": 1, "elements": elements}
+    return {"status": "ok", "file_name": name, "doc_version_id": 1, "elements": elements}
 
 
 def run(p, cap=None):
-    return chunk_document(p, max_tokens=cap or CAP, count_tokens=COUNT)
+    return chunk_doc(p, max_tokens=cap or CAP, count_tokens=COUNT)
 
 
 def assert_no_loss(p, chunks):
@@ -196,8 +196,8 @@ def test_box_title_sibling_rule():
 # ---------------------------------------------------------------- 출력 형식 (인수인계 4장)
 def test_output_fields_and_permissions():
     p = parsed("fmt", law_base())
-    c = chunk_document(p, max_tokens=CAP, count_tokens=COUNT,
-                       document_meta={"owner_dept_id": 7, "scope": "dept", "security_grade": 2})
+    c = chunk_doc(p, max_tokens=CAP, count_tokens=COUNT,
+                       doc_meta={"owner_dept_id": 7, "scope": "dept", "security_grade": 2})
     need = {"chunk_index", "doc_version_id", "content", "embed_text", "heading_path", "kind", "page", "pages",
             "table_part", "owner_dept_id", "scope", "security_grade", "source_spans"}
     assert c and all(need <= set(ch) for ch in c)
@@ -208,4 +208,4 @@ def test_output_fields_and_permissions():
 
 
 def test_not_ok_parse_gives_no_chunks():
-    assert chunk_document({"status": "failed", "elements": []}, count_tokens=COUNT) == []
+    assert chunk_doc({"status": "failed", "elements": []}, count_tokens=COUNT) == []

@@ -4,7 +4,7 @@
 -- 원칙
 --   · 직원 개인 메일은 벡터DB · chunk 에 넣지 않고 이 테이블에만 저장한다.
 --   · 모든 조회는 owner_user_id = 로그인 사용자 조건을 붙인다 (커넥터 코드가 강제).
---   · 기존 document · document_version · chunk 는 건드리지 않는다.
+--   · 기존 doc · doc_version · chunk 는 건드리지 않는다.
 
 CREATE TABLE `mail_account` (
 	`owner_user_id`	BIGINT	NOT NULL	COMMENT '직원 ID (users.id)',
