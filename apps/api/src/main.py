@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from routers import agents, approvals, auth, chat, templates, users, uploads
 from services.container import AppServices, build_from_env
 from services.db_stores import UnknownUser
+from routers.knowledge_docs import router as knowledge_docs_router
 
 
 def create_app(build: Callable[[], AppServices] = build_from_env) -> FastAPI:
@@ -27,6 +28,7 @@ def create_app(build: Callable[[], AppServices] = build_from_env) -> FastAPI:
 
     app = FastAPI(title="Team Agent API", lifespan=lifespan)
     app.include_router(auth.router)
+    app.include_router(knowledge_docs_router)  # 사내 문서 목록
     app.include_router(chat.router)
     app.include_router(approvals.router)
     app.include_router(agents.router)

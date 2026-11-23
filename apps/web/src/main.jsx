@@ -13,6 +13,7 @@ import {
   startNewConversation, openConversation, conversationTitle, recentConversations,
   addSavedConversations, loadConversation, turnsToMessages,
 } from './chat-history';
+import { KnowledgeIcon, KnowledgePage } from './knowledge';
 
 // ── 백엔드 API ──────────────────────────────────────────────
 // /api 는 vite.config.js 의 프록시가 FastAPI 서버(기본 http://localhost:8000)로 넘긴다.
@@ -54,6 +55,7 @@ const navigation = [
   { id: 'shares', name: '공유 요청', detail: '승인·요청 내역', icon: Inbox, color: '#f17fa8' },
   { id: 'templates', name: '시나리오 템플릿', detail: '사전 구성으로 시작', icon: LayoutTemplate, color: '#f6b273' },
   { id: 'tools', name: '도구 목록', detail: '등록된 도구 보기', icon: Wrench, color: '#74d5e4' },
+  { id: 'knowledge', name: '사내 문서', detail: '검색할 수 있는 문서 보기', icon: KnowledgeIcon, color: '#a8c7fa' },
 ];
 
 // 채팅 첫 화면의 빠른 예시 (시나리오 템플릿은 서버의 /api/templates)
@@ -696,6 +698,7 @@ function App({ session }) {
   const refreshAgents = useCallback(async () => {
     try { setAgents(await api(user, '/api/agents')); } catch (error) { notify(error.message); }
   }, [user, notify]);
+  const loadKnowledge = useCallback(() => api(user, '/api/knowledge/docs'), [user]);
 
   useEffect(() => {
     if (session) return;  // 로그인 모드에서는 사용자 목록을 열 수 없다
@@ -819,6 +822,7 @@ function App({ session }) {
             shares: '부서·전사 공유는 바로 위 관리자가 승인해야 적용됩니다.',
             templates: '관리자가 미리 만든 업무 에이전트로 시작하세요. 고른 뒤 내용을 고쳐 내 에이전트로 저장합니다.',
             tools: '관리자가 등록한 도구입니다. 에이전트를 만들 때 이 중에서 고릅니다.',
+            knowledge: '에이전트가 검색해서 답할 수 있는 사내 문서입니다. 지금은 전사 공개 문서만 보여 줍니다.',
           }[page]}</p>
         </div>
         {notice && <p role="status" className={'notice ' + notice.tone}>{notice.text}</p>}
@@ -835,6 +839,7 @@ function App({ session }) {
           {me?.roles.includes('admin') && <p className="muted">도구 등록(MCP 연결)은 관리자 기능으로 준비 중입니다.</p>}
         </ul>}
         {page === 'templates' && <TemplatesPage user={user} me={me} tools={tools} setDraft={setDraft} notify={notify} />}
+        {page === 'knowledge' && <KnowledgePage key={user} load={loadKnowledge} notify={notify} />}
       </div>}
     </main>
   </div>;
