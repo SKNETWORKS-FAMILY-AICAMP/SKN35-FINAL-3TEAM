@@ -157,7 +157,7 @@ http://localhost:5173 에서 로그인합니다. `/api` 요청은 Vite 프록시
 | `EMBEDDING_MODEL_PATH` | | KURE-v3 폴더 |
 | `AUTH_MODE` | `dev` | `session` = 로그인 화면(DB 사용자), `dev` = 로그인 없이 개발용 사용자 선택 |
 | `DOC_STORE` | `file` | 문서 검색 위치. `db` = 팀 DB(pgvector), `file` = `data/fixtures/doc_chunks.json` 예시 |
-| `DOC_EVIDENCE_MIN_SCORE` | `0.30` | 규정 안내가 근거로 받는 최소 검색 점수 |
+| `DOC_EVIDENCE_MIN_SCORE` | `0` | 규정 안내가 근거로 받는 최소 검색 점수. 0 = 거르지 않음 (11/24 측정: 0.30 은 정답까지 버려서 뺌) |
 | `HARNESS_PLANNER` | `1` | 플래너 하네스 켜기 (`0` 이면 예전 루프) |
 | `HARNESS_PLANNER_TIMEOUT_SECONDS` | `60` | 플래너 대기 시간. 넘으면 규칙만으로 계획 |
 | `HARNESS_MAX_TURNS` | `10` | 한 요청의 LLM 호출 상한 (계획·단계·답 합계) |

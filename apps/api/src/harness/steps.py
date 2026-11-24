@@ -70,7 +70,7 @@ class StepContext:
     read_args: dict[str, dict] = field(default_factory=dict)  # file_id → 마지막으로 읽은 인자 (이어 읽기용)
     # 규정 모드 (harness/regulation.py): 검색 후보를 점수·주제로 거르고, 원문을 읽어 인용만 답한다
     regulation: bool = False
-    min_score: float = 0.30
+    min_score: float = 0.0  # 규정 모드 검색 점수 하한 (harness/regulation.py MIN_SCORE, 기본 0 = 거르지 않음)
     candidates: list[dict] = field(default_factory=list)
     evidence: list[Evidence] = field(default_factory=list)
     # 메일 보내기: 받는 사람 목록 조회 함수 (harness 가 principal 을 묶어 넘김), 코드가 고정하는 인자, LLM 에게 줄 안내

@@ -39,7 +39,7 @@ from harness.review_grounding import LOOKUP_TOOL, SUBMISSION_TOOL, ReviewLookupG
 from harness.attachment_grounding import compact_system, evidence_problem, extractive_reply, parse_record, read_call
 from harness.market_grounding import CLARIFY_DATE, market_plan
 from harness.regulation import (UNAVAILABLE, MIN_SCORE, SELECT_PROMPT, Evidence, candidates,
-                                read_evidence, selected_quotes, render_quotes)
+                                read_evidence, selected_quotes, render_quotes, selection_request, still_present)
 from harness.steps import market_summary
 
 log = logging.getLogger(__name__)
@@ -388,8 +388,7 @@ class AgentRunner:
         if not records:
             return finish(UNAVAILABLE)
         # 예전 대화·사용자 인용·개인 역할 프롬프트는 검증 가능한 규정 원문이 아니다.
-        request = {"question": question, "documents": [
-            {"chunk_id": r.chunk_id, "title": r.title, "location": r.location, "text": r.text} for r in records]}
+        request = selection_request(question, records)   # 원문을 번호 붙은 조각으로
         try:
             llm_calls = 1
             reply = (await self.llm.chat([Message("system", SELECT_PROMPT),
@@ -412,13 +411,9 @@ class AgentRunner:
                 if not outcome.ok:
                     return finish(UNAVAILABLE)
                 fresh = read_evidence(outcome.message.content, {"chunk_id": record.chunk_id})
-                if fresh is None:
+                if not still_present(fresh, quote):
                     return finish(UNAVAILABLE)
-                selected = selected_quotes(json.dumps({"status": "supported", "evidence": [
-                    {"chunk_id": record.chunk_id, "quote": quote}]}), [fresh], question)
-                if not selected:
-                    return finish(UNAVAILABLE)
-                checked.extend(selected)
+                checked.append((fresh, quote))
             quotes = checked
         return finish(render_quotes(quotes))
 
