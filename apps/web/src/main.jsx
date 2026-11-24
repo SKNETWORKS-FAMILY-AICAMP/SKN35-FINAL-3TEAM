@@ -10,10 +10,12 @@ import LoginScreen from './LoginScreen';
 import { ToolCatalog, ToolPicker } from './tool-visual';
 import AgentSelect from './AgentSelect';
 import { failedToolSummary } from './tool-status';
+import { request } from './api';
 import { InboxPage } from './inbox';
 import { SchedulesPage } from './schedules';
 import { DocumentDownloads, DocumentsPage, documentsFromEvents } from './documents';
 import { savedReports, ReportContent } from './report-export';
+import { MailComposer } from './mail-compose';
 import {
   emptyChatHistory, currentConversation, updateConversation,
   startNewConversation, openConversation, conversationTitle, recentConversations,
@@ -248,7 +250,7 @@ function Sources({ items = [], searched = false, cited = false }) {
     {!!items.length && <>
     <span className="sources-title"><FileText size={14} />참고 문서</span>
     <ul>{items.map((item, index) => <li key={index} className={item.opened ? '' : 'muted'}>
-      {item.title}{item.location && <span className="loc"> · {item.location}</span>}{item.partial && <span className="loc"> (일부 문단)</span>}{!item.opened && <span className="loc"> {item.previewed ? '(본문 미리보기)' : '(검색 결과)'}</span>}
+      {item.title}{item.location && <span className="loc"> · {item.location}</span>}{item.partial && <span className="loc"> (일부 문단)</span>}{!item.opened && !item.previewed && <span className="loc"> (검색 결과)</span>}
     </li>)}</ul></>}
   </div>;
 }
@@ -303,6 +305,7 @@ function ReadOnlyConversation({ thread, agentName, reason, onLeave }) {
 function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, changeConversation, newConversation, notify, onBusyChange }) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  const [mailBusy, setMailBusy] = useState(false);
   const [approvals, setApprovals] = useState([]);
   const [attachments, setAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
@@ -314,7 +317,9 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, cha
   const active = usable.find(agent => agent.agent_id === activeId) ?? DEFAULT_AGENT;
   const canParse = tools.some(tool => tool.name === 'parse_doc') &&
     (active.agent_id === null || active.tools?.includes('parse_doc'));
-  const busy = sending || uploading;
+  const busy = sending || uploading || mailBusy;
+  const canMail = tools.some(tool => tool.name === 'send_mail') &&
+    (active.agent_id === null || active.tools?.includes('send_mail'));
   const conversation = currentConversation(chatHistory, active.agent_id);
 
   useEffect(() => {
@@ -333,10 +338,10 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, cha
     try { setApprovals(await api(user, '/api/approvals')); } catch { /* 다음 차례에 다시 */ }
   }, [user]);
   useEffect(() => {
-    if (!sending) { setApprovals([]); return undefined; }
+    if (!sending && !mailBusy) { setApprovals([]); return undefined; }
     const timer = setInterval(pollApprovals, 1000);
     return () => clearInterval(timer);
-  }, [sending, pollApprovals]);
+  }, [sending, mailBusy, pollApprovals]);
 
   function update(fn) { changeConversation(active.agent_id, fn); }
 
@@ -417,6 +422,9 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, cha
             </section>)
             : message.role === 'agent' ? <Formatted text={message.content} /> : <div>{message.content}</div>}
           {message.role === 'agent' && <DocumentDownloads user={user} documents={documentsFromEvents(message.events)} notify={notify} />}
+          {message.role === 'agent' && canMail && conversation.sessionId && message.content && !message.events?.some(event => event.tool_name === 'send_mail') &&
+            <MailComposer key={conversation.sessionId + ':' + index} user={user} sessionId={conversation.sessionId} text={message.content} api={api} busy={busy}
+              onBusyChange={setMailBusy} onResult={response => notify(response.message, response.status === 'sent' ? 'ok' : response.status === 'simulated' ? 'info' : 'error')} />}
           {message.role === 'agent' && <Sources items={message.sources}
             searched={message.events?.some(event => event.tool_name === 'search_doc')}
             cited={/(^|\n)\s*\**근거\**\s*[:：]/.test(message.content)} />}
@@ -756,7 +764,8 @@ function App({ session, theme, setTheme }) {
   // 안 읽은 알림 수: 화면을 옮길 때와 30초마다 다시 센다 (채팅에서 알림을 보낸 뒤에도 바로 보이게)
   useEffect(() => {
     let current = true;
-    const count = () => api(user, '/api/inbox/unread-count')
+    // 배지는 뒤에서 도는 조회라 실패해도 로그인 화면으로 보내지 않는다 (request 는 auth-expired 를 보내지 않음)
+    const count = () => request(user, '/inbox/unread-count')
       .then(data => { if (current) setUnread(data.unread ?? 0); }).catch(() => { /* 못 세도 메뉴는 그대로 */ });
     count();
     const timer = setInterval(count, 30000);

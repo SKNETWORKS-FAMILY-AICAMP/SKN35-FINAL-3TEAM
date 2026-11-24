@@ -31,6 +31,30 @@ def attachment_request(question: str, files: list[dict]) -> list[dict]:
     return files
 
 
+_EXPLICIT = re.compile(r"첨부|이\s*문서|그\s*문서|이\s*파일|그\s*파일|앞서|원문|올린|업로드")
+_ORDINALS = ("첫", "두", "세", "네", "다섯")
+
+
+def refers_to_attachment(question: str, files: list[dict]) -> bool:
+    """질문이 첨부를 가리키는가 (플래너 흐름). 이번 메시지에 붙인 파일이 있으면 가리키는 것으로 본다."""
+    text = question.split("[사용자 첨부 파일 목록]", 1)[0]
+    return bool(files) and (any(f.get("new") for f in files) or bool(_EXPLICIT.search(text))
+                            or any(f["filename"].casefold() in text.casefold() for f in files))
+
+
+def pick_files(question: str, files: list[dict]) -> list[dict]:
+    """읽을 파일: 이름을 말했으면 그 파일, "두 번째"면 그 파일, 이번에 붙인 파일이 있으면 그 파일, 아니면 전부."""
+    text = question.split("[사용자 첨부 파일 목록]", 1)[0]
+    named = [f for f in files if f["filename"].casefold() in text.casefold()]
+    if named:
+        return named
+    for index, word in enumerate(_ORDINALS):
+        if re.search(word + r"\s*번째", text) and index < len(files):
+            return [files[index]]
+    new = [f for f in files if f.get("new")]
+    return new or list(files)
+
+
 def read_call(file: dict, question: str) -> LLMToolCall:
     question = question.split("[사용자 첨부 파일 목록]", 1)[0]
     # 일반 요약은 문서의 서로 다른 절을 고르게 제공한다(검색어가 '요약'뿐이면 검색되지 않음).

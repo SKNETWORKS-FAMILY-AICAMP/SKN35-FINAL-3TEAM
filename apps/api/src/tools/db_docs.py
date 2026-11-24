@@ -52,7 +52,9 @@ class BackgroundEmbedder:
 
 def _location(row: dict) -> str:
     """하네스 결과의 location: 문서 안 위치 ("제2장 … > 제12조 …"), 없으면 쪽, 그것도 없으면 몇 번째 문단."""
-    path = [p for p in row.get("heading_path") or [] if p and p != row.get("title")]
+    # 파서가 FAQ 본문 전체를 제목으로 오인한 경우, 이를 조항/위치처럼 인용하지 않는다.
+    path = [p for p in row.get("heading_path") or []
+            if isinstance(p, str) and p and len(p) <= 100 and "\n" not in p and p != row.get("title")]
     if path:
         return " > ".join(path)
     if row.get("page"):
@@ -101,8 +103,9 @@ class DbSearchDocsTool:
             "location": _location(r),
             "preview": r["content"][:PREVIEW_LENGTH],
             "is_truncated": len(r["content"]) > PREVIEW_LENGTH,
+            "score": r["score"],
         } for r in rows]
-        payload = {"query": query, "matches": matches}
+        payload = {"query": query, "matches": matches, "search_backend": "db_vector"}
         return ToolResult(call.call_id, True, json.dumps(payload, ensure_ascii=False), data=payload)
 
 

@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from routers import agents, approvals, auth, chat, documents, inbox, schedules, templates, users, uploads
+from routers import agents, approvals, auth, chat, documents, inbox, mail, schedules, templates, users, uploads
 from services.container import AppServices, build_from_env
 from services.db_stores import UnknownUser
 from services.scheduler import scheduler_from_env
@@ -38,6 +38,7 @@ def create_app(build: Callable[[], AppServices] = build_from_env) -> FastAPI:
     app.include_router(auth.router)
     app.include_router(knowledge_docs_router)  # 사내 문서 목록
     app.include_router(chat.router)
+    app.include_router(mail.router)
     app.include_router(approvals.router)
     app.include_router(agents.router)
     app.include_router(users.router)

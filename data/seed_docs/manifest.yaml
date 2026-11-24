@@ -17,6 +17,3 @@ docs:
   - {file: ibk/자금세탁방지업무취급규정_2025-05-22.hwp, title: 기업은행 자금세탁방지업무취급규정}
   - {file: ibk/적립식예금규정_2023-03-31.hwp, title: 기업은행 적립식예금규정}
 
-  # 권한 시연용: 부서 10 사람만 검색되는 문서 ("다른 부서는 못 본다"). --no-test 로 뺄 수 있다
-  - {file: test/13_금융위_개인채무자FAQ.hwpx, title: 개인채무자 FAQ (부서 10 전용 시험), category: 공문,
-     owner: E1002, scope: dept, grade: 2, test: true}
