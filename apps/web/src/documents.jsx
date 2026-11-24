@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Download, FileText, LoaderCircle } from 'lucide-react';
+import { Download, FileText, LoaderCircle, Trash2 } from 'lucide-react';
 import { request } from './api';
 
 // 서류가 나오는 모든 작업이 같은 내려받기 버튼을 쓴다.
@@ -60,14 +60,32 @@ export function DocumentDownloads({ user, documents, notify }) {
 
 export function DocumentsPage({ user, notify }) {
   const [items, setItems] = useState(null);
+  const [deleting, setDeleting] = useState('');
   const load = useCallback(async () => {
     try { setItems(await request(user, '/documents')); } catch (error) { notify(error.message); setItems([]); }
   }, [user, notify]);
   useEffect(() => { load(); }, [load]);
+  // 지우기: 내 문서함에서만 빠진다 (서버는 지운 시각만 남기고, 내려받은 기록은 그대로)
+  async function remove(item) {
+    if (!confirm(`"${item.title}" 문서를 내 문서함에서 지울까요?`)) return;
+    setDeleting(item.document_id);
+    try {
+      await request(user, '/documents/' + encodeURIComponent(item.document_id), { method: 'DELETE' });
+      setItems(previous => previous.filter(other => other.document_id !== item.document_id));
+      notify('문서를 지웠습니다.', 'ok');
+    } catch (error) {
+      notify(error.message);
+    } finally {
+      setDeleting('');
+    }
+  }
   if (items === null) return <p className="muted">불러오는 중…</p>;
   if (!items.length) return <p className="muted">만든 문서가 없습니다. 채팅에서 "만기 대출 정리표" 에이전트에게 요청해 보세요.</p>;
-  return <ul className="request-log">{items.map(item => <li key={item.document_id} className="panel inbox-item">
+  return <ul className="request-log">{items.map(item => <li key={item.document_id} className="panel inbox-item document-item">
     <DocumentDownloads user={user} documents={[item]} notify={notify} />
     <small className="muted">{new Date(item.created_at).toLocaleString()}</small>
+    <button type="button" className="icon document-delete" disabled={!!deleting} onClick={() => remove(item)}
+      aria-label={`${item.title} 지우기`} title="지우기">
+      {deleting === item.document_id ? <LoaderCircle size={15} className="spin" /> : <Trash2 size={15} />}</button>
   </li>)}</ul>;
 }

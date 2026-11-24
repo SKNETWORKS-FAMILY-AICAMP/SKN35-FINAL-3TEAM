@@ -33,6 +33,14 @@ export function openConversation(state, id) {
   return { ...state, currentByAgent: { ...state.currentByAgent, [agentKey(thread.agentId)]: id } };
 }
 
+// 대화 지우기: 목록에서 빼고, 그 대화를 이어 쓰던 에이전트는 다음에 새 대화로 시작한다.
+export function removeConversation(state, id) {
+  if (!state.threads[id]) return state;
+  const { [id]: _removed, ...threads } = state.threads;
+  const currentByAgent = Object.fromEntries(Object.entries(state.currentByAgent).map(([agent, current]) => [agent, current === id ? null : current]));
+  return { threads, currentByAgent };
+}
+
 export function conversationTitle(thread) {
   const message = thread.messages.find(item => item.role === 'user');
   return message?.content?.trim().replace(/\s+/g, ' ') || message?.attachments?.[0]?.filename || thread.title || '새 대화';

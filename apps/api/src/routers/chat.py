@@ -6,7 +6,7 @@ import sqlite3
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from openai import APIConnectionError, APIError, APITimeoutError
 from pydantic import BaseModel, Field, model_validator
 
@@ -205,6 +205,23 @@ async def list_sessions(
 ) -> list[SessionSummaryOut]:
     """내 대화 목록 (최근 것부터). 서버를 다시 켜도 STORE=db 면 남아 있다."""
     return [SessionSummaryOut(**s.__dict__) for s in await svc.sessions.summaries(user.user_id)]
+
+
+@router.delete("/sessions/{session_id}", status_code=204)
+async def delete_session(
+    session_id: str,
+    user: Principal = Depends(current_user),
+    svc: AppServices = Depends(get_services),
+) -> Response:
+    """내 대화를 지운다. 답을 만드는 중인 대화는 지우지 않는다 (409). 남의 대화·없는 대화는 404."""
+    session = await svc.sessions.get_owned(session_id, user.user_id)
+    if session is None:
+        raise HTTPException(404, "대화를 찾을 수 없습니다.")
+    if session.lock.locked():
+        raise HTTPException(409, "답을 만드는 중인 대화는 지울 수 없습니다. 끝난 뒤 다시 시도해 주세요.")
+    if not await svc.sessions.delete_owned(session_id, user.user_id):
+        raise HTTPException(404, "대화를 찾을 수 없습니다.")
+    return Response(status_code=204)
 
 
 @router.get("/sessions/{session_id}/turns", response_model=list[PastTurnOut])

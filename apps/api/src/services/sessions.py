@@ -63,6 +63,14 @@ class InMemorySessionStore:
     async def list_owned(self, user_id: str) -> list[ChatSession]:
         return [s for s in self._sessions.values() if s.user_id == user_id]
 
+    async def delete_owned(self, session_id: str, user_id: str) -> bool:
+        """본인 대화를 지운다. 남의 대화·없는 대화는 False (있는지도 알려주지 않음)."""
+        s = self._sessions.get(session_id)
+        if s is None or s.user_id != user_id:
+            return False
+        del self._sessions[session_id]
+        return True
+
     async def summaries(self, user_id: str) -> list[SessionSummary]:
         """메시지가 있는 내 대화, 최근 것부터. 메모리 저장소는 시각을 따로 안 남겨서 만든 순서의 역순."""
         out = []

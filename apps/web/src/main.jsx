@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import {
   ArrowUp, Bell, Bot, CalendarClock, FolderOpen, Braces, Check, ChevronRight, CircleAlert, FileText, Inbox, LayoutTemplate, ListChecks,
   LoaderCircle, Lock, Pencil, MessageSquare, Paperclip, Plus, Power, PowerOff, Search, Settings2, Share2, ShieldCheck,
-  LogOut, Moon, Sparkles, Sun, Trash2, Undo2, UserRound, Workflow, Wrench, X,
+  LogOut, Moon, PanelLeftClose, PanelLeftOpen, Sparkles, Sun, Trash2, Undo2, UserRound, Workflow, Wrench, X,
 } from 'lucide-react';
 import './style.css';
 import LoginScreen from './LoginScreen';
@@ -19,7 +19,7 @@ import { MailComposer } from './mail-compose';
 import {
   emptyChatHistory, currentConversation, updateConversation,
   startNewConversation, openConversation, conversationTitle, recentConversations,
-  addSavedConversations, loadConversation, turnsToMessages,
+  addSavedConversations, loadConversation, turnsToMessages, removeConversation,
 } from './chat-history';
 import { KnowledgeIcon, KnowledgePage } from './knowledge';
 
@@ -129,21 +129,62 @@ function RichText({ text }) {
 }
 
 // 답 본문: 줄 단위로 목록(- , 1.)을 묶고, "근거:" 줄은 따로 표시한다. HTML 은 해석하지 않는다.
+// 답에 걸린 시간: 보낸 순간부터 답이 올 때까지 (계획·도구 실행·답 쓰기 전부 포함)
+function formatSeconds(seconds) {
+  if (seconds < 60) return `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}초`;
+  return `${Math.floor(seconds / 60)}분 ${Math.round(seconds % 60)}초`;
+}
+
+function Elapsed({ since }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const seconds = Math.max(0, Math.floor((now - since) / 1000));
+  return <span className="answer-time live">{seconds < 60 ? `${seconds}초` : formatSeconds(seconds)} 지남</span>;
+}
+
+const NAV_KEY = 'agent-workspace.nav-collapsed.v1';
+
+// 답 본문 표시: 문단·목록·제목(#)·표(| 칸 |)를 그린다. 표는 마크다운 표 그대로 (시장 조회·정리 답 등).
+function tableCells(line) {
+  return line.replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim());
+}
+
 function Formatted({ text }) {
   const blocks = [];
   for (const raw of text.split('\n')) {
     const line = raw.trim();
+    const last = blocks[blocks.length - 1];
+    if (/^\|.*\|$/.test(line)) {  // 표 한 줄
+      if (last?.kind === 'table') last.items.push(line); else blocks.push({ kind: 'table', items: [line] });
+      continue;
+    }
+    const heading = line.match(/^(#{1,4})\s+(.*)$/);
+    if (heading) { blocks.push({ kind: 'h', level: heading[1].length, items: [heading[2]] }); continue; }
     const bullet = line.match(/^[-*•]\s+(.*)$/);
     const numbered = line.match(/^\d+[.)]\s+(.*)$/);
     const kind = bullet ? 'ul' : numbered ? 'ol' : line ? 'p' : 'gap';
     const body = bullet?.[1] ?? numbered?.[1] ?? line;
-    const last = blocks[blocks.length - 1];
     if ((kind === 'ul' || kind === 'ol') && last?.kind === kind) last.items.push(body);
     else if (kind !== 'gap') blocks.push({ kind, items: [body] });
   }
   return <div className="formatted">{blocks.map((block, index) => {
     if (block.kind === 'ul') return <ul key={index}>{block.items.map((item, i) => <li key={i}><RichText text={item} /></li>)}</ul>;
     if (block.kind === 'ol') return <ol key={index}>{block.items.map((item, i) => <li key={i}><RichText text={item} /></li>)}</ol>;
+    if (block.kind === 'h') return <p key={index} className={'answer-heading level-' + block.level}><RichText text={block.items[0]} /></p>;
+    if (block.kind === 'table') {
+      const rows = block.items.map(tableCells);
+      const ruleAt = rows.findIndex(cells => cells.every(cell => /^:?-{2,}:?$/.test(cell)));
+      const align = ruleAt >= 0 ? rows[ruleAt].map(cell => cell.endsWith(':') ? 'right' : 'left') : [];
+      const head = ruleAt === 1 ? rows[0] : null;
+      const body = rows.filter((_, i) => i !== ruleAt && !(head && i === 0));
+      return <div key={index} className="answer-table"><table>
+        {head && <thead><tr>{head.map((cell, i) => <th key={i} style={{ textAlign: align[i] }}><RichText text={cell} /></th>)}</tr></thead>}
+        <tbody>{body.map((cells, r) => <tr key={r}>{cells.map((cell, i) => <td key={i} style={{ textAlign: align[i] }}><RichText text={cell} /></td>)}</tr>)}</tbody>
+      </table></div>;
+    }
     const [line] = block.items;
     if (/^\**근거\**\s*[:：]/.test(line)) return <p key={index} className="cite-line"><RichText text={line} /></p>;
     return <p key={index}><RichText text={line} /></p>;
@@ -305,6 +346,7 @@ function ReadOnlyConversation({ thread, agentName, reason, onLeave }) {
 function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, changeConversation, newConversation, notify, onBusyChange }) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  const [sentAt, setSentAt] = useState(0);  // 답을 기다리기 시작한 시각 (걸린 시간 표시)
   const [mailBusy, setMailBusy] = useState(false);
   const [approvals, setApprovals] = useState([]);
   const [attachments, setAttachments] = useState([]);
@@ -381,6 +423,8 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, cha
     setInput('');
     setAttachments([]);
     update(c => ({ ...c, messages: [...c.messages, { role: 'user', content, attachments: sentAttachments }] }));
+    const started = Date.now();
+    setSentAt(started);
     setSending(true);
     try {
       const body = conversation.sessionId ? { content, session_id: conversation.sessionId } : { content, agent_id: active.agent_id };
@@ -389,6 +433,7 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, cha
       if (!alive.current) return;
       update(c => ({ sessionId: reply.session_id, messages: [...c.messages, {
         role: 'agent', name: active.name, content: reply.message, events: reply.tool_events, denial: reply.denial, sources: reply.sources,
+        seconds: (Date.now() - started) / 1000,
       }] }));
     } catch (error) {
       if (!alive.current) return;
@@ -411,7 +456,8 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, cha
     <div className="chat-body">
       {conversation.messages.length ? <div className="thread" aria-live="polite">
         {conversation.messages.map((message, index) => <article className={'message ' + message.role} key={index}>
-          <span className="message-label">{message.role === 'user' ? '나' : message.role === 'error' ? '오류' : message.name}</span>
+          <span className="message-label">{message.role === 'user' ? '나' : message.role === 'error' ? '오류' : message.name}
+            {message.seconds !== undefined && <span className="answer-time" title="질문을 보낸 뒤 답이 올 때까지 걸린 시간">{formatSeconds(message.seconds)} 걸림</span>}</span>
           {message.attachments?.length > 0 && <div className="attachment-list">{message.attachments.map(file =>
             <span className="attachment-chip" key={file.file_id}><FileText size={15} />{file.filename}</span>
           )}</div>}
@@ -429,7 +475,7 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, cha
             searched={message.events?.some(event => event.tool_name === 'search_doc')}
             cited={/(^|\n)\s*\**근거\**\s*[:：]/.test(message.content)} />}
         </article>)}
-        {sending && <article className="message agent pending"><LoaderCircle size={16} className="spin" /> 답을 만드는 중입니다…</article>}
+        {sending && <article className="message agent pending"><LoaderCircle size={16} className="spin" /> 답을 만드는 중입니다… <Elapsed since={sentAt} /></article>}
         <ApprovalCards user={user} approvals={approvals} onAnswered={pollApprovals} />
         <div ref={chatEnd} />
       </div> : <div className="welcome">
@@ -729,6 +775,15 @@ function App({ session, theme, setTheme }) {
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState(null);
   const [chatHistory, setChatHistory] = useState(emptyChatHistory);
+  // 왼쪽 메뉴 접기: 이 브라우저에만 기억한다 (저장이 막혀 있으면 펼친 채로 시작)
+  const [navCollapsed, setNavCollapsed] = useState(() => { try { return localStorage.getItem(NAV_KEY) === '1'; } catch { return false; } });
+  function toggleNav() {
+    setNavCollapsed(previous => {
+      try { localStorage.setItem(NAV_KEY, previous ? '0' : '1'); } catch { /* 저장 못 해도 화면은 바뀜 */ }
+      return !previous;
+    });
+  }
+  const [deletingThread, setDeletingThread] = useState('');
   const [chatView, setChatView] = useState(0);
   const [viewingId, setViewingId] = useState(null);  // 읽기 전용으로 연 지난 대화
   const [notice, setNotice] = useState(null);
@@ -794,6 +849,31 @@ function App({ session, theme, setTheme }) {
     setChatView(previous => previous + 1);
   }
 
+  // 대화 지우기: 서버 기록까지 지운다 (그 대화로 만든 문서·알림은 남음). 서버에 없는 대화는 화면에서만 뺀다.
+  async function deleteConversation(thread) {
+    if (chatBusy || deletingThread) return;
+    if (!confirm(`"${conversationTitle(thread)}" 대화를 지울까요?
+지운 대화는 되돌릴 수 없습니다. 이 대화로 만든 문서와 알림은 남습니다.`)) return;
+    setDeletingThread(thread.id);
+    try {
+      if (thread.sessionId) {
+        try {
+          await api(user, `/api/chat/sessions/${encodeURIComponent(thread.sessionId)}`, { method: 'DELETE' });
+        } catch (error) {
+          if (error.status !== 404) throw error;  // 서버에 이미 없으면 화면에서만 뺀다
+        }
+      }
+      const wasOpen = viewingId === thread.id || currentConversation(chatHistory, thread.agentId).id === thread.id;
+      setChatHistory(previous => removeConversation(previous, thread.id));
+      if (wasOpen) { setViewingId(null); setChatView(previous => previous + 1); }
+      notify('대화를 지웠습니다.', 'ok');
+    } catch (error) {
+      notify(error.message);
+    } finally {
+      setDeletingThread('');
+    }
+  }
+
   async function openSavedConversation(thread) {
     if (chatBusy) return;
     const agent = agents.find(item => item.agent_id === thread.agentId);
@@ -825,10 +905,13 @@ function App({ session, theme, setTheme }) {
   const viewingAgent = viewing && agents.find(item => item.agent_id === viewing.agentId);
   const currentThreadId = viewing ? viewing.id : currentConversation(chatHistory, activeId).id;
 
-  return <div className="shell" style={{ '--accent': route.color }}>
+  return <div className={'shell' + (navCollapsed ? ' nav-collapsed' : '')} style={{ '--accent': route.color }}>
     <aside className="sidebar">
-      <div className="sidebar-heading"><span><strong>Agent Argus</strong><small>사내 업무 에이전트</small></span></div>
-      <nav aria-label="워크스페이스 메뉴">{navigation.filter(item => !item.adminOnly || me?.roles?.includes('admin')).map(({ id, name, detail, icon: Icon, color }) => <a key={id} href={'#' + id} aria-current={page === id ? 'page' : undefined} style={{ '--item-accent': color }}>
+      <div className="sidebar-heading"><span><strong>Agent Argus</strong><small>사내 업무 에이전트</small></span>
+        <button type="button" className="nav-toggle" onClick={toggleNav} aria-expanded={!navCollapsed}
+          aria-label={navCollapsed ? '메뉴 펼치기' : '메뉴 접기'} title={navCollapsed ? '메뉴 펼치기' : '메뉴 접기'}>
+          {navCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</button></div>
+      <nav aria-label="워크스페이스 메뉴">{navigation.filter(item => !item.adminOnly || me?.roles?.includes('admin')).map(({ id, name, detail, icon: Icon, color }) => <a key={id} href={'#' + id} aria-current={page === id ? 'page' : undefined} style={{ '--item-accent': color }} title={navCollapsed ? name : undefined}>
         <span className="nav-icon"><Icon size={19} /></span><span><strong>{name}</strong><small>{detail}</small></span>
         {id === 'inbox' && unread > 0 && <span className="nav-count" aria-label={`안 읽은 알림 ${unread}개`}>{unread > 99 ? '99+' : unread}</span>}
         <ChevronRight size={15} className="nav-chevron" />
@@ -840,13 +923,18 @@ function App({ session, theme, setTheme }) {
           const title = conversationTitle(thread);
           const agentName = thread.agentId === null ? DEFAULT_AGENT.name : agents.find(item => item.agent_id === thread.agentId)?.name ?? '사용할 수 없는 에이전트';
           const selected = page === 'chat' && currentThreadId === thread.id;
-          return <button type="button" key={thread.id} disabled={chatBusy}
-            className={selected ? 'selected' : ''} aria-current={selected ? 'true' : undefined}
-            aria-label={`대화 열기: ${title}`} title={`${title} · ${agentName}`}
-            onClick={() => openSavedConversation(thread)}>
-            <MessageSquare size={15} />
-            <span><strong>{title}</strong><small>{agentName}</small></span>
-          </button>;
+          return <div key={thread.id} className={'history-row' + (selected ? ' selected' : '')}>
+            <button type="button" disabled={chatBusy || deletingThread === thread.id}
+              className={selected ? 'selected' : ''} aria-current={selected ? 'true' : undefined}
+              aria-label={`대화 열기: ${title}`} title={`${title} · ${agentName}`}
+              onClick={() => openSavedConversation(thread)}>
+              <MessageSquare size={15} />
+              <span><strong>{title}</strong><small>{agentName}</small></span>
+            </button>
+            <button type="button" className="history-delete" disabled={chatBusy || !!deletingThread}
+              aria-label={`대화 지우기: ${title}`} title="대화 지우기" onClick={() => deleteConversation(thread)}>
+              {deletingThread === thread.id ? <LoaderCircle size={14} className="spin" /> : <Trash2 size={14} />}</button>
+          </div>;
         })}
       </section>
       {session && <div className="sidebar-bottom user-card">
