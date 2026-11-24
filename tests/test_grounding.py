@@ -66,11 +66,17 @@ async def test_no_force_for_non_doc_answers_or_when_already_searched():
     assert len(llm.calls) == 2 and result.stop_reason == "completed"
 
 
-async def test_no_force_without_search_tool_or_when_disabled_or_no_turns_left():
-    for kwargs in ({"tools": ("today",)}, {"require": False}, {"max_turns": 2}):
+async def test_no_force_without_search_tool_or_when_disabled():
+    for kwargs in ({"tools": ("today",)}, {"require": False}):
         harness, llm, log, _ = build([{"content": "근거: 공통 지침 제2절"}], **kwargs)
         result = await harness.run("반려 규정 알려줘", KIM, "s")
         assert result.final_message.content == "근거: 공통 지침 제2절" and log == [], kwargs
+
+
+async def test_missing_lookup_is_blocked_even_when_no_turns_remain():
+    harness, _, log, _ = build([{"content": "근거: 공통 지침 제2절"}], max_turns=2)
+    result = await harness.run("반려 규정 알려줘", KIM, "s")
+    assert result.final_message.content == "등록된 규정에서 근거를 찾지 못했습니다." and log == []
 
 
 async def test_forced_only_once_per_run():

@@ -24,7 +24,10 @@ def readable_conditions(*, dept_id: int | None, security_grade: int) -> list:
     """사용자가 볼 수 있는 청크 조건 (권한 + 문서 상태). 검색과 원문 열람이 같은 조건을 쓴다."""
     readable_scope = (Chunk.scope == "company" if dept_id is None
                       else or_(Chunk.scope == "company", and_(Chunk.scope == "dept", Chunk.owner_dept_id == dept_id)))
+    document_scope = (Doc.scope == "company" if dept_id is None
+                      else or_(Doc.scope == "company", and_(Doc.scope == "dept", Doc.owner_dept_id == dept_id)))
     return [DocVersion.is_current.is_(True), DocVersion.status == "ready", Doc.status == "active",
+            Doc.security_grade <= security_grade, document_scope,
             Chunk.security_grade <= security_grade, readable_scope]
 
 

@@ -38,6 +38,8 @@ from harness.grounding import LookupRule, RequireSearch
 from harness.review_grounding import LOOKUP_TOOL, SUBMISSION_TOOL, ReviewLookupGuard
 from harness.attachment_grounding import compact_system, evidence_problem, extractive_reply, parse_record, read_call
 from harness.market_grounding import CLARIFY_DATE, market_plan
+from harness.regulation import (UNAVAILABLE, MIN_SCORE, SELECT_PROMPT, Evidence, candidates,
+                                read_evidence, selected_quotes, render_quotes)
 from harness.steps import market_summary
 
 log = logging.getLogger(__name__)
@@ -75,6 +77,8 @@ class AgentRunner:
         lookup_rules: tuple[LookupRule, ...] | None = None,
         check_answers: bool = True,
         planner: bool = False,
+        regulation_mode: bool = False,
+        regulation_min_score: float = MIN_SCORE,
     ) -> None:
         self.llm = llm
         self.tools = tools
@@ -91,6 +95,11 @@ class AgentRunner:
         # True 면 플래너가 계획을 세우고 단계마다 툴 하나씩 붙여 실행한다 (harness/plan_runner.py).
         # False 면 예전 흐름 (LLM 이 툴을 고르는 루프 + 시장 고정 순서)
         self.planner = planner
+        # 규정 모드 (harness/regulation.py): 원문 인용만 답한다. 플래너 흐름도 이 값을 따른다
+        self.regulation_mode = regulation_mode
+        if not 0 <= regulation_min_score <= 1:
+            raise ValueError("DOC_EVIDENCE_MIN_SCORE는 0~1이어야 합니다")
+        self.regulation_min_score = regulation_min_score
 
     async def run(
         self,
@@ -120,6 +129,8 @@ class AgentRunner:
         market = market_plan(user_input, specs)
         if market:
             return await self._run_market(messages, user_input, market, principal, session_id, agent_id, run_id)
+        if self.regulation_mode:
+            return await self._run_regulation(user_input, messages, principal, session_id, agent_id, run_id)
         review_spec = next((spec for spec in specs if spec.name == LOOKUP_TOOL), None)
         submission_spec = next((spec for spec in specs if spec.name == SUBMISSION_TOOL), None)
         if review and review_spec is None:
@@ -142,6 +153,7 @@ class AgentRunner:
         researched = False
         answer_nudge: str | None = None  # 답 검사에 걸려 다시 쓰게 할 때의 안내
         answer_retried = False
+        evidence_sources: list[str] = []  # 이번 요청에서 성공한 도구 결과만 검증 근거로 쓴다.
         retry_review = False
         retry_submission: tuple[str, ...] = ()
 
@@ -213,6 +225,10 @@ class AgentRunner:
                     force_rule = pending
                     log.info("조회 없이 쓴 답이라 %s 를 강제합니다 (run %s)", pending[1].name, run_id)
                     continue
+                if pending:
+                    final = Message("assistant", pending[0].unavailable)
+                    messages.append(final)
+                    return RunResult(final, messages, turn, "completed")
                 # 문서 검색이 모두 0건이면 검색어를 바꿔 한 번 더, 그래도 없으면 고정 문구 (결정 사항 1번)
                 if (doc_rule and search_hits and not any(search_hits)
                         and doc_rule.needed(user_input, reply.content)):
@@ -225,7 +241,7 @@ class AgentRunner:
                     messages.append(final)
                     return RunResult(final, messages, turn, "completed")
                 if self.check_answers:
-                    verdict = check_answer(reply.content, sources=[m.content for m in messages if m.role != "assistant"],
+                    verdict = check_answer(reply.content, sources=evidence_sources,
                                            grounded=bool(succeeded & rule_tools), wrote=wrote)
                     if not verdict.ok:
                         await log_blocked({"run_id": run_id, "session_id": session_id, "user_id": principal.user_id,
@@ -272,6 +288,15 @@ class AgentRunner:
                 outcome = await self._handle_tool_call(call)
                 messages.append(outcome.message)
                 if outcome.ok:
+                    evidence_sources.append(outcome.message.content)
+                    # 성공한 작업의 식별자·수치 인자는 완료 답변에서 사용할 수 있다.
+                    # 질문 전체/메일 본문/문서 검색어를 규정 근거로 섞지는 않는다.
+                    if call.tool_name not in {"search_doc", "get_doc_chunk", "parse_doc"}:
+                        verified_inputs = {k: v for k, v in call.arguments.items()
+                                           if type(v) in (int, float) or (k.endswith("_id") and isinstance(v, str)
+                                                                          and re.fullmatch(r"[A-Za-z0-9_-]{1,100}", v))}
+                        if verified_inputs:
+                            evidence_sources.append(json.dumps(verified_inputs))
                     if review:
                         review.record(call.tool_name, call.arguments, outcome.message.content)
                     done.append(DoneTool(outcome.label, outcome.message.content, call.tool_name))
@@ -304,6 +329,94 @@ class AgentRunner:
                     return RunResult(final, messages, turn, "completed")
 
         return RunResult(None, messages, self.max_turns, "max_turns")
+
+    async def _run_regulation(self, question, messages, principal, session_id, agent_id, run_id):
+        """규정 모드: 권한을 통과한 원문 인용만 반환하며 무근거 자유 답변은 차단한다."""
+        done, llm_calls = [], 0
+
+        def finish(text):
+            final = Message("assistant", text)
+            messages.append(final)
+            return RunResult(final, messages, llm_calls, "completed")
+
+        async def execute(name, arguments):
+            ident = "regulation_" + uuid.uuid4().hex
+            messages.append(Message("assistant", "", tool_calls=(LLMToolCall(ident, name, arguments),)))
+            outcome = await self._handle_tool_call(ToolCall(ident, name, arguments, principal, session_id,
+                                                            agent_id=agent_id, run_id=run_id))
+            messages.append(outcome.message)
+            if outcome.ok:
+                done.append(DoneTool(outcome.label, outcome.message.content, name))
+            return outcome
+
+        if await self.tools.get("search_doc") is None:
+            return finish("이 에이전트에 사내 문서 검색 도구가 없어 규정의 근거를 확인할 수 없습니다.")
+        if self.max_turns <= 0:
+            return finish(UNAVAILABLE)
+        rule = RequireSearch()
+        queries = list(dict.fromkeys([question.strip()[:2000], rule.arguments(question)[rule.query_arg]]))
+        matches = []
+        for query in queries:
+            outcome = await execute("search_doc", {"query": query})
+            if outcome.denial:
+                return await self._stop_denied(messages, outcome.denial, done, llm_calls)
+            if not outcome.ok:
+                return finish("문서 검색을 완료하지 못해 규정의 근거를 확인할 수 없습니다. 잠시 뒤 다시 시도해 주세요.")
+            matches = candidates(outcome.message.content, question, self.regulation_min_score)
+            if matches:
+                break
+        if not matches:
+            return finish(UNAVAILABLE)
+        records = []
+        can_read = await self.tools.get("get_doc_chunk") is not None
+        for match in matches:
+            if can_read:
+                outcome = await execute("get_doc_chunk", {"chunk_id": match["chunk_id"]})
+                if outcome.denial:
+                    return await self._stop_denied(messages, outcome.denial, done, llm_calls)
+                if not outcome.ok:
+                    continue
+                record = read_evidence(outcome.message.content, match)
+                if record:
+                    records.append(record)
+            elif match.get("is_truncated") is False and isinstance(match.get("title"), str):
+                records.append(Evidence(match["chunk_id"], match["title"], str(match.get("location") or ""), match["preview"]))
+        if not records:
+            return finish(UNAVAILABLE)
+        # 예전 대화·사용자 인용·개인 역할 프롬프트는 검증 가능한 규정 원문이 아니다.
+        request = {"question": question, "documents": [
+            {"chunk_id": r.chunk_id, "title": r.title, "location": r.location, "text": r.text} for r in records]}
+        try:
+            llm_calls = 1
+            reply = (await self.llm.chat([Message("system", SELECT_PROMPT),
+                                          Message("user", json.dumps(request, ensure_ascii=False))], [])).message
+            quotes = [] if reply.tool_calls else selected_quotes(reply.content, records, question)
+        except Exception:
+            log.warning("규정 원문 선택 실패, 추측 답변을 차단합니다 (run %s)", run_id)
+            return finish(UNAVAILABLE)
+        if not quotes:
+            await log_blocked({"run_id": run_id, "session_id": session_id, "user_id": principal.user_id,
+                               "problems": ["규정 원문 인용 검증 실패 또는 근거 부족"], "answer": reply.content[:1000]})
+            return finish(UNAVAILABLE)
+        # 모델 처리 중 권한/버전이 바뀌었을 수 있으므로 선택된 원문을 다시 확인한다.
+        if can_read:
+            checked = []
+            for record, quote in quotes:
+                outcome = await execute("get_doc_chunk", {"chunk_id": record.chunk_id})
+                if outcome.denial:
+                    return await self._stop_denied(messages, outcome.denial, [], llm_calls)
+                if not outcome.ok:
+                    return finish(UNAVAILABLE)
+                fresh = read_evidence(outcome.message.content, {"chunk_id": record.chunk_id})
+                if fresh is None:
+                    return finish(UNAVAILABLE)
+                selected = selected_quotes(json.dumps({"status": "supported", "evidence": [
+                    {"chunk_id": record.chunk_id, "quote": quote}]}), [fresh], question)
+                if not selected:
+                    return finish(UNAVAILABLE)
+                checked.extend(selected)
+            quotes = checked
+        return finish(render_quotes(quotes))
 
     async def _run_market(self, messages, question, plan, principal, session_id, agent_id, run_id):
         action, arguments, wants_report = plan
@@ -548,12 +661,15 @@ def create_harness(
     lookup_rules: tuple[LookupRule, ...] | None = None,
     check_answers: bool = True,
     planner: bool = False,
+    regulation_mode: bool = False,
+    regulation_min_score: float = MIN_SCORE,
 ) -> AgentRunner:
     return AgentRunner(
         llm=llm, tools=tools, checker=checker,
         approver=approver, audit=audit, max_turns=max_turns,
         tool_timeout=tool_timeout, require_search=require_search, require_review_lookup=require_review_lookup,
         lookup_rules=lookup_rules, check_answers=check_answers, planner=planner,
+        regulation_mode=regulation_mode, regulation_min_score=regulation_min_score,
     )
 
 
