@@ -98,4 +98,5 @@ class GoogleGmailClient:
             raise
 
     async def send_message(self, raw):
-        return await self._call(lambda: self._service().users().messages().send(userId="me", body={"raw": raw}).execute())
+        # 응답을 잃었어도 Gmail은 이미 보냈을 수 있다. 읽기와 달리 발송은 재시도하지 않는다.
+        return await asyncio.to_thread(lambda: self._service().users().messages().send(userId="me", body={"raw": raw}).execute(num_retries=0))

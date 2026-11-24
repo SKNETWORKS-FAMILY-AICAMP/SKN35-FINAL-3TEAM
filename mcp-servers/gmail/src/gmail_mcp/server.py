@@ -24,7 +24,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from .accounts import factory
 from .config import Settings
-from .models import MailSearchResult, MailThread, SendResult
+from .models import MailSearchResult, MailThread, SendResult, MailRecipientList
 from .service import InvalidRequest, MailService
 from .status_page import render_status_page
 from .store import open_store
@@ -45,6 +45,24 @@ def mode_label(service: MailService) -> str:
 def build_server(service: MailService) -> MCPServer:
     mode = mode_label(service)
     mcp = MCPServer("gmail", version="0.2.0", instructions=f"[{mode}] 내 메일 검색·읽기, 내 계정으로 메일 발송")
+
+    @mcp.tool()
+    async def list_mail_recipients(
+        requester_id: RequesterId,
+        candidate_ids: Annotated[list[str], Field(max_length=200, description="플랫폼이 제공하는 직원 사번 목록")],
+    ) -> MailRecipientList:
+        """플랫폼 수신자 선택 화면용. 연결된 직원 주소만 반환하며 메일 본문·토큰은 반환하지 않는다."""
+        if not await service.store.get_account_email(requester_id):
+            raise ToolError("본인 Gmail 계정을 먼저 연결해 주세요.")
+        recipients = []
+        own_email = await service.store.get_account_email(requester_id)
+        for uid in dict.fromkeys(candidate_ids):
+            if uid == requester_id:
+                continue
+            email = await service.store.get_account_email(uid)
+            if email and email.casefold() != own_email.casefold():
+                recipients.append({"user_id": uid, "email": email})
+        return MailRecipientList(recipients=recipients)
 
     @mcp.tool()
     async def search_mail(
