@@ -255,3 +255,132 @@ async def test_login_account_lookup_failure_does_not_send():
         "to": [LEE], "subject": "제목", "body": "본문",
     }))
     assert not result.ok and "연결 정보를 확인할 수 없습니다" in result.content
+
+
+async def picker_app(bridge, tmp_path, decision=Decision.ASK):
+    from gmail_mcp.fake import CHOI
+    from services.mail_dispatches import MailDispatchStore
+    connection, service, boxes = bridge
+    await service.store.set_account(KIM_ID, KIM)
+    await service.store.set_account(CHOI_ID, CHOI)
+    svc = AppServices(
+        llm=ScriptedLLM([]), tools=SimpleToolRegistry([GmailTool("send_mail", connection)]),
+        checker=create_checker(rules=[], default=decision), approvals=FutureApprovalHandler(2),
+        audit=JsonlAuditLogger(tmp_path / "audit.jsonl"),
+        users=UserDirectory({"kim": USER, "choi": Principal("choi", attributes={"name": "동료"}), "unconnected": Principal("unconnected")}),
+        mail_dispatches=MailDispatchStore(tmp_path / "dispatch.sqlite3"),
+    )
+    session = await svc.sessions.create("kim")
+    app = create_app(build=lambda: svc)
+    app.state.services = svc
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", headers={"X-User-Id": "kim"}), svc, session, boxes
+
+
+def draft_request(session):
+    import uuid
+    return {"session_id": session.session_id, "request_id": str(uuid.uuid4()),
+            "recipient_ids": ["choi"], "subject": "업무 안내", "body": "초안입니다."}
+
+
+async def test_picker_lists_only_other_connected_staff(bridge, tmp_path):
+    client, _, session, boxes = await picker_app(bridge, tmp_path)
+    async with client:
+        response = await client.get("/api/mail/recipients", params={"session_id": session.session_id})
+        assert response.status_code == 200
+        assert [item["user_id"] for item in response.json()] == ["choi"]
+        assert response.json()[0]["name"] == "동료"
+    assert boxes[KIM_ID].sent == []
+
+
+@pytest.mark.parametrize("approve", [True, False])
+async def test_picker_approval_and_idempotent_replay(bridge, tmp_path, approve):
+    client, svc, session, boxes = await picker_app(bridge, tmp_path)
+    body = draft_request(session)
+    async with client:
+        task = asyncio.create_task(client.post("/api/mail/send", json=body))
+        for _ in range(100):
+            pending = (await client.get("/api/approvals")).json()
+            if pending:
+                break
+            await asyncio.sleep(.005)
+        assert pending and boxes[KIM_ID].sent == []
+        assert pending[0]["arguments"]["body"] == body["body"]
+        assert (await client.post("/api/mail/send", json=body)).status_code == 409
+        # 다른 직원은 발신자의 승인을 처리하지 못한다.
+        assert (await client.post("/api/approvals/" + body["request_id"], headers={"X-User-Id": "choi"}, json={"approved": True})).status_code == 404
+        await client.post("/api/approvals/" + body["request_id"], json={"approved": approve})
+        response = await task
+        assert response.status_code == 200
+        assert response.json()["status"] == ("simulated" if approve else "not_sent")
+        assert (await client.post("/api/mail/send", json=body)).json() == response.json()
+        assert (await client.post("/api/mail/send", json={**body, "subject": "다른 제목"})).status_code == 409
+    assert len(boxes[KIM_ID].sent) == int(approve)
+    assert session.messages[-1].content == response.json()["message"]
+    assert len(svc.llm.calls) == 0
+
+
+@pytest.mark.parametrize("uid", ["kim", "unconnected", "unknown"])
+async def test_picker_rejects_self_and_unconnected(bridge, tmp_path, uid):
+    client, _, session, boxes = await picker_app(bridge, tmp_path)
+    async with client:
+        body = {**draft_request(session), "recipient_ids": [uid]}
+        assert (await client.post("/api/mail/send", json=body)).status_code == 422
+    assert not boxes[KIM_ID].sent
+
+
+async def test_picker_session_ownership_and_tool_selection(bridge, tmp_path):
+    from services.agents import Agent
+    client, svc, session, boxes = await picker_app(bridge, tmp_path)
+    async with client:
+        body = draft_request(session)
+        assert (await client.post("/api/mail/send", headers={"X-User-Id": "choi"}, json=body)).status_code == 404
+        agent = Agent("without-mail", "kim", 10, "문서 도우미", "", ())
+        # 저장소 메서드와 무관하게 이 테스트에서 사용할 에이전트를 둔다.
+        svc.agents._agents[agent.agent_id] = agent
+        session.agent_id = agent.agent_id
+        assert (await client.post("/api/mail/send", json=body)).status_code == 409
+    assert not boxes[KIM_ID].sent
+
+
+@pytest.mark.parametrize("decision", [Decision.DENY, Decision.ASK])
+async def test_picker_denial_or_timeout_never_sends(bridge, tmp_path, decision):
+    client, _, session, boxes = await picker_app(bridge, tmp_path, decision)
+    async with client:
+        response = await client.post("/api/mail/send", json=draft_request(session))
+        assert response.json()["status"] == "not_sent"
+    assert not boxes[KIM_ID].sent
+
+
+async def test_picker_uncertain_send_is_never_retried_even_with_reopened_store(bridge, tmp_path):
+    from contracts.harness import ToolResult
+    from services.mail_dispatches import MailDispatchStore
+    client, svc, session, _ = await picker_app(bridge, tmp_path, Decision.ALLOW)
+    calls = []
+
+    async def uncertain(call):
+        calls.append(call)
+        return ToolResult(call.call_id, False, "응답 유실")
+
+    (await svc.tools.get("send_mail")).run = uncertain
+    body = draft_request(session)
+    async with client:
+        response = await client.post("/api/mail/send", json=body)
+        assert response.json()["status"] == "unknown"
+        svc.mail_dispatches = MailDispatchStore(tmp_path / "dispatch.sqlite3")
+        assert (await client.post("/api/mail/send", json=body)).json() == response.json()
+    assert len(calls) == 1
+
+
+async def test_google_send_does_not_retry_server_error(monkeypatch):
+    from unittest.mock import MagicMock
+    from googleapiclient.errors import HttpError
+    from httplib2 import Response
+    from gmail_mcp.client import GoogleGmailClient
+    client = GoogleGmailClient(Settings(adapter="google"), KIM_ID, max_retries=3)
+    service = MagicMock()
+    execute = service.users.return_value.messages.return_value.send.return_value.execute
+    execute.side_effect = HttpError(Response({"status": "503"}), b"unavailable")
+    monkeypatch.setattr(client, "_service", lambda: service)
+    with pytest.raises(HttpError):
+        await client.send_message("fake-raw")
+    execute.assert_called_once_with(num_retries=0)

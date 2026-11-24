@@ -15,6 +15,7 @@ import { InboxPage } from './inbox';
 import { SchedulesPage } from './schedules';
 import { DocumentDownloads, DocumentsPage, documentsFromEvents } from './documents';
 import { savedReports, ReportContent } from './report-export';
+import { MailComposer } from './mail-compose';
 import {
   emptyChatHistory, currentConversation, updateConversation,
   startNewConversation, openConversation, conversationTitle, recentConversations,
@@ -304,6 +305,7 @@ function ReadOnlyConversation({ thread, agentName, reason, onLeave }) {
 function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, changeConversation, newConversation, notify, onBusyChange }) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  const [mailBusy, setMailBusy] = useState(false);
   const [approvals, setApprovals] = useState([]);
   const [attachments, setAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
@@ -315,7 +317,9 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, cha
   const active = usable.find(agent => agent.agent_id === activeId) ?? DEFAULT_AGENT;
   const canParse = tools.some(tool => tool.name === 'parse_doc') &&
     (active.agent_id === null || active.tools?.includes('parse_doc'));
-  const busy = sending || uploading;
+  const busy = sending || uploading || mailBusy;
+  const canMail = tools.some(tool => tool.name === 'send_mail') &&
+    (active.agent_id === null || active.tools?.includes('send_mail'));
   const conversation = currentConversation(chatHistory, active.agent_id);
 
   useEffect(() => {
@@ -334,10 +338,10 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, cha
     try { setApprovals(await api(user, '/api/approvals')); } catch { /* 다음 차례에 다시 */ }
   }, [user]);
   useEffect(() => {
-    if (!sending) { setApprovals([]); return undefined; }
+    if (!sending && !mailBusy) { setApprovals([]); return undefined; }
     const timer = setInterval(pollApprovals, 1000);
     return () => clearInterval(timer);
-  }, [sending, pollApprovals]);
+  }, [sending, mailBusy, pollApprovals]);
 
   function update(fn) { changeConversation(active.agent_id, fn); }
 
@@ -418,6 +422,9 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, cha
             </section>)
             : message.role === 'agent' ? <Formatted text={message.content} /> : <div>{message.content}</div>}
           {message.role === 'agent' && <DocumentDownloads user={user} documents={documentsFromEvents(message.events)} notify={notify} />}
+          {message.role === 'agent' && canMail && conversation.sessionId && message.content && !message.events?.some(event => event.tool_name === 'send_mail') &&
+            <MailComposer key={conversation.sessionId + ':' + index} user={user} sessionId={conversation.sessionId} text={message.content} api={api} busy={busy}
+              onBusyChange={setMailBusy} onResult={response => notify(response.message, response.status === 'sent' ? 'ok' : response.status === 'simulated' ? 'info' : 'error')} />}
           {message.role === 'agent' && <Sources items={message.sources}
             searched={message.events?.some(event => event.tool_name === 'search_doc')}
             cited={/(^|\n)\s*\**근거\**\s*[:：]/.test(message.content)} />}

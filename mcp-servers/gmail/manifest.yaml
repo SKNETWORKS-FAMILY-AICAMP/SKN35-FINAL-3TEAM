@@ -13,6 +13,13 @@ endpoint: http://mcp-gmail:8001/mcp
 auth_token_env: GMAIL_MCP_TOKEN
 
 tools:
+  - name: list_mail_recipients
+    side_effect: read
+    risk: medium
+    platform_only: true      # 수신자 선택 화면에서만 호출. 에이전트 ToolRegistry에는 등록하지 않음
+    inject:
+      requester_id: user_id
+
   - name: search_mail
     side_effect: read
     risk: medium            # 개인 메일 — 본인 것만 조회

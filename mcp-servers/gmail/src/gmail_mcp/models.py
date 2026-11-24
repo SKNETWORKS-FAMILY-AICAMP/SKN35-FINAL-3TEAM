@@ -104,3 +104,12 @@ class SendResult(BaseModel):
     status: str = Field(default="sent", description="sent(실제 발송) / simulated(가상 메일함, 발송 안 됨)")
     to: list[str]
     cc: list[str] = []
+
+
+class MailRecipient(BaseModel):
+    user_id: str
+    email: str
+
+
+class MailRecipientList(BaseModel):
+    recipients: list[MailRecipient]
