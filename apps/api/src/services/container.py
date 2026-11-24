@@ -24,6 +24,7 @@ from services.customer_notices import DbNoticeLog, NoticeLog
 from services.documents import DbDocumentStore, DocumentStore, load_forms
 from services.inbox import DbInboxStore, InboxStore
 from services.mail_accounts import GmailAccountResolver
+from services.mail_dispatches import MailDispatchStore
 from services.sessions import InMemorySessionStore
 from services.templates import InMemoryTemplateStore, load_templates
 from services.auth import AuthService
@@ -61,6 +62,8 @@ DEFAULT_SYSTEM_PROMPT = """너는 은행 직원의 업무를 돕는 사내 에�
 - 툴 이름, 함수 이름, 문서 ID, 문단 ID(chunk_id), JSON 같은 내부 값은 답에 절대 쓰지 않는다.
 
 [툴 쓰는 법]
+- 직원에게 보낼 메일 초안을 요청하면 '제목: ...' 다음에 본문을 작성한다. 초안 작성만으로 메일을 보내지 않는다.
+  수신자를 아직 정하지 않았다면 주소를 지어내거나 요구하지 말고, 답변 아래 '메일로 보내기'에서 직원을 선택하도록 안내한다.
 - 사용자는 툴을 직접 쓸 수 없다. "툴을 사용해 주세요" 같은 말로 넘기지 말고, 더 확인할 게 있으면 네가 직접 툴을 불러 확인한 뒤 답한다.
 - 사내 문서를 검색했는데 결과에 본문이 없으면, 관련 있어 보이는 문단의 원문을 직접 열어 읽고 나서 답한다.
 - 문서에 없는 내용은 지어내지 않는다. 찾지 못했으면 찾지 못했다고 말한다.
@@ -77,6 +80,7 @@ class AppServices:
     approvals: FutureApprovalHandler
     audit: AuditLogger
     users: UserDirectory
+    mail_dispatches: MailDispatchStore = field(default_factory=lambda: MailDispatchStore(REPO_ROOT / "data/mail_dispatches.sqlite3"))
     sessions: InMemorySessionStore = field(default_factory=InMemorySessionStore)
     agents: InMemoryAgentStore = field(default_factory=InMemoryAgentStore)
     share_requests: InMemoryShareRequestStore = field(default_factory=InMemoryShareRequestStore)
@@ -91,6 +95,8 @@ class AppServices:
     # 조회 규칙 (harness/grounding.py): 문서·만기 대출·금리·환율 질문은 조회 결과 없이 답하지 않는다. () 면 끔
     lookup_rules: tuple[LookupRule, ...] = DEFAULT_RULES
     require_review_lookup: bool = True  # 심사 건의 상태는 실제 조회 결과로만 안내
+    # 플래너 하네스 (harness/plan_runner.py): 계획을 세우고 단계마다 툴 하나씩 붙여 실행. False 면 예전 루프
+    use_planner: bool = False
     auth: AuthService | None = None  # AUTH_MODE=session 이면 로그인(쿠키·DB 세션). None 이면 개발용 X-User-Id
 
 
@@ -297,4 +303,5 @@ def build_from_env(*, gmail_account_resolver: GmailAccountResolver | None = None
         templates=InMemoryTemplateStore(load_templates(env("AGENT_TEMPLATES_PATH", "config/agent_templates.yaml"))),
         max_turns=int(env("HARNESS_MAX_TURNS", "10")),
         tool_timeout=float(env("HARNESS_TOOL_TIMEOUT_SECONDS", "30")),
+        use_planner=env("HARNESS_PLANNER", "1").lower() not in ("0", "false", "off", ""),
     )

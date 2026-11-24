@@ -229,3 +229,25 @@ async def test_api_with_db_stores(db, tmp_path):
         turns = (await client.get(f"/api/chat/sessions/{session_id}/turns", headers=kim)).json()
         assert [(t["question"], t["message"]) for t in turns] == [("1+2", "3입니다")]
         assert [(e["tool_name"], e["result"], e["ok"]) for e in turns[0]["tool_events"]] == [("add", "3", True)]
+
+
+async def test_delete_session_keeps_outputs_and_alerts(db):
+    """대화를 지우면 메시지·도구 호출은 같이 지워지고, 그 대화로 만든 문서·알림은 대화 연결만 끊겨 남는다."""
+    store, p, c = DbSessionStore(db["sessions"]), db["p"], db["conn"]
+    chat = await store.create(p["kim"].user_id)
+    run = str(uuid.uuid4())
+    await store.record_turn(chat, run, "completed", 1, [Message("user", "정리표 만들어 줘"), Message("assistant", "만들었습니다")])
+    sid = uuid.UUID(chat.session_id)
+    uid = await c.scalar(text("SELECT id FROM users WHERE login_id = :l"), {"l": p["kim"].user_id})
+    out = await c.scalar(text("""INSERT INTO output_file (owner_user_id, session_id, run_id, title, file_name, mime_type,
+        storage_path, sha256, public_id, kind) VALUES (:u, :s, :r, '정리표', 'a.json', 'application/json', 'outputs/a.json',
+        :h, :p, 'form') RETURNING id"""), {"u": uid, "s": sid, "r": uuid.UUID(run), "h": "0" * 64, "p": uuid.uuid4().hex})
+
+    assert not await store.delete_owned(chat.session_id, p["park"].user_id)   # 남의 대화
+    assert not await store.delete_owned("not-a-uuid", p["kim"].user_id)
+    assert await store.delete_owned(chat.session_id, p["kim"].user_id)
+    assert await c.scalar(text("SELECT count(*) FROM chat_session WHERE id = :i"), {"i": sid}) == 0
+    assert await c.scalar(text("SELECT count(*) FROM message WHERE session_id = :i"), {"i": sid}) == 0
+    row = (await c.execute(text("SELECT session_id, run_id FROM output_file WHERE id = :i"), {"i": out})).first()
+    assert tuple(row) == (None, None)   # 문서는 남고 대화 연결만 끊김
+    assert await DbSessionStore(db["sessions"]).get_owned(chat.session_id, p["kim"].user_id) is None

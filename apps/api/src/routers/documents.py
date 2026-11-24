@@ -38,6 +38,15 @@ async def get_document(document_id: str, user: Principal = Depends(current_user)
     return await _own(svc, user, document_id)
 
 
+@router.delete("/api/documents/{document_id}", status_code=204)
+async def delete_document(document_id: str, user: Principal = Depends(current_user),
+                          svc: AppServices = Depends(get_services)) -> Response:
+    """내 문서함에서 지운다. 본인 문서만, 다른 사람 것·없는 것은 404."""
+    if not await svc.documents.delete(user.user_id, document_id):
+        raise HTTPException(404, "문서를 찾을 수 없습니다.")
+    return Response(status_code=204)
+
+
 @router.get("/api/documents/{document_id}/download")
 async def download(document_id: str, format: Literal["pdf", "docx"] = "pdf",
                    user: Principal = Depends(current_user), svc: AppServices = Depends(get_services)) -> Response:

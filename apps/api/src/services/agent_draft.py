@@ -117,6 +117,17 @@ def drop_invented_rules(prompt: str, description: str) -> str:
     return " ".join(keep).strip()
 
 
+# 설명에 파일·첨부 이야기가 있으면 '업로드 문서 읽기'(parse_doc)를 같이 넣는다 (읽기 툴이라 바로 체크).
+# 모델이 자주 빠뜨린다: "엑셀로 받은 목록", "신청서를 보고" 같은 설명에서도 첨부를 읽어야 한다.
+_ATTACHMENT_WORDS = re.compile(r"첨부|업로드|파일|엑셀|xlsx|pdf|hwp|docx|서류|신청서|명세서|목록을\s*보|자료를\s*보", re.I)
+
+
+def with_attachment_reader(tools: list[str], description: str, specs: list[ToolSpec]) -> list[str]:
+    if "parse_doc" in tools or not any(s.name == "parse_doc" for s in specs) or not _ATTACHMENT_WORDS.search(description):
+        return tools
+    return [*tools, "parse_doc"]
+
+
 def _strings(value: Any, limit: int = 8) -> list[str]:
     items = value if isinstance(value, list) else []
     return list(dict.fromkeys(str(v).strip()[:60] for v in items if str(v).strip()))[:limit]
@@ -134,7 +145,7 @@ def _clean(data: dict[str, Any], specs: list[ToolSpec], description: str) -> Age
         name=name[:MAX_NAME],
         description=(str(data.get("description") or "").strip() or description)[:MAX_DESCRIPTION],
         system_prompt=(drop_invented_rules(humanize_tool_names(prompt, specs), description) or prompt)[:4000],
-        tools=[t for t in picked if effects.get(t) in AUTO_EFFECTS],
+        tools=with_attachment_reader([t for t in picked if effects.get(t) in AUTO_EFFECTS], description, specs),
         suggested_tools=[t for t in picked if t in effects and effects[t] not in AUTO_EFFECTS],
         dropped_tools=[t for t in picked if t not in effects],
         missing=_strings(data.get("missing")),
@@ -147,7 +158,7 @@ def fallback_draft(description: str, specs: list[ToolSpec]) -> AgentDraft:
     title = re.split(r"[.!?\n]", text)[0]
     title = re.sub(r"\s*(에이전트(?:를)?\s*)?(만들어\s*줘|만들어\s*주세요)\s*$", "", title).strip()
     mentioned = [s for s in specs if s.name in text or (s.display_name and s.display_name in text)]
-    tools = [s.name for s in mentioned if s.effect in AUTO_EFFECTS]
+    tools = with_attachment_reader([s.name for s in mentioned if s.effect in AUTO_EFFECTS], text, specs)
     suggested = [s.name for s in mentioned if s.effect not in AUTO_EFFECTS]
     prompt = (
         f"다음 역할에 따라 사용자의 요청을 처리한다.\n\n{text}\n\n"
