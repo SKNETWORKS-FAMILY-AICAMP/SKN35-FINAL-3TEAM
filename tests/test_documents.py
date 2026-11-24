@@ -23,9 +23,9 @@ from tools.loans import LoanStore
 from tools.registry import SimpleToolRegistry
 
 ROOT = Path(__file__).resolve().parents[1]
-KIM = Principal("kim", ("member",), {"dept_id": 10, "security_grade": 2})
-PARK = Principal("park", ("member",), {"dept_id": 20, "security_grade": 2})
-LEE = Principal("lee", ("dept_head",), {"dept_id": 10, "security_grade": 3})
+KIM = Principal("E1001", ("member",), {"dept_id": 10, "security_grade": 2})
+PARK = Principal("E2001", ("member",), {"dept_id": 20, "security_grade": 2})
+LEE = Principal("E1002", ("dept_head",), {"dept_id": 10, "security_grade": 3})
 HAS_FONT = any(Path(p).is_file() for p in ("C:/Windows/Fonts/malgun.ttf", "/System/Library/Fonts/AppleSDGothicNeo.ttc",
                                            "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"))
 
@@ -56,7 +56,7 @@ def app_with(store, tmp_path):
     svc = AppServices(
         llm=ScriptedLLM([]), tools=SimpleToolRegistry([]), checker=create_checker(rules=[], default=Decision.ASK),
         approvals=FutureApprovalHandler(1), audit=JsonlAuditLogger(tmp_path / "audit.jsonl"),
-        users=UserDirectory({"kim": KIM, "park": PARK}), documents=store,
+        users=UserDirectory({"E1001": KIM, "E2001": PARK}), documents=store,
     )
     app = create_app(build=lambda: svc)
     app.state.services = svc
@@ -68,7 +68,7 @@ async def test_code_fills_table_and_model_fills_only_text(tool, store):
     result = await tool.run(fill({"form_id": "maturity-report", "params": {"days": 30},
                                   "fields": {"memo": "만기가 지난 홍*동 고객의 상환·연장 여부를 오늘 먼저 확인하세요."}}))
     assert result.ok and result.data["created"] and result.data["document_title"] == "2026-11-23 기준 30일 이내 만기 대출 정리표"
-    record = store.get("kim", result.data["document_id"])
+    record = await store.get("E1001", result.data["document_id"])
     document = check_document(record["document"])
     assert document["base_date"] == "2026-11-23" and document["page"] == "landscape" and record["has_customer_info"]
     assert document["blocks"][0] == {"type": "heading", "level": 1, "text": result.data["document_title"]}
@@ -79,21 +79,21 @@ async def test_code_fills_table_and_model_fills_only_text(tool, store):
     assert after(document, "담당자 메모")["text"].startswith("만기가 지난")
     assert after(document, "유의 사항")["type"] == "notice"
     assert result.data["facts"]["total"] == 6 and result.data["facts"]["first_look"][0]["customer"] == "홍*동"
-    assert store.get("park", result.data["document_id"]) is None
+    assert await store.get("E2001", result.data["document_id"]) is None
 
 
 async def test_wrong_numbers_are_dropped_and_table_cannot_be_passed(tool, store):
     bad = await tool.run(fill({"form_id": "maturity-report", "params": {"days": 30}, "fields": {"memo": "47건이 급합니다."}}))
     assert bad.ok and bad.data["dropped"][0]["field"] == "memo"
-    texts = [b.get("text") for b in store.get("kim", bad.data["document_id"])["document"]["blocks"]]
+    texts = [b.get("text") for b in (await store.get("E1001", bad.data["document_id"]))["document"]["blocks"]]
     assert "담당자 메모" not in texts  # 비운 문장 칸은 제목째 빠진다
     for arguments in ({"form_id": "maturity-report", "fields": {"items": "[]"}},
                       {"form_id": "maturity-report", "params": {"days": 365}},
-                      {"form_id": "maturity-report", "params": {"officer": "park"}},
+                      {"form_id": "maturity-report", "params": {"officer": "E2001"}},
                       {"form_id": "nope"}):
         assert not (await tool.run(fill(arguments))).ok
     empty = await tool.run(fill({"form_id": "maturity-report"}, LEE))
-    assert empty.ok and not empty.data["created"] and store.list("lee") == []
+    assert empty.ok and not empty.data["created"] and (await store.list("E1002")) == []
 
 
 def test_bad_forms_are_rejected(tmp_path):
@@ -146,7 +146,7 @@ async def test_download_pdf_and_docx_only_for_owner(tool, store, tmp_path):
     made = await tool.run(fill({"form_id": "maturity-report", "params": {"days": 30}, "fields": {"memo": "홍*동 고객을 먼저 확인하세요."}}))
     doc_id = made.data["document_id"]
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app_with(store, tmp_path)), base_url="http://test") as client:
-        kim = {"X-User-Id": "kim"}
+        kim = {"X-User-Id": "E1001"}
         assert [d["document_id"] for d in (await client.get("/api/documents", headers=kim)).json()] == [doc_id]
         pdf = await client.get(f"/api/documents/{doc_id}/download?format=pdf", headers=kim)
         assert pdf.status_code == 200 and pdf.headers["content-type"] == "application/pdf"
@@ -159,7 +159,7 @@ async def test_download_pdf_and_docx_only_for_owner(tool, store, tmp_path):
         assert body.tables[1].rows[0].cells[0].text == "구분" and len(body.tables[1].rows) == 7 and len(body.tables[0].rows) == 4
         assert any("홍*동 고객을 먼저" in p.text for p in body.paragraphs)
         assert (await client.get(f"/api/documents/{doc_id}/download?format=hwp", headers=kim)).status_code == 422
-        park = {"X-User-Id": "park"}
+        park = {"X-User-Id": "E2001"}
         assert (await client.get(f"/api/documents/{doc_id}/download?format=pdf", headers=park)).status_code == 404
         assert (await client.get("/api/documents", headers=park)).json() == []
         # 브라우저가 보낸 내용을 변환하던 길은 없다
@@ -168,8 +168,8 @@ async def test_download_pdf_and_docx_only_for_owner(tool, store, tmp_path):
 
 
 async def test_legacy_markdown_report_cannot_be_downloaded(store, tmp_path):
-    store.put({"document_id": "c" * 32, "owner_id": "kim", "kind": "market_report", "title": "이전 보고서",
+    await store.put({"document_id": "c" * 32, "owner_id": "E1001", "kind": "market_report", "title": "이전 보고서",
                "markdown": "# 이전 보고서"})
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app_with(store, tmp_path)), base_url="http://test") as client:
-        response = await client.get(f"/api/documents/{'c' * 32}/download?format=pdf", headers={"X-User-Id": "kim"})
+        response = await client.get(f"/api/documents/{'c' * 32}/download?format=pdf", headers={"X-User-Id": "E1001"})
     assert response.status_code == 409 and "이전 형식" in response.json()["detail"]

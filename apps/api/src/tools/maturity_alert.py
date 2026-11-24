@@ -11,10 +11,10 @@ import asyncio
 import json
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 
 from contracts.harness import ToolResult, ToolSpec
 from contracts.permission import ToolCall
-from services.inbox import InboxStore
 from tools.loans import LoanStore
 from tools.number_check import unknown_numbers
 
@@ -42,17 +42,25 @@ SEND_MATURITY_ALERT_SPEC = ToolSpec(
 class SendMaturityAlertTool:
     spec = SEND_MATURITY_ALERT_SPEC
 
-    def __init__(self, loans: LoanStore, inbox: InboxStore) -> None:
+    def __init__(self, loans: LoanStore, inbox) -> None:
         self.loans, self.inbox = loans, inbox
 
-    def _send(self, call: ToolCall, arguments: AlertInput) -> dict:
-        listing = self.loans.maturing(call.principal, arguments.days)
+    async def _send(self, call: ToolCall, arguments: AlertInput) -> dict:
+        listing = await asyncio.to_thread(self.loans.maturing, call.principal, arguments.days)
         if not listing["has_customers"]:
             return {"sent": False, "message": listing["message"]}
+        title = f"{listing['as_of']} 기준 {arguments.days}일 이내 만기 대출 {listing['total']}건"
+        key = f"{listing['as_of']}:{arguments.days}"
+        existing = await self.inbox.find(call.principal.user_id, "maturity_alert", key)
+        if existing is not None:
+            # 같은 기준일·같은 기간의 알림은 한 번만. 새로 만들지 않고 있던 알림을 알려 준다
+            return {"sent": False, "already_sent": True, "alert_id": existing["alert_id"], "alert_title": existing["title"],
+                    "total": listing["total"], "counts": listing["counts"],
+                    "message": "같은 기준일·기간의 알림이 이미 알림함에 있어 새로 보내지 않았습니다. 알림함에서 열어 보세요."}
         bad = unknown_numbers(arguments.summary, json.dumps(listing, ensure_ascii=False))
         summary = "" if bad else arguments.summary
-        title = f"{listing['as_of']} 기준 {arguments.days}일 이내 만기 대출 {listing['total']}건"
-        alert = self.inbox.add(call.principal.user_id, "maturity", title, summary, bool(bad), listing)
+        alert = await self.inbox.add(call.principal.user_id, "maturity_alert", title, summary, bool(bad),
+                                     {**listing, "key": key}, has_customer_info=True, session_id=call.session_id)
         return {
             "sent": True, "alert_id": alert["alert_id"], "alert_title": title, "total": listing["total"],
             "counts": listing["counts"], "summary_dropped": bool(bad),
@@ -66,7 +74,7 @@ class SendMaturityAlertTool:
         except ValidationError:
             return ToolResult(call.call_id, False, "days 는 1~90 정수, summary 는 300자 이내로 입력해 주세요.")
         try:
-            payload = await asyncio.to_thread(self._send, call, arguments)
-        except (OSError, ValueError, KeyError):
+            payload = await self._send(call, arguments)
+        except (OSError, ValueError, KeyError, SQLAlchemyError):
             return ToolResult(call.call_id, False, "알림을 보내지 못했습니다. 여신 데이터와 알림함 저장소를 확인해 주세요.")
         return ToolResult(call.call_id, True, json.dumps(payload, ensure_ascii=False), data=payload)

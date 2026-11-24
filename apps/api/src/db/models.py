@@ -348,6 +348,8 @@ class OutputFile(Base):
     has_customer_info: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     created_at: Mapped[datetime] = _now()
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    public_id: Mapped[str | None] = mapped_column(CHAR(32), unique=True)  # [0013] 화면·툴이 쓰는 문서 번호
+    kind: Mapped[str] = mapped_column(String(30), nullable=False, server_default=text("'form'"))  # [0013]
 
 
 class OutputSource(Base):
@@ -450,3 +452,42 @@ class MailArchive(Base):
     content_hash: Mapped[str] = mapped_column(String(80), nullable=False)
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     archived_at: Mapped[datetime] = _now()
+
+
+# ── 알림함·고객 안내 발송 기록 — [0013] ─────────────────
+
+class Notification(Base):
+    """직원 알림함. 받는 사람만 연다. 지우면 deleted_at 만 채운다."""
+    __tablename__ = "notification"
+    id: Mapped[int] = _id()
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)  # maturity_alert | notice_result
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    body_dropped: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    has_customer_info: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    session_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True),
+                                                         ForeignKey("chat_session.id", ondelete="SET NULL"))
+    run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("agent_run.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = _now()
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CustomerNotice(Base):
+    """고객 안내 메일 발송 기록 (UC-05). 같은 대출·만기일의 sending·sent 는 한 건 (부분 유일 인덱스는 마이그레이션에)."""
+    __tablename__ = "customer_notice"
+    id: Mapped[int] = _id()
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=False)
+    loan_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    maturity_date: Mapped[date] = mapped_column(Date, nullable=False)
+    recipient: Mapped[str] = mapped_column(String(255), nullable=False)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'sending'"))
+    message_id: Mapped[str | None] = mapped_column(String(100))
+    call_id: Mapped[str | None] = mapped_column(String(100))
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _now()
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = _now()

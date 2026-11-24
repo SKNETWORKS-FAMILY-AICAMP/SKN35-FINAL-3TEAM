@@ -445,6 +445,12 @@ class AgentRunner:
 
         if not allowed:
             await self.audit.log(AuditRecord(call, result, approval=approval, executed=False))
+            hook = getattr(tool, "on_not_approved", None)
+            if approval is not None and hook is not None:  # 승인 카드에서 반려·시간 초과 (예: 고객 안내 반려 기록)
+                try:
+                    await hook(call, approval)
+                except Exception:
+                    log.warning("반려 처리 실패 (%s)", call.tool_name, exc_info=True)
             kind: DenialKind = "deny" if result.decision is Decision.DENY else (approval or "rejected")
             return _Outcome(
                 tool_msg(f"error: {_VERDICT[kind]}: {result.reason}"),

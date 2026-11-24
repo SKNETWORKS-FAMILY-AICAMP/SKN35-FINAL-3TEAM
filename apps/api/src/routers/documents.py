@@ -22,11 +22,11 @@ router = APIRouter(tags=["documents"])
 
 @router.get("/api/documents")
 async def list_documents(user: Principal = Depends(current_user), svc: AppServices = Depends(get_services)) -> list[dict]:
-    return await asyncio.to_thread(svc.documents.list, user.user_id)
+    return await svc.documents.list(user.user_id)
 
 
 async def _own(svc: AppServices, user: Principal, document_id: str) -> dict:
-    document = await asyncio.to_thread(svc.documents.get, user.user_id, document_id)
+    document = await svc.documents.get(user.user_id, document_id)
     if document is None:
         raise HTTPException(404, "문서를 찾을 수 없습니다.")
     return document
@@ -51,7 +51,7 @@ async def download(document_id: str, format: Literal["pdf", "docx"] = "pdf",
         raise HTTPException(500, str(error)) from error
     except InvalidDocument as error:
         raise HTTPException(409, f"문서 형식이 올바르지 않아 내려받을 수 없습니다: {error}") from error
-    await asyncio.to_thread(svc.documents.log_download, user.user_id, document_id, format)
+    await svc.documents.log_download(user.user_id, document_id, format)
     name = file_name(document, format)
     return Response(content, media_type=FORMATS[format], headers={
         "Content-Disposition": f"attachment; filename=\"document.{format}\"; filename*=UTF-8''{quote(name)}",
