@@ -176,3 +176,28 @@ def test_notice_rule_only_for_notice_requests():
     rule = NoticeLookup()
     assert rule.needed("만기 고객에게 안내 메일 보내줘", "") and rule.arguments("만기 고객 안내 준비") == {"days": 7}
     assert not rule.needed("만기 대출 몇 건이야?", "") and not rule.needed("만기 안내 규정은 어떻게 돼?", "")
+
+
+async def test_report_request_is_not_finished_by_a_plain_loan_lookup():
+    """실측: 커스텀 에이전트가 만기 대출 조회만 하고 'PDF/워드 문서로 제공합니다'로 끝냄 → fill_document 강제."""
+    log = []
+    runner, _ = harness([
+        {"tool_calls": [{"id": "l1", "name": "loans_maturing", "arguments": {"days": 30}}]},
+        {"content": "30일 이내 만기 대출 6건을 정리해 PDF/워드 문서로 제공합니다."},
+        {"content": "그렇게 하겠습니다."},
+        {"content": "정리표를 만들었습니다. 화면의 PDF·DOCX 버튼으로 받으세요."},
+    ], [tool("loans_maturing", LOANS, log=log), tool("fill_document", '{"created": true}', "write", log)])
+    result = await runner.run("30일 이내 만기 대출 정리표 만들어줘", KIM, "s")
+    assert log == ["loans_maturing", "fill_document"]
+    forced = [m for m in result.messages if m.tool_calls][-1].tool_calls[0]
+    assert forced.arguments == {"form_id": "maturity-report", "params": {"days": 30}}
+    assert result.final_message.content.startswith("정리표를 만들었습니다")
+
+
+def test_draft_drops_rules_the_user_did_not_ask_for():
+    from services.agent_draft import drop_invented_rules
+
+    prompt = ("내 담당 대출을 조회합니다. 만기 경과 대출은 포함하지 않습니다. 요약문이 없으면 알림을 보내지 않습니다. "
+              "알림함으로 보냅니다. 그 일은 아직 할 수 없다고 안내한다")
+    assert drop_invented_rules(prompt, "만기 대출을 알림함으로 보내줘") == "내 담당 대출을 조회합니다. 알림함으로 보냅니다."
+    assert "포함하지 않습니다" in drop_invented_rules(prompt, "만기 경과 건은 빼고 보내줘")

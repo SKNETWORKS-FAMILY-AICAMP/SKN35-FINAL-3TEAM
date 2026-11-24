@@ -95,6 +95,26 @@ def humanize_tool_names(text: str, specs: list[ToolSpec]) -> str:
     return re.sub(r"(?<![A-Za-z0-9_])chunk_id(?![A-Za-z0-9_])", "문단 번호", text)
 
 
+# 사용자가 말하지 않았는데 모델이 자주 지어 넣는 제한 문장 (실측: "만기 경과 건은 포함하지 않는다", "요약문이 없으면 보내지 않는다")
+_EXCLUSION = re.compile(r"포함하지\s*않|제외|빼고|빼며|뺀다|빼야")
+_CONDITIONAL_BAN = re.compile(r"없으면[^.!?\n]*(?:않|말|안\s)")
+
+
+def drop_invented_rules(prompt: str, description: str) -> str:
+    """역할 지시에서 사용자 설명에 없는 제외·조건부 금지 문장을 뺀다. 사용자가 그런 말을 했으면 그대로 둔다.
+    "아직 할 수 없다고 안내한다" 같은 빈 안내 문장도 뺀다 (missing 이 비었는데 붙는 일이 있음)."""
+    keep = []
+    for sentence in re.split(r"(?<=[.!?다])\s+", prompt.strip()):
+        if _EXCLUSION.search(sentence) and not _EXCLUSION.search(description):
+            continue
+        if _CONDITIONAL_BAN.search(sentence) and "없으면" not in description:
+            continue
+        if re.fullmatch(r"\W*그 일은 아직 할 수 없다고 안내한다\W*", sentence):
+            continue
+        keep.append(sentence)
+    return " ".join(keep).strip()
+
+
 def _strings(value: Any, limit: int = 8) -> list[str]:
     items = value if isinstance(value, list) else []
     return list(dict.fromkeys(str(v).strip()[:60] for v in items if str(v).strip()))[:limit]
@@ -111,7 +131,7 @@ def _clean(data: dict[str, Any], specs: list[ToolSpec], description: str) -> Age
     return AgentDraft(
         name=name[:MAX_NAME],
         description=(str(data.get("description") or "").strip() or description)[:MAX_DESCRIPTION],
-        system_prompt=humanize_tool_names(prompt, specs)[:4000],
+        system_prompt=(drop_invented_rules(humanize_tool_names(prompt, specs), description) or prompt)[:4000],
         tools=[t for t in picked if effects.get(t) in AUTO_EFFECTS],
         suggested_tools=[t for t in picked if t in effects and effects[t] not in AUTO_EFFECTS],
         dropped_tools=[t for t in picked if t not in effects],
