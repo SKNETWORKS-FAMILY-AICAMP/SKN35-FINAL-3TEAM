@@ -122,7 +122,8 @@ async def load_file(path: Path, store, *, source: str) -> dict:
         fetch_id = await store.start_fetch(source, today, today, str(path), sha)
         await store.finish_fetch(fetch_id, "rejected", {}, str(error))
         return {"fetch_id": fetch_id, "status": "rejected", "error": str(error)}
-    fetch_id = await store.start_fetch(delivery["meta"].get("source", source), start, end, str(path), sha)
+    source_of = delivery["meta"].get("source", source)
+    fetch_id = await store.start_fetch(source_of, start, end, str(path), sha)
     detail: dict[str, dict] = {}
     try:
         for item in delivery["series"]:
@@ -134,6 +135,8 @@ async def load_file(path: Path, store, *, source: str) -> dict:
                 current = await store.accepted(spec.code, when)
                 if current is not None and current == value:
                     counts["unchanged"] += 1
+                    if source_of == "live":  # 기록 재생으로 넣은 값을 ECOS 실시간 응답이 같은 값으로 확인
+                        await store.confirm(spec.code, when, fetch_id)
                     continue
                 previous = await store.previous(spec.code, when)
                 if previous is not None and excessive(spec, previous, value):
@@ -190,6 +193,12 @@ class MemoryMarketStore:
 
     async def insert(self, code, when, value, status, fetch_id, note) -> None:
         self.values.append({"code": code, "date": when, "value": value, "status": status, "fetch_id": fetch_id, "note": note})
+
+    async def confirm(self, code, when, fetch_id) -> None:
+        replay = {f["id"] for f in self.fetches if f["source"] == "replay"}
+        for v in self.values:
+            if v["code"] == code and v["date"] == when and v["status"] == "accepted" and v["fetch_id"] in replay:
+                v["fetch_id"] = fetch_id
 
     async def supersede(self, code, when) -> None:
         for v in self.values:
@@ -248,6 +257,12 @@ class PgMarketStore:
         await self._execute("""INSERT INTO market_value (series_code, obs_date, value, status, fetch_id, note)
             VALUES (:c, :d, :v, :s, :f, :n)""", {"c": code, "d": when, "v": value, "s": status, "f": fetch_id, "n": note})
 
+    async def confirm(self, code, when, fetch_id) -> None:
+        """기록 재생으로 넣은 값을 실시간 응답이 같은 값으로 확인하면 출처만 실시간 수집으로 바꾼다 (값은 그대로)."""
+        await self._execute("""UPDATE market_value v SET fetch_id = :f, note = '실시간 응답으로 같은 값 확인'
+            FROM market_fetch old WHERE old.id = v.fetch_id AND old.source = 'replay'
+            AND v.series_code = :c AND v.obs_date = :d AND v.status = 'accepted'""", {"c": code, "d": when, "f": fetch_id})
+
     async def supersede(self, code, when) -> None:
         await self._execute("""UPDATE market_value SET status = 'superseded', superseded_at = now()
             WHERE series_code = :c AND obs_date = :d AND status = 'accepted'""", {"c": code, "d": when})
@@ -291,8 +306,9 @@ class DbProvider:
         return await self.store.rows(series.code, start, end)
 
     async def notes(self, start: date, end: date) -> list[str]:
+        """표에 쓰이는 최근 값(기준일 전 2주)이 기록 재생에서 왔으면 알린다."""
         notes = ["사내 시장 DB에 적재된 값입니다 (UC-02-1 수집·검사를 통과한 값만)."]
-        if "replay" in await self.store.sources(start, end):
+        if "replay" in await self.store.sources(max(start, end - timedelta(days=14)), end):
             notes.append("시장 DB 값 중 기록 재생으로 적재한 값이 있습니다. ECOS 실시간 응답으로 검증한 값이 아닙니다.")
         return notes
 

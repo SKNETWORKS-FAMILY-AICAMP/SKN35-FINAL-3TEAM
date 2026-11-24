@@ -6,7 +6,7 @@ jobs:
   - id: market_collect          # UC-02-1 시장 데이터 수집·적재 (시장 MCP 가 한다. MCP 에 DATABASE_URL 필요)
     name: 시장 데이터 수집
     at: "09:10"
-    days: 10                    # 오늘부터 며칠 전까지 받을지
+    days: 14                    # 오늘부터 며칠 전까지 받을지 (리포트가 보는 최근 2주)
   - id: market_report           # UC-02 금리·환율 리포트 (사람마다 한 건, 내 문서에 저장)
     name: 금리·환율 리포트
     at: "09:20"

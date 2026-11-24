@@ -79,3 +79,16 @@ async def test_report_reads_only_loaded_values_from_market_db(tmp_path):
     usd = next(row for row in snapshot["fx"] if row["code"] == "USD")
     assert snapshot["mode"] == "db" and usd["actual_date"] <= "2026-11-18" and not usd.get("missing")
     assert any("시장 DB" in w for w in snapshot["warnings"]) and any("기록 재생" in w for w in snapshot["warnings"])
+
+
+async def test_live_fetch_confirms_replayed_values(tmp_path):
+    store = MemoryMarketStore()
+    await collect_and_load(ReplayProvider(SAMPLE), store, tmp_path, days=10, today=date(2026, 11, 18))
+    provider = DbProvider(store)
+    assert any("기록 재생" in n for n in await provider.notes(date(2026, 1, 1), date(2026, 11, 18)))
+    # 같은 값을 ECOS 실시간 응답으로 다시 받으면 출처가 실시간 수집으로 바뀐다 (값은 그대로)
+    window = (date(2026, 11, 1), date(2026, 11, 18))
+    live = {code: await store.rows(code, *window) for code in ("USD", "JPY", "EUR", "CNY", "기준금리")}
+    result = await collect_and_load(Rows(live), store, tmp_path, days=20, today=date(2026, 11, 18))
+    assert result["detail"]["USD"]["accepted"] == 0 and result["detail"]["USD"]["unchanged"] > 0
+    assert not any("기록 재생" in n for n in await provider.notes(date(2026, 1, 1), date(2026, 11, 18)))
