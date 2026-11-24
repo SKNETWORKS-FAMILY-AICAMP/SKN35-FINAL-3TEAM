@@ -129,10 +129,10 @@ uv run python scripts/db/seed_docs.py
 - 처음에는 약 10분 (조각 528개). 다시 돌려도 이미 있는 문서는 건너뛴다
 - 확인: 화면 왼쪽 **사내 문서** 에 "전사 공개 문서 10개 · 검색 조각 528개"
 
-**FAQ 끄기** (11/24 전에 7단계를 한 사람만, 한 번): 예전 목록의 시험 문서를 검색·목록에서 뺀다. 지우지 않고 '사용 안 함'으로 바꾼다.
+**FAQ 끄기** (11/24 전에 7단계를 한 사람만, 한 번): 예전 목록의 시험 문서를 검색·목록에서 뺀다. 지우지 않고 '폐기'(retired) 로 바꾼다.
 
 ```bash
-sudo -u postgres psql -d agent_platform -c "UPDATE doc SET status = 'inactive' WHERE title = '개인채무자 FAQ (부서 10 전용 시험)'"
+sudo -u postgres psql -d agent_platform -c "UPDATE doc SET status = 'retired' WHERE title = '개인채무자 FAQ (부서 10 전용 시험)'"
 # UPDATE 1 이면 끝. UPDATE 0 이면 원래 없던 것이라 할 일 없음
 ```
 
