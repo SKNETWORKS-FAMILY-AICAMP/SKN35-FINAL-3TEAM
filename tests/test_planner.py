@@ -95,6 +95,22 @@ def test_notice_mail_is_sent_only_after_the_list_was_shown():
     assert check(["send_maturity_notice"], "응 보내 줘", specs).tools == ["send_maturity_notice"]
 
 
+def test_mail_is_sent_from_plan_only_with_a_written_address():
+    specs = [spec("search_doc"), spec("send_mail", "send")]
+    assert check(["send_mail"], "팀장님께 보낼 휴가 신청 메일 초안 작성해 줘", specs).tools == []
+    assert check(["send_mail"], "이 내용 메일로 보내 줘", specs).tools == []  # 받는 사람은 화면에서 고른다
+    assert check(["send_mail"], "kim@example.com 으로 회의 일정 메일 보내 줘", specs).tools == ["send_mail"]
+
+
+async def test_mail_draft_request_writes_a_draft_without_sending():
+    log = []
+    runner, llm = harness([plan_reply("send_mail"), {"content": "제목: 휴가 신청\n\n팀장님, 12월 1일 연차를 신청합니다."}],
+                          [tool("send_mail", '{"status": "sent"}', "send", log)])
+    result = await runner.run("팀장님께 보낼 휴가 신청 메일 초안 써 줘", KIM, "s")
+    assert not log and result.final_message.content.startswith("제목: 휴가 신청")
+    assert llm.calls[1][1] == []  # 답 쓰기에는 발송 도구를 주지 않는다
+
+
 # ── 규정 안내 ─────────────────────────────────────────────
 
 async def test_regulation_runs_planned_search_with_only_that_tool_then_answers_without_tools():

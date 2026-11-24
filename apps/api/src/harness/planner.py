@@ -48,6 +48,10 @@ REQUIRES: dict[str, tuple[str, ...]] = {
 CONFIRM_FIRST: dict[str, str] = {
     "send_maturity_notice": "prepare_maturity_notices",
 }
+# 메일 발송(send_mail)은 받는 사람 주소가 요청에 적혀 있고 초안 요청이 아닐 때만 계획에 둔다.
+# 그 밖에는 답에 초안('제목: ...' + 본문)만 쓰고, 화면의 '메일로 보내기'에서 직원을 골라 보낸다 (routers/mail.py)
+_EMAIL_ADDRESS = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+_DRAFT = re.compile(r"초안|draft", re.I)
 
 PLANNER_PROMPT = """너는 은행 업무 에이전트의 계획 담당이다. 직원 요청을 처리할 단계를 정한다.
 각 단계는 아래 도구 중 하나를 쓰는 일이다. 도구를 직접 호출하지 말고 계획만 쓴다.
@@ -60,6 +64,7 @@ PLANNER_PROMPT = """너는 은행 업무 에이전트의 계획 담당이다. �
 - 규정·수치·고객·대출 정보가 필요한 답이면 그 정보를 조회하는 단계를 반드시 넣는다. 조회 없이 답하는 계획을 쓰지 않는다.
 - 저장·발송 도구는 직원이 만들기·저장·보내기를 분명히 요청했을 때만 넣는다.
 - 앞 단계 결과가 필요한 단계는 그 뒤에 둔다.
+- 메일 초안을 써 달라는 요청은 메일 보내기 도구를 넣지 않는다 (초안은 답으로 쓰고, 직원이 화면에서 받는 사람을 골라 보낸다).
 - 첨부 파일 내용이 필요한 요청이면 parse_doc 을 첫 단계로 넣는다. 어떤 파일을 읽을지는 서버가 정한다.
 - 도구가 필요 없는 요청(인사, 일반 개념 설명)이면 steps 를 빈 목록으로 둔다.
 - 단계는 최대 {limit}개다. 최종 답 쓰기는 단계에 넣지 않는다.
@@ -162,6 +167,8 @@ def check_plan(plan: Plan, question: str, specs: list[ToolSpec], rules: tuple[Lo
             plan.notes.append(f"겹치는 단계 뺌: {step.tool}")
         elif spec.effect in ("write", "send") and not asks_action:
             plan.notes.append(f"요청하지 않은 저장·발송 뺌: {step.tool}")
+        elif step.tool == "send_mail" and (_DRAFT.search(question) or not _EMAIL_ADDRESS.search(question)):
+            plan.notes.append("받는 사람 주소가 없거나 초안 요청이라 send_mail 을 뺌 (화면에서 직원을 골라 보냄)")
         elif step.tool == "parse_doc" and not files:
             plan.notes.append("첨부가 없어 parse_doc 을 뺌")
         elif step.tool == "save_morning_report" and not wants_report(question):
