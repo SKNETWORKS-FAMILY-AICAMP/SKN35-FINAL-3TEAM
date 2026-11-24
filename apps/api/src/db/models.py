@@ -12,7 +12,7 @@ import uuid
 from datetime import date, datetime
 
 from pgvector.sqlalchemy import HALFVEC
-from sqlalchemy import (CHAR, BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Identity, Index, Integer, String,
+from sqlalchemy import (CHAR, BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Identity, Index, Integer, Numeric, String,
                         Text, text)
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -491,3 +491,36 @@ class CustomerNotice(Base):
     created_at: Mapped[datetime] = _now()
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = _now()
+
+
+# ── 시장 DB (UC-02-1) — [0014] ──────────────────────────
+
+class MarketFetch(Base):
+    """금리·환율 받은 기록 한 번 (성공·빈 응답·오류·거부 모두)."""
+    __tablename__ = "market_fetch"
+    id: Mapped[int] = _id()
+    source: Mapped[str] = mapped_column(String(20), nullable=False)  # live | replay
+    requested_start: Mapped[date] = mapped_column(Date, nullable=False)
+    requested_end: Mapped[date] = mapped_column(Date, nullable=False)
+    file_path: Mapped[str | None] = mapped_column(String(500))
+    sha256: Mapped[str | None] = mapped_column(CHAR(64))
+    status: Mapped[str] = mapped_column(String(20), nullable=False)  # loading | loaded | rejected | error
+    detail: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    error: Mapped[str | None] = mapped_column(Text)
+    fetched_at: Mapped[datetime] = _now()
+    loaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class MarketValue(Base):
+    """계열·관측일별 값. accepted 는 (계열, 관측일)마다 하나 (부분 유일 인덱스는 마이그레이션에)."""
+    __tablename__ = "market_value"
+    id: Mapped[int] = _id()
+    series_code: Mapped[str] = mapped_column(String(20), nullable=False)
+    obs_date: Mapped[date] = mapped_column(Date, nullable=False)
+    value: Mapped[float] = mapped_column(Numeric(20, 6), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)  # accepted | held | superseded
+    fetch_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("market_fetch.id"), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _now()
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+

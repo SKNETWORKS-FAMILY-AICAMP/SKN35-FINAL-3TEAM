@@ -221,6 +221,8 @@ class MarketService:
         fx, rates, warnings = [], [], []
         if self.provider.mode == "replay":
             warnings.append("전달받은 기록 파일을 재생한 결과입니다. ECOS 실시간 응답으로 검증한 값이 아닙니다.")
+        if hasattr(self.provider, "notes"):
+            warnings += await self.provider.notes(start, end)
         for series, result in zip(SERIES, results):
             row = {"code": series.code, "name": series.name, "unit": series.unit}
             accepted, held = [], []

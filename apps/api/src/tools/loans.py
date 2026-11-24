@@ -103,6 +103,11 @@ class LoanStore:
         _, loans = self._load()
         return {loan.email.lower(): loan.officer_id for loan in loans if loan.email}
 
+    def officers(self) -> list[str]:
+        """대출을 맡은 담당자 ID (예약 실행 만기 알림이 이 사람들에게 보낸다)."""
+        _, loans = self._load()
+        return sorted({loan.officer_id for loan in loans})
+
     def items_for_email(self, principal: Principal, email: str) -> list[dict]:
         """이 담당자의 대출 중 고객 이메일이 email 인 것 (메일 본문 검사용)."""
         as_of, loans = self._load()
