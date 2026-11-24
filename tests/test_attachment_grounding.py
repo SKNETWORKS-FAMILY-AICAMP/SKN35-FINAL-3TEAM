@@ -54,7 +54,7 @@ async def test_followup_survives_history_removal_and_does_not_search_corporate_d
         first = (await client.post("/api/chat/messages", headers=HEADERS, json={
             "content": "첨부 문서의 보존 기간은?", "file_ids": [item["file_id"]],
         })).json()
-        session = svc.sessions.get_owned(first["session_id"], "kim")
+        session = await svc.sessions.get_owned(first["session_id"], "kim")
         session.messages.clear()  # 컨텍스트에서 이전 첨부 메시지가 사라진 상황
         followup = (await client.post("/api/chat/messages", headers=HEADERS, json={
             "content": "보존 기간은 몇 년이야?", "session_id": first["session_id"],
