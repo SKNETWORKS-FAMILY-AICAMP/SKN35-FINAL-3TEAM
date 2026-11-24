@@ -593,6 +593,10 @@ class AgentRunner:
         messages.append(final)
         return RunResult(final, messages, llm_calls, "denied", denial)
 
+    async def execute_tool(self, call: ToolCall) -> _Outcome:
+        """화면에서 확정한 호출도 모델 호출과 같은 권한·승인·감사 경로로 실행한다."""
+        return await self._handle_tool_call(call)
+
     async def _handle_tool_call(self, call: ToolCall) -> _Outcome:
         def tool_msg(content: str) -> Message:
             return Message(role="tool", content=content, tool_call_id=call.call_id)
