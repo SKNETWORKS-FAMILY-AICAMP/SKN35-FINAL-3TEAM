@@ -5,6 +5,22 @@
 default: ask
 
 rules:
+  - id: report-template-search
+    tool: search_report_templates
+    decision: allow
+  - id: report-template-read
+    tool: get_report_template
+    decision: allow
+  - id: market-snapshot-read
+    tool: market_snapshot
+    decision: allow
+  - id: market-report-save
+    tool: save_morning_report
+    decision: allow
+  - id: market-report-read
+    tool: get_morning_report
+    decision: allow
+
   # 메일 발송은 관리자도 요청 내용을 확인하고 승인한다.
   - id: gmail-send-confirm
     tool: send_mail
@@ -28,6 +44,32 @@ rules:
   # 심사 건 조회. 부서·보안등급 필터는 툴 안에서 강제한다.
   - id: review-case-read
     tool: get_review_case
+    decision: allow
+
+  # 내 담당 대출 조회 (UC-03·05). 담당자 필터는 툴 안에서 로그인 신원으로 강제한다.
+  - id: loans-maturing
+    tool: loans_maturing
+    decision: allow
+
+  # 안내문 준비는 글만 만든다 (보내지 않음). 고객 메일 본문 검사는 permission/customer_mail.py
+  - id: maturity-notice-prepare
+    tool: prepare_maturity_notices
+    decision: allow
+
+  # 고객 만기 안내 메일: 요청자가 채팅에서 승인 (결정사항 2번). 미리보기와 담당자 검사는 permission/customer_mail.py
+  - id: maturity-notice-confirm
+    tool: send_maturity_notice
+    decision: ask
+    reason: 고객에게 만기 안내 메일이 발송됩니다.
+
+  # 양식으로 문서 만들기: 본인 문서함에만 저장된다. 표·숫자는 툴이 조회 권한 안에서 채운다
+  - id: fill-document
+    tool: fill_document
+    decision: allow
+
+  # 만기 알림은 본인 알림함으로만 간다 (받는 사람을 고르는 입력이 없음)
+  - id: maturity-alert-self
+    tool: send_maturity_alert
     decision: allow
 
   - id: admin-all

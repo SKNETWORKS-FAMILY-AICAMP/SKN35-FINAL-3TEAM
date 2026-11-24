@@ -66,9 +66,27 @@ class UploadStore:
         return dict(row)
 
 
+ATTACHMENT_MARKER = "\n\n[사용자 첨부 파일 목록]\n"
+
+
 def attachment_context(content: str, attachments: list[dict]) -> str:
     if not attachments:
         return content
     prompt = content.strip() or "첨부한 문서를 읽고 핵심 내용을 정리해 주세요."
     metadata = [{"file_id": item["file_id"], "filename": item["filename"]} for item in attachments]
-    return prompt + "\n\n[사용자 첨부 파일 목록]\n" + json.dumps(metadata, ensure_ascii=False)
+    return prompt + ATTACHMENT_MARKER + json.dumps(metadata, ensure_ascii=False)
+
+
+def split_attachment_context(content: str) -> tuple[str, list[dict]]:
+    """attachment_context 의 반대: 저장된 질문을 화면용 글과 첨부 목록(file_id, filename)으로 나눈다."""
+    text, marker, listing = content.partition(ATTACHMENT_MARKER)
+    if not marker:
+        return content, []
+    try:
+        files = json.loads(listing)
+    except ValueError:
+        return content, []
+    if not isinstance(files, list):
+        return content, []
+    return text, [{"file_id": str(f.get("file_id", "")), "filename": str(f.get("filename", ""))}
+                  for f in files if isinstance(f, dict)]

@@ -1,20 +1,29 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  ArrowUp, Bot, Braces, Check, ChevronRight, CircleAlert, FileText, Inbox, LayoutTemplate, ListChecks,
+  ArrowUp, Bell, Bot, FolderOpen, Braces, Check, ChevronRight, CircleAlert, FileText, Inbox, LayoutTemplate, ListChecks,
   LoaderCircle, Lock, Pencil, MessageSquare, Paperclip, Plus, Power, PowerOff, Search, Settings2, Share2, ShieldCheck,
-  Sparkles, Trash2, Undo2, UserRound, Workflow, Wrench, X,
+  LogOut, Moon, Sparkles, Sun, Trash2, Undo2, UserRound, Workflow, Wrench, X,
 } from 'lucide-react';
 import './style.css';
+import LoginScreen from './LoginScreen';
+import { ToolCatalog, ToolPicker } from './tool-visual';
+import AgentSelect from './AgentSelect';
 import { failedToolSummary } from './tool-status';
+import { InboxPage } from './inbox';
+import { DocumentDownloads, DocumentsPage, documentsFromEvents } from './documents';
+import { savedReports, ReportContent } from './report-export';
 import {
   emptyChatHistory, currentConversation, updateConversation,
   startNewConversation, openConversation, conversationTitle, recentConversations,
+  addSavedConversations, loadConversation, turnsToMessages,
 } from './chat-history';
+import { KnowledgeIcon, KnowledgePage } from './knowledge';
 
 // ── 백엔드 API ──────────────────────────────────────────────
 // /api 는 vite.config.js 의 프록시가 FastAPI 서버(기본 http://localhost:8000)로 넘긴다.
-// 로그인이 붙기 전까지는 X-User-Id 헤더로 사용자를 고른다 (config/dev_users.yaml).
+// 서버가 AUTH_MODE=dev 면 X-User-Id 헤더로 사용자를 고른다 (config/dev_users.yaml).
+// AUTH_MODE=session 이면 로그인 쿠키로 누구인지 정하고, 서버는 X-User-Id 를 무시한다.
 
 class ApiError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -33,6 +42,7 @@ async function api(user, path, { method = 'GET', body, signal } = {}) {
   }
   if (res.status === 204) return null;
   const data = await res.json().catch(() => null);
+  if (res.status === 401) dispatchEvent(new Event('auth-expired'));  // 로그인 모드: 로그인 화면으로
   if (!res.ok) {
     const detail = data?.detail;
     const text = typeof detail === 'string' ? detail : Array.isArray(detail) ? detail.map(d => d.msg).join(', ') : res.statusText;
@@ -47,9 +57,12 @@ const navigation = [
   { id: 'chat', name: '작업 채팅', detail: '에이전트와 대화', icon: MessageSquare, color: '#78aaff' },
   { id: 'create', name: '에이전트 만들기', detail: '자연어로 초안 생성', icon: Sparkles, color: '#ba97ff' },
   { id: 'agents', name: '에이전트 관리', detail: '내 것·공유받은 것', icon: Settings2, color: '#65ddb0' },
+  { id: 'inbox', name: '알림함', detail: '만기 알림 등 받은 알림', icon: Bell, color: '#ffd166' },
+  { id: 'documents', name: '내 문서', detail: '만든 문서 PDF·DOCX 받기', icon: FolderOpen, color: '#9be38c' },
   { id: 'shares', name: '공유 요청', detail: '승인·요청 내역', icon: Inbox, color: '#f17fa8' },
   { id: 'templates', name: '시나리오 템플릿', detail: '사전 구성으로 시작', icon: LayoutTemplate, color: '#f6b273' },
   { id: 'tools', name: '도구 목록', detail: '등록된 도구 보기', icon: Wrench, color: '#74d5e4' },
+  { id: 'knowledge', name: '사내 문서', detail: '검색할 수 있는 문서 보기', icon: KnowledgeIcon, color: '#a8c7fa' },
 ];
 
 // 채팅 첫 화면의 빠른 예시 (시나리오 템플릿은 서버의 /api/templates)
@@ -76,7 +89,15 @@ function groupTools(tools) {
   return [...groups];
 }
 const DEFAULT_AGENT = { agent_id: null, name: '기본 에이전트', description: '모든 도구를 쓰는 기본 에이전트' };
-const userKey = 'agent-workspace.user.v1';
+const themeKey = 'agent-workspace.theme.v1';
+
+// 라이트·다크: 저장한 값이 없으면 OS 설정을 따른다 (로그인 화면도 같은 테마)
+function readTheme() {
+  try { const saved = localStorage.getItem(themeKey); if (saved === 'light' || saved === 'dark') return saved; } catch { /* 없음 */ }
+  return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+document.documentElement.dataset.theme = readTheme();
+const userKey = 'agent-workspace.user.v2';  // v2: 아이디가 사번(E1001…)으로 바뀜. v1 에 남은 kim 등은 무시
 
 function currentPage() {
   const route = location.hash.slice(1);
@@ -84,7 +105,7 @@ function currentPage() {
 }
 
 function readUser() {
-  try { return localStorage.getItem(userKey) || 'kim'; } catch { return 'kim'; }
+  try { return localStorage.getItem(userKey) || 'E1001'; } catch { return 'E1001'; }
 }
 
 function lockReason(agent, user) {
@@ -151,23 +172,7 @@ function AgentEditor({ draft, tools, onSave, submitLabel, disabled = false, busy
         {suggested.some(name => !form.tools.includes(name)) && <p className="suggest-note">
           <CircleAlert size={15} /> <b>추천</b> 표시된 도구는 데이터를 등록·변경하거나 무언가를 보냅니다. 이 에이전트에 정말 필요한지 확인하고 직접 체크하세요.
         </p>}
-        {groupTools(tools).map(([domain, items]) => <div key={domain} className="tool-group">
-          <h4>{domain}</h4>
-          <div className="tool-row">
-            {items.map(({ name, display_name, description, effect }) => <label key={name}
-              className={'tool ' + (form.tools.includes(name) ? 'checked ' : '') + (suggested.includes(name) && !form.tools.includes(name) ? 'suggested' : '')}>
-              <input type="checkbox" checked={form.tools.includes(name)} onChange={event =>
-                set('tools', event.target.checked ? [...form.tools, name] : form.tools.filter(tool => tool !== name))
-              } /><Wrench size={16} /><span>{display_name}<code> {name}</code>
-                <span className="tool-badges">
-                  <Badge tone={'effect-' + effect}>{EFFECT[effect] ?? effect}</Badge>
-                  {suggested.includes(name) && <Badge tone="suggest">추천</Badge>}
-                </span>
-                <small>{description}</small></span>
-            </label>)}
-          </div>
-        </div>)}
-        {!tools.length && <p className="muted">등록된 도구가 없습니다.</p>}
+        <ToolPicker tools={tools} selected={form.tools} suggested={suggested} onChange={value => set('tools', value)} effectLabel={EFFECT} Badge={Badge} />
       </fieldset>
     </fieldset>
     {!disabled && <div className="actions">{onCancel && <button type="button" className="quiet" onClick={onCancel}>취소</button>}<button className="primary" disabled={!ready || busy}>
@@ -189,8 +194,17 @@ function summarize(event, denial) {
   if (!event.ok) return failedToolSummary(event, denial);
   const data = parseJson(event.result);
   const args = event.arguments ?? {};
+  if (event.tool_name === 'search_report_templates' && data?.matches) return `${data.matches.length}개 양식 찾음`;
+  if (event.tool_name === 'get_report_template' && data?.template) return `${data.template.name} · 버전 ${data.template.version} · 전체 항목 확인`;
+  if (event.tool_name === 'market_snapshot' && data?.fx) {
+    return `${data.base_date} · ${data.fx.filter(item => !item.missing).length}개 통화${data.mode === 'replay' ? ' · 기록 재생' : ''}`;
+  }
+  if (event.tool_name === 'save_morning_report' && data?.report_id) {
+    return `${data.template?.name ? data.template.name + ' · ' : ''}${data.base_date} · 저장 완료${data.check?.passed ? ' · 요약 검사 통과' : ' · 요약 제외'}${data.mode === 'replay' ? ' · 기록 재생' : ''}`;
+  }
+  if (event.tool_name === 'get_morning_report' && data?.report_id) return `${data.base_date} · 저장한 리포트 확인`;
   if (event.tool_name === 'parse_doc' && data?.filename) {
-    return `${data.filename} · 읽기 완료${data.tables ? ` · 표 ${data.tables}개` : ''}${data.truncated ? ' · 일부만 읽음' : ''}`;
+    return `${data.filename} · ${data.read_status?.scope === 'selected_passages' ? '관련 문단 확인' : '읽기 완료'}${data.tables ? ` · 표 ${data.tables}개` : ''}${data.truncated ? ' · 일부만 읽음' : ''}`;
   }
   if (event.tool_name === 'search_doc' && data?.matches) {
     return `"${args.query ?? data.query}" · ${data.matches.length ? data.matches.length + '건 찾음' : '찾지 못함'}`;
@@ -221,7 +235,7 @@ function ToolEvents({ events, denial }) {
 // 문서를 검색했거나 답에 "근거:"를 달았는데 원문을 하나도 열지 않았으면,
 // 모델이 제목만 보거나 아예 지어낸 내용일 수 있다 (qwen3:8b 에서 실제로 자주 생김)
 function Sources({ items = [], searched = false, cited = false }) {
-  const unread = (searched || cited) && !items.some(item => item.opened);
+  const unread = (searched || cited) && !items.some(item => item.opened || item.previewed);
   if (!items.length && !unread) return null;
   return <div className="sources">
     {unread && <p className="unread-warning"><CircleAlert size={14} />{items.length
@@ -232,7 +246,7 @@ function Sources({ items = [], searched = false, cited = false }) {
     {!!items.length && <>
     <span className="sources-title"><FileText size={14} />참고 문서</span>
     <ul>{items.map((item, index) => <li key={index} className={item.opened ? '' : 'muted'}>
-      {item.title}{item.location && <span className="loc"> · {item.location}</span>}{!item.opened && <span className="loc"> (검색 결과)</span>}
+      {item.title}{item.location && <span className="loc"> · {item.location}</span>}{item.partial && <span className="loc"> (일부 문단)</span>}{!item.opened && <span className="loc"> {item.previewed ? '(본문 미리보기)' : '(검색 결과)'}</span>}
     </li>)}</ul></>}
   </div>;
 }
@@ -253,6 +267,35 @@ function ApprovalCards({ user, approvals, onAnswered }) {
       <button className="primary" disabled={busy === item.call_id} onClick={() => answer(item.call_id, true)}><Check size={16} />승인</button>
     </div>
   </div>);
+}
+
+// 대화 메시지 목록 (채팅 화면과 읽기 전용 화면이 같이 쓴다)
+function ThreadMessages({ messages }) {
+  return messages.map((message, index) => <article className={'message ' + message.role} key={index}>
+    <span className="message-label">{message.role === 'user' ? '나' : message.role === 'error' ? '오류' : message.name}</span>
+    {message.attachments?.length > 0 && <div className="attachment-list">{message.attachments.map(file =>
+      <span className="attachment-chip" key={file.file_id}><FileText size={15} />{file.filename}</span>
+    )}</div>}
+    <ToolEvents events={message.events} denial={message.denial} />
+    {message.role === 'agent' ? <Formatted text={message.content} /> : <div>{message.content}</div>}
+    {message.role === 'agent' && <Sources items={message.sources}
+      searched={message.events?.some(event => event.tool_name === 'search_doc')}
+      cited={/(^|\n)\s*\**근거\**\s*[:：]/.test(message.content)} />}
+  </article>);
+}
+
+// 에이전트가 삭제·비활성화됐거나 더 쓸 수 없는 지난 대화: 기록은 보여 주고 이어서 대화하지는 못하게 한다
+function ReadOnlyConversation({ thread, agentName, reason, onLeave }) {
+  return <>
+    <div className="chat-toolbar">
+      <span className="agent-picker readonly"><Bot size={17} /><span>{agentName}</span></span>
+      <button className="quiet" onClick={onLeave}><Plus size={17} />새 대화</button>
+    </div>
+    <div className="chat-body"><div className="thread"><ThreadMessages messages={thread.messages} /></div></div>
+    <div className="compose-area">
+      <p className="readonly-note" role="status"><CircleAlert size={15} />{reason} 기록만 볼 수 있고, 이어서 대화할 수는 없습니다.</p>
+    </div>
+  </>;
 }
 
 function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, changeConversation, newConversation, notify, onBusyChange }) {
@@ -353,9 +396,9 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, cha
 
   return <>
     <div className="chat-toolbar">
-      <label className="agent-picker"><Bot size={17} /><select aria-label="작업 에이전트" disabled={busy} value={active.agent_id ?? ''} onChange={event => { setActiveId(event.target.value || null); setInput(''); setAttachments([]); }}>
-        {usable.map(agent => <option key={agent.agent_id ?? 'default'} value={agent.agent_id ?? ''}>{agent.name}{agent.agent_id && agent.owner_user_id !== user ? ` (${agent.owner_user_id})` : ''}</option>)}
-      </select></label>
+      <AgentSelect agents={usable} value={active.agent_id} user={user} disabled={busy}
+        recentIds={recentConversations(chatHistory).map(thread => thread.agentId)}
+        onChange={id => { setActiveId(id); setInput(''); setAttachments([]); }} />
       <button className="quiet" disabled={busy} onClick={() => { newConversation(active.agent_id); setInput(''); setAttachments([]); }}><Plus size={17} />새 대화</button>
     </div>
     <div className="chat-body">
@@ -366,20 +409,34 @@ function ChatPage({ user, tools, agents, activeId, setActiveId, chatHistory, cha
             <span className="attachment-chip" key={file.file_id}><FileText size={15} />{file.filename}</span>
           )}</div>}
           <ToolEvents events={message.events} denial={message.denial} />
-          {message.role === 'agent' ? <Formatted text={message.content} /> : <div>{message.content}</div>}
+          {message.role === 'agent' && savedReports(message.events).length > 0
+            ? savedReports(message.events).map(report => <section key={report.report_id} className="saved-report">
+              <ReportContent document={report.document} markdown={report.markdown} />
+            </section>)
+            : message.role === 'agent' ? <Formatted text={message.content} /> : <div>{message.content}</div>}
+          {message.role === 'agent' && <DocumentDownloads user={user} documents={documentsFromEvents(message.events)} notify={notify} />}
           {message.role === 'agent' && <Sources items={message.sources}
             searched={message.events?.some(event => event.tool_name === 'search_doc')}
             cited={/(^|\n)\s*\**근거\**\s*[:：]/.test(message.content)} />}
         </article>)}
+        <ThreadMessages messages={conversation.messages} />
         {sending && <article className="message agent pending"><LoaderCircle size={16} className="spin" /> 답을 만드는 중입니다…</article>}
         <ApprovalCards user={user} approvals={approvals} onAnswered={pollApprovals} />
         <div ref={chatEnd} />
       </div> : <div className="welcome">
-        <div className="hero-icon"><MessageSquare size={35} strokeWidth={1.5} /></div>
-        <h1>무엇을 함께 작업할까요?</h1>
-        <p>{active.name} · {active.description || '설명 없음'}</p>
+        {/* 첫 화면: 색 면 + 큰 제목 + 은은한 이펙트 */}
+        <section className="welcome-hero">
+          <div className="hero-fx" aria-hidden="true"><span className="glow g1" /><span className="glow g2" /><span className="dots" /></div>
+          <p className="hero-eyebrow"><Bot size={14} />{active.name}</p>
+          <h1>무엇을<br /><em>맡겨 볼까요?</em></h1>
+          <p className="hero-desc">{active.description || '설명 없음'}</p>
+        </section>
+        <p className="quick-title">이렇게 시작해 보세요</p>
         <div className="quick-grid">
-          {quickExamples.map(({ name, icon: Icon, example }) => <button key={name} className="quick" onClick={() => setInput(example)}><Icon size={17} /><span>{name} 예시</span><ChevronRight size={15} /></button>)}
+          {quickExamples.map(({ name, icon: Icon, example }) => <button key={name} className="quick" onClick={() => setInput(example)}>
+            <span className="quick-head"><span className="quick-icon"><Icon size={17} /></span><strong>{name}</strong><ChevronRight size={15} /></span>
+            <span className="quick-example">{example.split('\n')[0]}</span>
+          </button>)}
         </div>
       </div>}
     </div>
@@ -651,10 +708,10 @@ function SharesPage({ user, notify, refreshAgents }) {
 
 // ── 앱 ─────────────────────────────────────────────────────
 
-function App() {
+function App({ session, theme, setTheme }) {
   const [chatBusy, setChatBusy] = useState(false);
   const [page, setPage] = useState(currentPage);
-  const [user, setUser] = useState(readUser);
+  const [user, setUser] = useState(() => session?.userId ?? readUser());
   const [users, setUsers] = useState([]);
   const [me, setMe] = useState(null);
   const [tools, setTools] = useState([]);
@@ -664,6 +721,7 @@ function App() {
   const [draft, setDraft] = useState(null);
   const [chatHistory, setChatHistory] = useState(emptyChatHistory);
   const [chatView, setChatView] = useState(0);
+  const [viewingId, setViewingId] = useState(null);  // 읽기 전용으로 연 지난 대화
   const [notice, setNotice] = useState(null);
   const route = navigation.find(({ id }) => id === page);
 
@@ -672,21 +730,32 @@ function App() {
   const refreshAgents = useCallback(async () => {
     try { setAgents(await api(user, '/api/agents')); } catch (error) { notify(error.message); }
   }, [user, notify]);
+  const loadKnowledge = useCallback(() => api(user, '/api/knowledge/docs'), [user]);
 
   useEffect(() => {
+    if (session) return;  // 로그인 모드에서는 사용자 목록을 열 수 없다
     api(user, '/api/dev/users').then(setUsers).catch(error => notify(error.message));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    try { localStorage.setItem(userKey, user); } catch { /* 저장 못 해도 동작 */ }
-    setChatHistory(emptyChatHistory()); setActiveId(null); setEditingId(null); setNotice(null);
+    if (!session) try { localStorage.setItem(userKey, user); } catch { /* 저장 못 해도 동작 */ }
+    setChatHistory(emptyChatHistory()); setActiveId(null); setEditingId(null); setNotice(null); setViewingId(null);
     api(user, '/api/me').then(setMe).catch(error => { setMe(null); notify(error.message); });
     api(user, '/api/tools').then(setTools).catch(() => setTools([]));
     refreshAgents();
+    // 서버에 저장된 내 대화 목록 (STORE=db 면 나갔다 와도, 서버를 다시 켜도 남아 있다)
+    let current = true;
+    api(user, '/api/chat/sessions')
+      .then(list => { if (current) setChatHistory(previous => addSavedConversations(previous, list)); })
+      .catch(() => { /* 목록을 못 받아도 새 대화는 할 수 있다 */ });
+    return () => { current = false; };
   }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const updatePage = () => { setPage(currentPage()); setNotice(null); };
+    const updatePage = () => {
+      setPage(currentPage()); setNotice(null);
+      if (currentPage() !== 'chat') setViewingId(null);
+    };
     addEventListener('hashchange', updatePage);
     return () => removeEventListener('hashchange', updatePage);
   }, []);
@@ -699,17 +768,31 @@ function App() {
 
   function newConversation(agentId) {
     if (chatBusy) return;
+    setViewingId(null);
     setChatHistory(previous => startNewConversation(previous, agentId));
     setChatView(previous => previous + 1);
   }
 
-  function openSavedConversation(thread) {
+  async function openSavedConversation(thread) {
     if (chatBusy) return;
     const agent = agents.find(item => item.agent_id === thread.agentId);
-    if (thread.agentId !== null && (!agent || agent.status !== 'active')) {
-      notify('이 대화의 에이전트가 삭제·비활성화되었거나 사용 권한이 없습니다.');
+    const usable = thread.agentId === null || agent?.status === 'active';
+    if (thread.saved) {  // 서버에만 있는 대화: 본문을 불러온다
+      try {
+        const turns = await api(user, `/api/chat/sessions/${encodeURIComponent(thread.sessionId)}/turns`);
+        const name = thread.agentId === null ? DEFAULT_AGENT.name : agent?.name ?? '사용할 수 없는 에이전트';
+        setChatHistory(previous => loadConversation(previous, thread.id, turnsToMessages(turns, name)));
+      } catch (error) {
+        notify(error.message);
+        return;
+      }
+    }
+    if (!usable) {  // 에이전트를 더 쓸 수 없으면 기록만 보여 준다
+      setViewingId(thread.id);
+      location.hash = 'chat';
       return;
     }
+    setViewingId(null);
     setChatHistory(previous => openConversation(previous, thread.id));
     setChatView(previous => previous + 1);
     setActiveId(thread.agentId);
@@ -717,11 +800,13 @@ function App() {
   }
 
   const recent = recentConversations(chatHistory);
-  const currentThreadId = currentConversation(chatHistory, activeId).id;
+  const viewing = viewingId ? chatHistory.threads[viewingId] : null;
+  const viewingAgent = viewing && agents.find(item => item.agent_id === viewing.agentId);
+  const currentThreadId = viewing ? viewing.id : currentConversation(chatHistory, activeId).id;
 
   return <div className="shell" style={{ '--accent': route.color }}>
     <aside className="sidebar">
-      <div className="sidebar-heading"><span className="sidebar-mark"><Workflow size={19} /></span><strong>워크스페이스</strong></div>
+      <div className="sidebar-heading"><span><strong>Agent Argus</strong><small>사내 업무 에이전트</small></span></div>
       <nav aria-label="워크스페이스 메뉴">{navigation.map(({ id, name, detail, icon: Icon, color }) => <a key={id} href={'#' + id} aria-current={page === id ? 'page' : undefined} style={{ '--item-accent': color }}>
         <span className="nav-icon"><Icon size={19} /></span><span><strong>{name}</strong><small>{detail}</small></span><ChevronRight size={15} className="nav-chevron" />
       </a>)}</nav>
@@ -741,29 +826,47 @@ function App() {
           </button>;
         })}
       </section>
-      <div className="sidebar-bottom user-switch">
-        <UserRound size={16} />
+      {session && <div className="sidebar-bottom user-card">
+        <span className="avatar" aria-hidden="true">{(me?.attributes?.name ?? session.userId).charAt(0)}</span>
+        <span className="user-meta"><strong>{me?.attributes?.name ?? session.userId}</strong>
+          <small>{me ? [session.userId, me.roles.map(role => ROLE[role] ?? role).join(', '), me.attributes?.dept_id !== undefined && `부서 ${me.attributes.dept_id}`].filter(Boolean).join(' · ') : session.userId}</small></span>
+        <button type="button" className="logout-button" disabled={chatBusy} onClick={session.logout} title="로그아웃" aria-label="로그아웃"><LogOut size={16} /></button>
+      </div>}
+      {!session && <div className="sidebar-bottom user-switch">
+        <span className="avatar" aria-hidden="true"><UserRound size={16} /></span>
         <select aria-label="개발용 사용자" disabled={chatBusy} value={user} onChange={event => setUser(event.target.value)}>
           {(users.length ? users : [{ user_id: user, roles: [] }]).map(u => <option key={u.user_id} value={u.user_id}>
             {u.user_id} · {u.roles.map(role => ROLE[role] ?? role).join(', ')}{u.attributes?.dept_id !== undefined ? ` · 부서 ${u.attributes.dept_id}` : ''}
           </option>)}
         </select>
-      </div>
+      </div>}
     </aside>
     <main className={'workspace ' + (page === 'chat' ? 'chat-workspace' : '')}>
-      <header className="topbar"><span className="mark"><Workflow size={19} /></span><strong>Agent Workspace</strong><span className="top-divider" /><span className="breadcrumb">{route.name}</span>
-        {me && <span className="whoami"><span className="status-dot" />{me.user_id} · {me.roles.map(role => ROLE[role] ?? role).join(', ')}</span>}</header>
+      <header className="topbar"><span className="breadcrumb"><route.icon size={16} />{route.name}</span>
+        <span className="topbar-right">
+          {me && <span className="whoami"><span className="status-dot" />{me.attributes?.name ?? me.user_id} · {me.roles.map(role => ROLE[role] ?? role).join(', ')}</span>}
+          <button type="button" className="theme-toggle" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            aria-label={theme === 'dark' ? '라이트 모드로' : '다크 모드로'} title={theme === 'dark' ? '라이트 모드로' : '다크 모드로'}>
+            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</button>
+        </span></header>
       {notice && page === 'chat' && <p role="status" className={'notice floating ' + notice.tone}>{notice.text}<button className="icon" onClick={() => setNotice(null)} aria-label="닫기"><X size={14} /></button></p>}
-      {page === 'chat' ? <ChatPage key={`${user}:${chatView}`} user={user} tools={tools} agents={agents} activeId={activeId} setActiveId={setActiveId} onBusyChange={setChatBusy}
+      {page === 'chat' && viewing ? <ReadOnlyConversation thread={viewing}
+        agentName={viewingAgent?.name ?? '사용할 수 없는 에이전트'}
+        reason={viewingAgent ? '이 대화의 에이전트가 비활성화되었습니다.' : '이 대화의 에이전트가 삭제되었거나 사용 권한이 없습니다.'}
+        onLeave={() => newConversation(activeId)} />
+      : page === 'chat' ? <ChatPage key={`${user}:${chatView}`} user={user} tools={tools} agents={agents} activeId={activeId} setActiveId={setActiveId} onBusyChange={setChatBusy}
         chatHistory={chatHistory} changeConversation={changeConversation} newConversation={newConversation} notify={notify} />
       : <div className="page">
         <div className="page-heading"><div className="hero-icon small"><route.icon size={25} /></div><h1>{route.name}</h1>
           <p>{{
             create: '필요한 역할을 설명하면 LLM이 이름, 프롬프트, 도구를 골라 초안을 만듭니다.',
             agents: '내가 만든 에이전트와 공유받은 에이전트를 관리하세요. 부서장은 부서원의 에이전트를 비활성화할 수 있습니다.',
+            inbox: '에이전트가 보낸 알림입니다. 본인 알림만 보입니다.',
+            documents: '에이전트가 양식으로 만든 문서입니다. 본인 문서만 보이고, PDF·DOCX 중 골라 받습니다.',
             shares: '부서·전사 공유는 바로 위 관리자가 승인해야 적용됩니다.',
             templates: '관리자가 미리 만든 업무 에이전트로 시작하세요. 고른 뒤 내용을 고쳐 내 에이전트로 저장합니다.',
             tools: '관리자가 등록한 도구입니다. 에이전트를 만들 때 이 중에서 고릅니다.',
+            knowledge: '에이전트가 검색해서 답할 수 있는 사내 문서입니다. 지금은 전사 공개 문서만 보여 줍니다.',
           }[page]}</p>
         </div>
         {notice && <p role="status" className={'notice ' + notice.tone}>{notice.text}</p>}
@@ -771,18 +874,63 @@ function App() {
           onCreated={agent => { refreshAgents(); setEditingId(agent.agent_id); location.hash = 'agents'; setTimeout(() => notify(`'${agent.name}' 에이전트를 만들었습니다.`, 'ok')); }} />}
         {page === 'agents' && <AgentsPage user={user} agents={agents} tools={tools} editingId={editingId} setEditingId={setEditingId}
           refresh={refreshAgents} openChat={openChat} notify={notify} />}
+        {page === 'inbox' && <InboxPage user={user} notify={notify} />}
+        {page === 'documents' && <DocumentsPage user={user} notify={notify} />}
         {page === 'shares' && <SharesPage user={user} notify={notify} refreshAgents={refreshAgents} />}
-        {page === 'tools' && <ul className="tool-catalog">{tools.map(({ name, display_name, description }) =>
-          <li className="panel catalog-tool" key={name}>
-            <span className="hero-icon small"><Wrench size={21} aria-hidden="true" /></span>
-            <div><h2>{display_name} <code>{name}</code></h2><p>{description}</p></div>
-          </li>)}
+        {page === 'tools' && <>
+          <ToolCatalog tools={tools} effectLabel={EFFECT} Badge={Badge} />
           {me?.roles.includes('admin') && <p className="muted">도구 등록(MCP 연결)은 관리자 기능으로 준비 중입니다.</p>}
-        </ul>}
+        </>}
         {page === 'templates' && <TemplatesPage user={user} me={me} tools={tools} setDraft={setDraft} notify={notify} />}
+        {page === 'knowledge' && <KnowledgePage key={user} load={loadKnowledge} notify={notify} />}
       </div>}
     </main>
   </div>;
 }
 
-createRoot(document.getElementById('root')).render(<App />);
+// 서버의 로그인 방식을 먼저 묻는다: dev 면 지금처럼 사용자 선택, session 이면 로그인 화면 → 로그인한 사람으로 App
+function Root() {
+  const [auth, setAuth] = useState({ mode: null, userId: null, message: '' });
+  const [theme, setTheme] = useState(readTheme);
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try { localStorage.setItem(themeKey, theme); } catch { /* 저장 못 해도 동작 */ }
+  }, [theme]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { mode } = await (await fetch('/api/auth/mode')).json();
+        if (mode !== 'session') { if (!cancelled) setAuth({ mode: 'dev', userId: null, message: '' }); return; }
+        const res = await fetch('/api/me');  // 쿠키가 살아 있으면 다시 로그인하지 않는다
+        const me = res.ok ? await res.json() : null;
+        if (!cancelled) setAuth({ mode, userId: me?.user_id ?? null, message: '' });
+      } catch {
+        if (!cancelled) setAuth({ mode: 'dev', userId: null, message: '' });  // 서버가 꺼져 있으면 기존 화면이 오류를 보여 준다
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (auth.mode !== 'session' || !auth.userId) return undefined;
+    const expired = () => setAuth({ mode: 'session', userId: null, message: '로그인이 만료되었습니다. 다시 로그인해 주세요.' });
+    addEventListener('auth-expired', expired);
+    return () => removeEventListener('auth-expired', expired);
+  }, [auth.mode, auth.userId]);
+
+  async function logout() {
+    await fetch('/api/auth/logout', { method: 'POST' }).catch(() => null);
+    setAuth({ mode: 'session', userId: null, message: '로그아웃했습니다.', tone: 'ok' });
+  }
+
+  if (!auth.mode) return null;
+  if (auth.mode === 'session' && !auth.userId) {
+    return <LoginScreen key={auth.message} message={auth.message} tone={auth.tone} theme={theme} setTheme={setTheme}
+      onLogin={user => setAuth({ mode: 'session', userId: user.user_id, message: '' })} />;
+  }
+  return <App key={auth.userId ?? 'dev'} theme={theme} setTheme={setTheme} session={auth.mode === 'session' ? { userId: auth.userId, logout } : null} />;
+}
+
+createRoot(document.getElementById('root')).render(<Root />);

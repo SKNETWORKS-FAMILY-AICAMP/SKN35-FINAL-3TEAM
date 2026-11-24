@@ -23,7 +23,9 @@ async def test_everyone_lists_and_missing_tools_mark_unavailable(tmp_path):
     svc.templates = InMemoryTemplateStore(load_templates(ROOT / "config/agent_templates.yaml"))
     items = {t["template_id"]: t for t in (await client.get("/api/templates", headers=h(KIM))).json()}
     report = items["uc02-market-report"]
-    assert report["available"] is False and report["missing_tools"] == ["market_snapshot", "save_morning_report"]
+    # 이 테스트의 가짜 레지스트리에는 계산 도구만 있다.
+    assert report["available"] is False and report["missing_tools"] == [
+        "search_report_templates", "get_report_template", "market_snapshot", "save_morning_report", "get_morning_report"]
 
 
 async def test_only_admin_manages_templates(tmp_path):

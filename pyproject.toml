@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.165.0",
     "python-multipart>=0.0.20",
+    "python-docx>=1.2.0",
     "openai>=1.50",
     "pyyaml>=6.0.3",
     "tzdata>=2026.6",
@@ -19,15 +20,20 @@ dependencies = [
     # parsers: 후처리가 DoclingDocument 표·칸 구조를 직접 고치므로 docling-core 도 고정. pypdf 는 PDF 만든 프로그램(한컴) 판별.
     "docling-core==2.107.0",
     "pypdf==7.1.0",
+    # 바이너리 HWP 읽기(parsers/hangul/hwp.py). 시연 문서(data/seed_docs/ibk) 10개가 모두 HWP 라 기본으로 둔다. 순수 파이썬 20KB.
+    "syhwp==0.0.8",
     # db: PostgreSQL 16 + pgvector. 비동기 ORM(SQLAlchemy) · 드라이버 asyncpg · 마이그레이션 alembic
     "sqlalchemy[asyncio]>=2.1.9",
     "asyncpg>=0.32.0",
     "alembic>=1.20.1",
     "pgvector>=0.5.1",
+    "fpdf2>=2.9.0",
+    # 시장 툴(apps/api/src/tools/market.py)이 market_mcp 를 직접 import 한다. 그냥 uv sync 만 해도 설치되도록 의존성으로 둔다.
+    "market-mcp",
 ]
 
 [project.optional-dependencies]
-# 바이너리 HWP 읽기. 없으면 HWP 는 '미설치' 이유와 함께 failed 로 돌려준다 (HWPX·PDF 등은 영향 없음).
+# syhwp 는 기본 의존성으로 옮겼다. 예전 명령(uv sync --extra hwp)이 "extra 없음" 으로 실패하지 않도록 이름만 남긴다.
 hwp = ["syhwp==0.0.8"]
 
 [dependency-groups]
@@ -39,9 +45,12 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = [".", "apps/api/src"]
+pythonpath = [".", "apps/api/src", "mcp-servers/market/src"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
 [tool.uv.workspace]
-members = ["mcp-servers/gmail"]
+members = ["mcp-servers/gmail", "mcp-servers/market"]
+
+[tool.uv.sources]
+market-mcp = { workspace = true }

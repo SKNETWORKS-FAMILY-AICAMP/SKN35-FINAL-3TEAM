@@ -84,6 +84,39 @@ async def test_required_tool_request_is_scoped_to_the_given_tool():
     assert "tool_choice" not in seen[1]
 
 
+def cut_llm(reply: dict, seen: list, finish: str, context_tokens: int) -> OpenAICompatLLM:
+    """finish_reason 과 컨텍스트 한도를 정할 수 있는 가짜 LLM."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={
+            "id": "x", "object": "chat.completion", "created": 0, "model": "m",
+            "choices": [{"index": 0, "message": {"role": "assistant", **reply}, "finish_reason": finish}],
+        })
+
+    client = AsyncOpenAI(base_url="http://test/v1", api_key="k",
+                         http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    return OpenAICompatLLM(base_url="unused", model="m", client=client, context_tokens=context_tokens)
+
+
+async def test_answer_length_is_capped_by_reserved_tokens():
+    """답(생각 포함)은 남겨 둔 몫까지만: 24k 모델이면 4096, 4k 모델이면 1/4 인 1024."""
+    seen: list = []
+    await cut_llm({"content": "답"}, seen, "stop", 24576).chat([Message("user", "q")], [])
+    await cut_llm({"content": "답"}, seen, "stop", 4096).chat([Message("user", "q")], [])
+    assert [body["max_tokens"] for body in seen] == [4096, 1024]
+
+
+async def test_cut_off_answer_hides_unfinished_thinking():
+    seen: list = []
+    thinking_only = await cut_llm({"content": "<think>계속 생각하는 중..."}, seen, "length", 24576).chat(
+        [Message("user", "q")], [])
+    assert thinking_only.finish_reason == "length"
+    assert thinking_only.message.content == "답이 너무 길어져 중간에 멈췄습니다. 질문을 나눠서 다시 시도해 주세요."
+    partial = await cut_llm({"content": "<think>음</think>\n앞부분 답"}, seen, "length", 24576).chat(
+        [Message("user", "q")], [])
+    assert partial.message.content == "앞부분 답"
+
+
 def test_parse_arguments_edge_cases():
     assert parse_arguments("") == {}
     assert parse_arguments('{"a": 1}') == {"a": 1}

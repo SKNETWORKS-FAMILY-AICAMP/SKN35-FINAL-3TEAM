@@ -24,6 +24,8 @@ log = logging.getLogger("uvicorn.error")
 OLLAMA_DEFAULT_CONTEXT = 4096  # 모델에 num_ctx 를 정하지 않았을 때 Ollama 가 잡는 값 (16GB 맥에서 확인)
 
 _THINK = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+_OPEN_THINK = re.compile(r"<think>.*\Z", re.DOTALL)  # 길이 한도로 끊겨 닫히지 않은 추론 블록
+CUT_OFF_MESSAGE = "답이 너무 길어져 중간에 멈췄습니다. 질문을 나눠서 다시 시도해 주세요."
 
 
 def message_to_openai(m: Message) -> dict[str, Any]:
@@ -61,7 +63,7 @@ def parse_arguments(raw: str | None) -> dict[str, Any]:
 
 
 def strip_thinking(text: str | None) -> str:
-    return _THINK.sub("", text or "").strip()
+    return _OPEN_THINK.sub("", _THINK.sub("", text or "")).strip()
 
 
 class OpenAICompatLLM:
@@ -134,6 +136,9 @@ class OpenAICompatLLM:
         kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": [message_to_openai(m) for m in messages],
+            # 답(생각 포함)은 남겨 둔 몫까지만 쓰게 한다. 없으면 qwen3 가 생각을 멈추지 않을 때
+            # 컨텍스트가 찰 때까지(24k 모델이면 5분 넘게) 계속 생성한다 (2026-11-23 확인)
+            "max_tokens": reserve,
             **self._extra,
         }
         if tools:
@@ -151,7 +156,12 @@ class OpenAICompatLLM:
             )
             for tc in (msg.tool_calls or [])
         )
+        content = strip_thinking(msg.content)
+        if choice.finish_reason == "length":
+            log.warning("LLM 답이 길이 한도(%d 토큰)에 걸려 끊겼습니다 (model %s)", reserve, self.model)
+            if not content and not tool_calls:
+                content = CUT_OFF_MESSAGE
         return LLMResponse(
-            message=Message(role="assistant", content=strip_thinking(msg.content), tool_calls=tool_calls),
+            message=Message(role="assistant", content=content, tool_calls=tool_calls),
             finish_reason=choice.finish_reason,
         )

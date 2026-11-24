@@ -17,10 +17,15 @@ from harness.local_math import LocalMathClient
 from permission import create_checker
 from permission.approval import FutureApprovalHandler
 from permission.audit import JsonlAuditLogger
+from permission.customer_mail import CustomerMailRule
 from permission.policy import load_policy
 from services.agents import InMemoryAgentStore, InMemoryShareRequestStore
+from services.documents import DocumentStore, load_forms
+from services.inbox import InboxStore
+from services.mail_accounts import GmailAccountResolver
 from services.sessions import InMemorySessionStore
 from services.templates import InMemoryTemplateStore, load_templates
+from services.auth import AuthService
 from services.users import UserDirectory
 from services.uploads import UploadStore
 from tools.arithmetic import arithmetic_tools
@@ -34,6 +39,11 @@ from tools.search_doc import SearchDocsTool
 from tools.submit_review_request import SubmitReviewRequestTool
 from tools.today import TodayTool
 from tools.gmail import build_gmail_tools
+from tools.fill_document import FillDocumentTool
+from tools.loans import LoanStore, LoansMaturingTool
+from tools.market import build_market_tools, report_service
+from tools.maturity_alert import SendMaturityAlertTool
+from tools.maturity_notice import PrepareMaturityNoticesTool, SendMaturityNoticeTool
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 log = logging.getLogger("uvicorn.error")
@@ -71,12 +81,15 @@ class AppServices:
     share_requests: InMemoryShareRequestStore = field(default_factory=InMemoryShareRequestStore)
     uploads: UploadStore = field(default_factory=lambda: UploadStore(REPO_ROOT / "data/uploads"))
     templates: InMemoryTemplateStore = field(default_factory=InMemoryTemplateStore)
+    inbox: InboxStore = field(default_factory=lambda: InboxStore(REPO_ROOT / "data/inbox.sqlite3"))
+    documents: DocumentStore = field(default_factory=lambda: DocumentStore(REPO_ROOT / "data/documents.sqlite3"))
     draft_llm: LLMClient | None = None  # 에이전트 초안 전용 (더 큰 모델). 없으면 llm 을 쓴다
     max_turns: int = 10
     tool_timeout: float | None = 30.0
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
     require_search: RequireSearch | None = field(default_factory=RequireSearch)  # 문서 질문 검색 강제. None 이면 끔
     require_review_lookup: bool = True  # 심사 건의 상태는 실제 조회 결과로만 안내
+    auth: AuthService | None = None  # AUTH_MODE=session 이면 로그인(쿠키·DB 세션). None 이면 개발용 X-User-Id
 
 
 def llm_from_env() -> LLMClient:
@@ -144,12 +157,17 @@ def draft_llm_from_env(chat_llm: LLMClient) -> LLMClient:
 
 
 FIXTURES = REPO_ROOT / "data/fixtures"
+DOCUMENT_FORMS = REPO_ROOT / "config/document_forms"
+REPORT_TEMPLATES = REPO_ROOT / "config/report_templates"  # 시장 리포트 양식 (dy)
 
 
 def build_tools(doc_path: str | Path = FIXTURES / "doc_chunks.json", upload_dir: str | Path | None = None,
                 parse_timeout: float | None = DEFAULT_PARSE_TIMEOUT,
                 holiday_path: str | Path | None = FIXTURES / "business_holidays_demo.json", review_store: ReviewStore | None = None,
-                upload_store: UploadStore | None = None, doc_tools: list | None = None) -> list:
+                upload_store: UploadStore | None = None, doc_tools: list | None = None,
+                loan_store: LoanStore | None = None, inbox: InboxStore | None = None,
+                documents: DocumentStore | None = None,
+                gmail_account_resolver: GmailAccountResolver | None = None) -> list:
     """로컬 도구와 환경변수로 활성화한 Gmail MCP 도구를 함께 등록한다.
     doc_tools 를 주면 파일 예시 대신 그 문서 검색·열람 도구를 쓴다 (DOC_STORE=db → tools/db_docs.py)."""
     doc = Path(doc_path)
@@ -159,12 +177,22 @@ def build_tools(doc_path: str | Path = FIXTURES / "doc_chunks.json", upload_dir:
         REPO_ROOT / "data/fixtures/review_cases.json",
         Path(os.environ.get("REVIEW_REQUEST_DB_PATH", str(REPO_ROOT / "data/review_requests.sqlite3"))),
     )
+    loan_store = loan_store or LoanStore(FIXTURES / "loans_demo.json")
+    inbox = inbox or InboxStore(REPO_ROOT / "data/inbox.sqlite3")
+    documents = documents or DocumentStore(REPO_ROOT / "data/documents.sqlite3", load_forms(DOCUMENT_FORMS))
+    # 양식(config/document_forms)의 source.provider 이름 → 조회 함수. 새 서류의 데이터는 여기에 한 줄 추가한다
+    providers = {"loans_maturing": lambda principal, params: loan_store.maturing(principal, params["days"])}
+    gmail = build_gmail_tools(account_resolver=gmail_account_resolver)
+    mailer = next((tool for tool in gmail if tool.spec.name == "send_mail"), None)
     return [
         *arithmetic_tools(), *(doc_tools or [SearchDocsTool(doc), ReadDocTool(doc)]),
         TodayTool(Path(holiday_path) if holiday_path is not None else None),
         ParseDocTool(uploads, timeout=parse_timeout, uploads=upload_store),
         GetReviewCaseTool(review_store), SubmitReviewRequestTool(review_store),
-        *build_gmail_tools(),
+        LoansMaturingTool(loan_store), SendMaturityAlertTool(loan_store, inbox), PrepareMaturityNoticesTool(loan_store), SendMaturityNoticeTool(loan_store, mailer),
+        FillDocumentTool(documents, providers),
+        *gmail,
+        *build_market_tools(report_service(documents, Path(os.environ.get("REPORT_TEMPLATES_DIR", str(REPORT_TEMPLATES))))),
     ]
 
 
@@ -181,7 +209,36 @@ def db_doc_tools_from_env() -> list | None:
     return [DbSearchDocsTool(embedder), DbReadDocTool()]
 
 
-def build_from_env() -> AppServices:
+def users_from_env() -> tuple[UserDirectory, AuthService | None]:
+    """AUTH_MODE=session: DB 사용자 + 로그인(쿠키 세션). dev(기본): config/dev_users.yaml + X-User-Id 헤더."""
+    mode = os.environ.get("AUTH_MODE", "dev").strip().lower()
+    if mode == "dev":
+        return UserDirectory.from_yaml(os.environ.get("DEV_USERS_PATH", "config/dev_users.yaml")), None
+    if mode != "session":
+        raise ValueError(f"AUTH_MODE 는 dev 또는 session 이어야 합니다: {mode!r}")
+    from db.engine import session_scope
+    from services.auth import AuthSettings, DbUserDirectory
+
+    users = DbUserDirectory(session_scope)
+    return users, AuthService(session_scope, users, AuthSettings.from_env())
+
+
+def stores_from_env() -> dict:
+    """STORE=db: 에이전트·공유 요청·대화를 PostgreSQL 에 (서버를 껐다 켜도 남는다). memory(기본): 메모리."""
+    store = os.environ.get("STORE", "memory").strip().lower()
+    if store == "memory":
+        return {}
+    if store != "db":
+        raise ValueError(f"STORE 는 memory 또는 db 여야 합니다: {store!r}")
+    from db.engine import session_scope
+    from services.db_stores import DbAgentStore, DbSessionStore, DbShareRequestStore
+
+    log.info("저장소: 팀 DB (에이전트·공유 요청·대화)")
+    return {"agents": DbAgentStore(session_scope), "share_requests": DbShareRequestStore(session_scope),
+            "sessions": DbSessionStore(session_scope)}
+
+
+def build_from_env(*, gmail_account_resolver: GmailAccountResolver | None = None) -> AppServices:
     env = os.environ.get
     rules, default = load_policy(
         env("PERMISSION_POLICY_PATH", "config/permissions.yaml"),
@@ -194,21 +251,32 @@ def build_from_env() -> AppServices:
         Path(env("REVIEW_CASES_PATH", str(FIXTURES / "review_cases.json"))),
         Path(env("REVIEW_REQUEST_DB_PATH", str(REPO_ROOT / "data" / "review_requests.sqlite3"))),
     )
+    loan_store = LoanStore(Path(env("LOANS_PATH", str(FIXTURES / "loans_demo.json"))))
+    inbox = InboxStore(Path(env("INBOX_DB_PATH", str(REPO_ROOT / "data" / "inbox.sqlite3"))))
+    documents = DocumentStore(Path(env("DOCUMENT_DB_PATH", str(REPO_ROOT / "data" / "documents.sqlite3"))),
+                              load_forms(Path(env("DOCUMENT_FORMS_DIR", str(DOCUMENT_FORMS)))))
     llm = llm_from_env()
+    users, auth = users_from_env()
+    stores = stores_from_env()
     return AppServices(
+        **stores,
         llm=llm,
         draft_llm=draft_llm_from_env(llm),
         tools=SimpleToolRegistry(build_tools(
             doc_path, upload_dir=env("UPLOAD_DIR"),
             parse_timeout=float(env("PARSE_TOOL_TIMEOUT_SECONDS", str(DEFAULT_PARSE_TIMEOUT))),
             holiday_path=holiday_path, review_store=review_store, upload_store=uploads,
-            doc_tools=db_doc_tools_from_env(),
+            doc_tools=db_doc_tools_from_env(), loan_store=loan_store, inbox=inbox, documents=documents,
+            gmail_account_resolver=gmail_account_resolver,
         )),
+        inbox=inbox,
+        documents=documents,
         uploads=uploads,
-        checker=create_checker(rules=rules, default=default),
+        checker=CustomerMailRule(create_checker(rules=rules, default=default), loan_store),
         approvals=FutureApprovalHandler(float(env("PERMISSION_APPROVAL_TIMEOUT_SECONDS", "120"))),
         audit=JsonlAuditLogger(env("PERMISSION_AUDIT_LOG_PATH", "logs/permission_audit.jsonl")),
-        users=UserDirectory.from_yaml(env("DEV_USERS_PATH", "config/dev_users.yaml")),
+        users=users,
+        auth=auth,
         templates=InMemoryTemplateStore(load_templates(env("AGENT_TEMPLATES_PATH", "config/agent_templates.yaml"))),
         max_turns=int(env("HARNESS_MAX_TURNS", "10")),
         tool_timeout=float(env("HARNESS_TOOL_TIMEOUT_SECONDS", "30")),

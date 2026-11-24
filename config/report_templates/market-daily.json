@@ -1,0 +1,93 @@
+{
+  "id": "market-daily",
+  "version": 2,
+  "name": "일일 금리·환율 보고서",
+  "description": "매일 아침 금리와 주요 통화 환율을 함께 확인하는 기본 상세 보고서입니다.",
+  "summary_instructions": "환율과 기준금리의 확인된 수치를 짧게 정리합니다. 실제 관측일과 요청일을 구분합니다.",
+  "keywords": [
+    "금리",
+    "환율",
+    "일일",
+    "아침",
+    "시장",
+    "시장동향",
+    "상세",
+    "기본",
+    "일일 금리·환율 보고서"
+  ],
+  "priority": 1,
+  "demo": true,
+  "enabled": true,
+  "required_bindings": [
+    "base_date",
+    "fx_table",
+    "source_notes"
+  ],
+  "sections": [
+    {
+      "type": "heading",
+      "level": 1,
+      "text": "일일 금리·환율 보고서"
+    },
+    {
+      "type": "field",
+      "binding": "base_date",
+      "label": "요청 기준일"
+    },
+    {
+      "type": "field",
+      "binding": "prepared_by",
+      "label": "작성자"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "1. 핵심 요약"
+    },
+    {
+      "type": "binding",
+      "binding": "summary"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "2. 주요 통화 환율"
+    },
+    {
+      "type": "binding",
+      "binding": "fx_table"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "3. 한국은행 기준금리"
+    },
+    {
+      "type": "binding",
+      "binding": "rates"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "4. 자료 확인 사항"
+    },
+    {
+      "type": "binding",
+      "binding": "data_quality"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "5. 출처와 이용 안내"
+    },
+    {
+      "type": "binding",
+      "binding": "source_notes"
+    },
+    {
+      "type": "field",
+      "binding": "report_id",
+      "label": "리포트 번호"
+    }
+  ]
+}

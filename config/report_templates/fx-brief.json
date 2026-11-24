@@ -1,0 +1,73 @@
+{
+  "id": "fx-brief",
+  "version": 2,
+  "name": "간단 환율 브리핑",
+  "description": "환율을 짧게 전달할 때 사용하는 간략 보고서입니다. 기준금리 항목을 포함하지 않습니다.",
+  "summary_instructions": "환율과 그 변동만 한두 문장으로 요약합니다. 기준금리는 언급하지 않습니다. JPY는 100엔 기준입니다.",
+  "keywords": [
+    "환율",
+    "간단",
+    "간략",
+    "짧게",
+    "한눈에",
+    "브리핑",
+    "외환",
+    "간단 환율 브리핑"
+  ],
+  "demo": true,
+  "enabled": true,
+  "required_bindings": [
+    "base_date",
+    "fx_table",
+    "source_notes"
+  ],
+  "sections": [
+    {
+      "type": "heading",
+      "level": 1,
+      "text": "환율 간단 브리핑"
+    },
+    {
+      "type": "field",
+      "binding": "base_date",
+      "label": "기준일"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "한눈에 보는 요약"
+    },
+    {
+      "type": "binding",
+      "binding": "summary"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "주요 환율"
+    },
+    {
+      "type": "binding",
+      "binding": "fx_table"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "출처·관측일 안내"
+    },
+    {
+      "type": "binding",
+      "binding": "source_notes"
+    },
+    {
+      "type": "field",
+      "binding": "prepared_by",
+      "label": "작성"
+    },
+    {
+      "type": "field",
+      "binding": "report_id",
+      "label": "보고서 번호"
+    }
+  ]
+}
