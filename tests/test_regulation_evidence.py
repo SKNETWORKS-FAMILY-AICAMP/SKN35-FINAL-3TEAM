@@ -66,19 +66,29 @@ def test_server_enables_mode_for_existing_regulation_agents_and_frequency_questi
     assert not regulation_request("오늘 기준 7일 이내 만기 대출", names={"loans_maturing", "search_doc"})
 
 
-@pytest.mark.parametrize("rows", [[], [{**ROW, "title": "예금규정", "preview": "예금의 이자를 지급한다.", "score": .18}]])
-async def test_uc01_5_cannot_answer_contact_frequency_without_accessible_evidence(rows):
-    h, llm, search, _, audit = runner(rows=rows)
+INSUFFICIENT = {"content": '{"status":"insufficient_evidence","evidence":[]}'}
+
+
+async def test_uc01_5_cannot_answer_contact_frequency_without_accessible_evidence():
+    h, llm, search, _, audit = runner(rows=[])
     result = await h.run("추심 연락 일주일에 몇 번?", USER, "test")
     assert result.final_message.content == UNAVAILABLE
-    assert len(search.calls) == 2 and not llm.calls
+    assert len(search.calls) == 2 and not llm.calls   # 검색어를 바꿔 다시 찾아도 0건 → 모델 없이 고정 문구
     assert all(r.executed for r in audit.records)
 
 
-async def test_uc01_3_unrelated_high_score_is_not_a_space_station_regulation():
-    h, llm, _, _, _ = runner(rows=[{**ROW, "title": "여신규정", "preview": "은행은 건설자금 대출을 취급할 수 있다.", "score": .9}])
-    result = await h.run("우주정거장 건설자금 대출 규정", USER, "test")
-    assert result.final_message.content == UNAVAILABLE and not llm.calls
+# 질문 낱말 검사·점수 하한은 뺐다 (11/24 측정). 엉뚱한 후보도 모델까지 가지만, 모델이 근거 없음을 고르면 고정 문구로 끝나고
+# 모델이 엉뚱한 조각을 고르더라도 나가는 것은 원문 조각 그대로다 (지어낸 문장은 나갈 수 없다).
+@pytest.mark.parametrize("row,question", [
+    ({**ROW, "title": "예금규정", "preview": "예금의 이자를 지급한다.", "text": "예금의 이자를 지급한다.", "score": .18},
+     "추심 연락 일주일에 몇 번?"),
+    ({**ROW, "title": "여신규정", "preview": "은행은 건설자금 대출을 취급할 수 있다.", "text": "은행은 건설자금 대출을 취급할 수 있다.", "score": .9},
+     "우주정거장 건설자금 대출 규정"),
+])
+async def test_unrelated_candidates_reach_the_model_but_no_evidence_means_fixed_reply(row, question):
+    h, llm, _, _, _ = runner([INSUFFICIENT], rows=[row])
+    result = await h.run(question, USER, "test")
+    assert result.final_message.content == UNAVAILABLE and len(llm.calls) == 1
 
 
 async def test_verified_quote_and_server_citation_replace_free_form_claims():

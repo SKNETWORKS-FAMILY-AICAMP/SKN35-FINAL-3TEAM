@@ -329,11 +329,13 @@ async def test_planned_regulation_without_relevant_evidence_says_unavailable():
     from harness.regulation import UNAVAILABLE
     from tests.test_regulation_evidence import ROW
 
-    low = [{**ROW, "title": "예금규정", "preview": "예금의 이자를 지급한다.", "score": .18}]
-    runner, llm, search, reader = regulation_runner([plan_reply("search_doc", "get_doc_chunk")], rows=low)
+    low = [{**ROW, "title": "예금규정", "preview": "예금의 이자를 지급한다.", "text": "예금의 이자를 지급한다.", "score": .18}]
+    insufficient = {"content": '{"status":"insufficient_evidence","evidence":[]}'}
+    runner, llm, search, reader = regulation_runner([plan_reply("search_doc", "get_doc_chunk"), insufficient], rows=low)
     result = await runner.run("추심 연락 일주일에 몇 번?", KIM, "s")
     assert result.final_message.content == UNAVAILABLE
-    assert len(search.calls) == 2 and not reader.calls and len(llm.calls) == 1  # 재검색까지 후보 없음 → 모델 답 없음
+    # 점수 하한이 없어 엉뚱한 후보도 읽지만, 모델이 근거 없음을 고르면 고정 문구 (계획 + 선택 = 모델 2번)
+    assert len(reader.calls) == 1 and len(llm.calls) == 2
 
 
 async def test_planned_regulation_rejects_free_form_answer():

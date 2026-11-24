@@ -220,7 +220,7 @@ async def send_message(
         require_review_lookup=svc.require_review_lookup, planner=svc.use_planner,
         regulation_mode=regulation_request(content, names={s.name for s in specs}, custom=agent is not None,
                                            role=(agent.name + " " + agent.system_prompt) if agent else ""),
-        regulation_min_score=float(os.environ.get("DOC_EVIDENCE_MIN_SCORE", "0.30")),
+        regulation_min_score=float(os.environ.get("DOC_EVIDENCE_MIN_SCORE", "0")),
     )
     run_id = str(uuid.uuid4())
     async with session.lock:
