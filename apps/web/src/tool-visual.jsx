@@ -56,9 +56,11 @@ export function splitDesc(text = '') {
 function Desc({ text }) {
   const [open, setOpen] = useState(false);
   const { short, more } = splitDesc(text);
-  return <p className="tool-desc">{open ? text : short}
-    {more && <button type="button" className="desc-more" onClick={event => { event.preventDefault(); event.stopPropagation(); setOpen(value => !value); }}>
-      {open ? '접기' : '자세히'}</button>}</p>;
+  return <>
+    <p className={'tool-desc' + (open ? ' open' : '')}>{open ? text : short}</p>
+    <span className="desc-foot">{more && <button type="button" className="desc-more" onClick={event => { event.preventDefault(); event.stopPropagation(); setOpen(value => !value); }}>
+      {open ? '접기' : '자세히'}</button>}</span>
+  </>;
 }
 
 const norm = text => (text ?? '').toLowerCase();
@@ -155,7 +157,11 @@ export function ToolCatalog({ tools, effectLabel, Badge }) {
         })}><ChevronRight size={15} className="chev" /><span className="group-dot" /><strong>{domain}</strong><span className="muted">{items.length}개</span></button>
         {isOpen && <ul className="tool-catalog">{items.map(tool => <li className="panel catalog-tool" key={tool.name}>
           <ToolIcon tool={tool} size={20} box={42} />
-          <div><h2>{tool.display_name} <code>{tool.name}</code> <Badge tone={'effect-' + tool.effect}>{effectLabel[tool.effect] ?? tool.effect}</Badge></h2><Desc text={tool.description} /></div>
+          <div className="catalog-body">
+            <h2 title={tool.display_name}>{tool.display_name}</h2>
+            <p className="catalog-sub"><code title={tool.name}>{tool.name}</code><Badge tone={'effect-' + tool.effect}>{effectLabel[tool.effect] ?? tool.effect}</Badge></p>
+            <Desc text={tool.description} />
+          </div>
         </li>)}</ul>}
       </section>;
     })}
