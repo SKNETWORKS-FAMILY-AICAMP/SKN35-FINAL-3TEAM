@@ -6,15 +6,17 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from routers import agents, approvals, auth,chat, documents, inbox, templates, users, uploads
+from routers import agents, approvals, auth, chat, documents, inbox, schedules, templates, users, uploads
 from services.container import AppServices, build_from_env
 from services.db_stores import UnknownUser
+from services.scheduler import scheduler_from_env
 from routers.knowledge_docs import router as knowledge_docs_router
 
 
@@ -24,7 +26,13 @@ def create_app(build: Callable[[], AppServices] = build_from_env) -> FastAPI:
         app.state.services = build()
         if app.state.services.auth is not None:  # 로그인 모드: DB 연결 확인 + 사용자 목록 읽기
             await app.state.services.auth.startup()
+        # 예약 실행 (config/schedules.yaml). SCHEDULER_ENABLED=true 일 때만 시각에 맞춰 돈다
+        app.state.scheduler = scheduler_from_env(app.state.services)
+        if app.state.scheduler and os.environ.get("SCHEDULER_ENABLED", "false").strip().lower() == "true":
+            app.state.scheduler.start()
         yield
+        if app.state.scheduler:
+            await app.state.scheduler.stop()
 
     app = FastAPI(title="Team Agent API", lifespan=lifespan)
     app.include_router(auth.router)
@@ -37,6 +45,7 @@ def create_app(build: Callable[[], AppServices] = build_from_env) -> FastAPI:
     app.include_router(templates.router)
     app.include_router(inbox.router)
     app.include_router(documents.router)
+    app.include_router(schedules.router)
 
     @app.exception_handler(UnknownUser)
     async def unknown_user(_: Request, error: UnknownUser) -> JSONResponse:

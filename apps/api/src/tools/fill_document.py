@@ -10,6 +10,7 @@ import asyncio
 import json
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 
 from contracts.harness import ToolResult, ToolSpec
 from contracts.permission import ToolCall
@@ -54,7 +55,7 @@ class FillDocumentTool:
             raise ValueError(f"이 양식에 없는 params 입니다: {', '.join(sorted(set(raw) - set(form.params)))}")
         return params
 
-    def _fill(self, call: ToolCall, args: FillInput) -> dict:
+    async def _fill(self, call: ToolCall, args: FillInput) -> dict:
         form = self.store.forms.get(args.form_id)
         if form is None:
             raise ValueError(f"없는 양식입니다. 쓸 수 있는 양식: {', '.join(self.store.forms) or '없음'}")
@@ -62,7 +63,7 @@ class FillDocumentTool:
         llm = {s["key"]: s for s in form.llm_sections}
         if set(args.fields) - set(llm):
             raise ValueError(f"모델이 쓸 수 있는 칸은 {', '.join(llm) or '없음'} 뿐입니다. 표·숫자 칸은 넘기지 마세요.")
-        data = self.providers[form.provider](call.principal, params)
+        data = await asyncio.to_thread(self.providers[form.provider], call.principal, params)
         if data.get("has_customers") is False or data.get("empty"):
             return {"created": False, "message": data.get("message") or "문서에 넣을 데이터가 없습니다."}
         source = json.dumps({"data": data, "params": params}, ensure_ascii=False)
@@ -76,8 +77,8 @@ class FillDocumentTool:
             else:
                 fields[key] = text
         document = build_document(form, data, params, fields, prepared_by=call.principal.user_id)
-        record = self.store.save(call.principal.user_id, document, form_id=form.form_id,
-                                 has_customer_info=form.has_customer_info)
+        record = await self.store.save(call.principal.user_id, document, form_id=form.form_id,
+                                       has_customer_info=form.has_customer_info, session_id=call.session_id)
         return {
             "created": True, "document_id": record["document_id"], "document_title": document["title"],  # "title" 이면 채팅이 참고 문서로 착각한다 (services/chat.sources)
             "dropped": dropped,
@@ -94,9 +95,9 @@ class FillDocumentTool:
         except ValidationError:
             return ToolResult(call.call_id, False, "form_id(문자열), params(객체), fields(문자열 값 객체)로 입력해 주세요.")
         try:
-            payload = await asyncio.to_thread(self._fill, call, args)
+            payload = await self._fill(call, args)
         except ValueError as error:
             return ToolResult(call.call_id, False, str(error))
-        except (OSError, KeyError):
+        except (OSError, KeyError, SQLAlchemyError):
             return ToolResult(call.call_id, False, "문서를 만들지 못했습니다. 양식과 데이터를 확인해 주세요.")
         return ToolResult(call.call_id, True, json.dumps(payload, ensure_ascii=False), data=payload)

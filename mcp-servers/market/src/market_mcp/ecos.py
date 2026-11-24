@@ -104,11 +104,33 @@ class ReplayProvider:
         return matches[0]["rows"]
 
 
-def provider_from_env():
-    mode = os.environ.get("MARKET_DATA_MODE", "live").strip().lower()
+def _source(mode: str):
     if mode == "live":
         return EcosProvider(os.environ.get("ECOS_API_KEY", ""))
     if mode == "replay":
         sample = Path(__file__).parent / "resources" / "ecos_delivery_sample.json"
         return ReplayProvider(Path(os.environ.get("MARKET_REPLAY_FILE") or sample))
-    raise MarketError("MARKET_DATA_MODE는 live 또는 replay여야 합니다.")
+    return None
+
+
+def provider_from_env():
+    """리포트(market_snapshot)가 값을 읽는 곳. db = UC-02-1 이 적재한 시장 DB, live = ECOS 직접, replay = 기록 재생."""
+    mode = os.environ.get("MARKET_DATA_MODE", "live").strip().lower()
+    if mode == "db":
+        from .collect import DbProvider, pg_store_from_env
+
+        return DbProvider(pg_store_from_env())
+    provider = _source(mode)
+    if provider is None:
+        raise MarketError("MARKET_DATA_MODE는 db, live, replay 중 하나여야 합니다.")
+    return provider
+
+
+def collect_provider_from_env():
+    """수집기(UC-02-1)가 받아 올 곳. MARKET_COLLECT_MODE 가 없으면 ECOS_API_KEY 가 있을 때 live, 없으면 replay."""
+    default = "live" if os.environ.get("ECOS_API_KEY", "").strip() else "replay"
+    mode = os.environ.get("MARKET_COLLECT_MODE", default).strip().lower() or default
+    provider = _source(mode)
+    if provider is None:
+        raise MarketError("MARKET_COLLECT_MODE는 live 또는 replay여야 합니다.")
+    return provider

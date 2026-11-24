@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  ArrowUp, Bell, Bot, FolderOpen, Braces, Check, ChevronRight, CircleAlert, FileText, Inbox, LayoutTemplate, ListChecks,
+  ArrowUp, Bell, Bot, CalendarClock, FolderOpen, Braces, Check, ChevronRight, CircleAlert, FileText, Inbox, LayoutTemplate, ListChecks,
   LoaderCircle, Lock, Pencil, MessageSquare, Paperclip, Plus, Power, PowerOff, Search, Settings2, Share2, ShieldCheck,
   LogOut, Moon, Sparkles, Sun, Trash2, Undo2, UserRound, Workflow, Wrench, X,
 } from 'lucide-react';
@@ -11,6 +11,7 @@ import { ToolCatalog, ToolPicker } from './tool-visual';
 import AgentSelect from './AgentSelect';
 import { failedToolSummary } from './tool-status';
 import { InboxPage } from './inbox';
+import { SchedulesPage } from './schedules';
 import { DocumentDownloads, DocumentsPage, documentsFromEvents } from './documents';
 import { savedReports, ReportContent } from './report-export';
 import {
@@ -57,12 +58,13 @@ const navigation = [
   { id: 'chat', name: '작업 채팅', detail: '에이전트와 대화', icon: MessageSquare, color: '#78aaff' },
   { id: 'create', name: '에이전트 만들기', detail: '자연어로 초안 생성', icon: Sparkles, color: '#ba97ff' },
   { id: 'agents', name: '에이전트 관리', detail: '내 것·공유받은 것', icon: Settings2, color: '#65ddb0' },
-  { id: 'inbox', name: '알림함', detail: '만기 알림 등 받은 알림', icon: Bell, color: '#ffd166' },
+  { id: 'inbox', name: '알림함', detail: '만기 알림·고객 안내 결과', icon: Bell, color: '#ffd166' },
   { id: 'documents', name: '내 문서', detail: '만든 문서 PDF·DOCX 받기', icon: FolderOpen, color: '#9be38c' },
   { id: 'shares', name: '공유 요청', detail: '승인·요청 내역', icon: Inbox, color: '#f17fa8' },
   { id: 'templates', name: '시나리오 템플릿', detail: '사전 구성으로 시작', icon: LayoutTemplate, color: '#f6b273' },
   { id: 'tools', name: '도구 목록', detail: '등록된 도구 보기', icon: Wrench, color: '#74d5e4' },
   { id: 'knowledge', name: '사내 문서', detail: '검색할 수 있는 문서 보기', icon: KnowledgeIcon, color: '#a8c7fa' },
+  { id: 'schedules', name: '예약 작업', detail: '수집·리포트·만기 알림 (관리자)', icon: CalendarClock, color: '#c3a6ff', adminOnly: true },
 ];
 
 // 채팅 첫 화면의 빠른 예시 (시나리오 템플릿은 서버의 /api/templates)
@@ -722,6 +724,7 @@ function App({ session, theme, setTheme }) {
   const [chatView, setChatView] = useState(0);
   const [viewingId, setViewingId] = useState(null);  // 읽기 전용으로 연 지난 대화
   const [notice, setNotice] = useState(null);
+  const [unread, setUnread] = useState(0);  // 알림함의 안 읽은 알림 수 (메뉴 배지)
   const route = navigation.find(({ id }) => id === page);
 
   const notify = useCallback((text, tone = 'error') => setNotice(text ? { text, tone } : null), []);
@@ -749,6 +752,16 @@ function App({ session, theme, setTheme }) {
       .catch(() => { /* 목록을 못 받아도 새 대화는 할 수 있다 */ });
     return () => { current = false; };
   }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 안 읽은 알림 수: 화면을 옮길 때와 30초마다 다시 센다 (채팅에서 알림을 보낸 뒤에도 바로 보이게)
+  useEffect(() => {
+    let current = true;
+    const count = () => api(user, '/api/inbox/unread-count')
+      .then(data => { if (current) setUnread(data.unread ?? 0); }).catch(() => { /* 못 세도 메뉴는 그대로 */ });
+    count();
+    const timer = setInterval(count, 30000);
+    return () => { current = false; clearInterval(timer); };
+  }, [user, page, chatBusy]);
 
   useEffect(() => {
     const updatePage = () => {
@@ -806,8 +819,10 @@ function App({ session, theme, setTheme }) {
   return <div className="shell" style={{ '--accent': route.color }}>
     <aside className="sidebar">
       <div className="sidebar-heading"><span><strong>Agent Argus</strong><small>사내 업무 에이전트</small></span></div>
-      <nav aria-label="워크스페이스 메뉴">{navigation.map(({ id, name, detail, icon: Icon, color }) => <a key={id} href={'#' + id} aria-current={page === id ? 'page' : undefined} style={{ '--item-accent': color }}>
-        <span className="nav-icon"><Icon size={19} /></span><span><strong>{name}</strong><small>{detail}</small></span><ChevronRight size={15} className="nav-chevron" />
+      <nav aria-label="워크스페이스 메뉴">{navigation.filter(item => !item.adminOnly || me?.roles?.includes('admin')).map(({ id, name, detail, icon: Icon, color }) => <a key={id} href={'#' + id} aria-current={page === id ? 'page' : undefined} style={{ '--item-accent': color }}>
+        <span className="nav-icon"><Icon size={19} /></span><span><strong>{name}</strong><small>{detail}</small></span>
+        {id === 'inbox' && unread > 0 && <span className="nav-count" aria-label={`안 읽은 알림 ${unread}개`}>{unread > 99 ? '99+' : unread}</span>}
+        <ChevronRight size={15} className="nav-chevron" />
       </a>)}</nav>
       <section className="sidebar-history" aria-label="최근 대화">
         <h2>최근 대화</h2>
@@ -861,6 +876,7 @@ function App({ session, theme, setTheme }) {
             create: '필요한 역할을 설명하면 LLM이 이름, 프롬프트, 도구를 골라 초안을 만듭니다.',
             agents: '내가 만든 에이전트와 공유받은 에이전트를 관리하세요. 부서장은 부서원의 에이전트를 비활성화할 수 있습니다.',
             inbox: '에이전트가 보낸 알림입니다. 본인 알림만 보입니다.',
+            schedules: '평일 정해진 시각에 도는 작업입니다. 지금 실행으로 바로 돌릴 수 있습니다.',
             documents: '에이전트가 양식으로 만든 문서입니다. 본인 문서만 보이고, PDF·DOCX 중 골라 받습니다.',
             shares: '부서·전사 공유는 바로 위 관리자가 승인해야 적용됩니다.',
             templates: '관리자가 미리 만든 업무 에이전트로 시작하세요. 고른 뒤 내용을 고쳐 내 에이전트로 저장합니다.',
@@ -873,7 +889,8 @@ function App({ session, theme, setTheme }) {
           onCreated={agent => { refreshAgents(); setEditingId(agent.agent_id); location.hash = 'agents'; setTimeout(() => notify(`'${agent.name}' 에이전트를 만들었습니다.`, 'ok')); }} />}
         {page === 'agents' && <AgentsPage user={user} agents={agents} tools={tools} editingId={editingId} setEditingId={setEditingId}
           refresh={refreshAgents} openChat={openChat} notify={notify} />}
-        {page === 'inbox' && <InboxPage user={user} notify={notify} />}
+        {page === 'inbox' && <InboxPage user={user} notify={notify} onChange={setUnread} />}
+        {page === 'schedules' && <SchedulesPage user={user} notify={notify} />}
         {page === 'documents' && <DocumentsPage user={user} notify={notify} />}
         {page === 'shares' && <SharesPage user={user} notify={notify} refreshAgents={refreshAgents} />}
         {page === 'tools' && <>

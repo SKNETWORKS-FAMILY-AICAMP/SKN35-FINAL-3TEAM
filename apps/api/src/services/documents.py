@@ -6,18 +6,29 @@
 - fixed: 양식에 적힌 고정 문구.
 채운 결과는 공통 문서 형식(blocks, services/document_render.py)으로 저장한다.
 시장 리포트(config/report_templates, 시장 MCP 코드)도 같은 형식이고, 같은 저장소에 들어간다 (MarketRecords).
+
+저장소 두 가지 (메서드 같음, 모두 async)
+- DocumentStore    로컬 SQLite (STORE=memory, 테스트)
+- DbDocumentStore  PostgreSQL output_file 표 + 파일 저장소 outputs/{user}/… (STORE=db).
+                   문서 JSON 은 파일로, 목록·소유자·해시는 표로. 내려받기는 audit_log(output_download) 에 남긴다.
 """
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
+import re
 import sqlite3
+import uuid
 from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
+
+from sqlalchemy import text
 
 from contracts.permission import Principal
 
@@ -135,9 +146,19 @@ def new_document_id() -> str:
     return uuid4().hex  # 시장 리포트 번호와 같은 32자리 형식
 
 
+def _session_uuid(session_id: str | None) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(str(session_id))
+    except (TypeError, ValueError):
+        return None
+
+
+_PUBLIC_ID = re.compile(r"[0-9a-f]{32}")
+
+
 @dataclass
 class DocumentStore:
-    """저장된 문서·내려받은 기록·시장 조회 기록. ERD 의 output_file 에 해당 (DB 가 붙으면 이 클래스만 바꾼다).
+    """저장된 문서·내려받은 기록·시장 조회 기록 (로컬 SQLite).
 
     문서 레코드: {"document_id", "owner_id", "kind", "created_at", "has_customer_info", "document": 공통 문서 형식, ...}
     """
@@ -180,8 +201,7 @@ class DocumentStore:
     def _now() -> str:
         return datetime.now(timezone.utc).isoformat()
 
-    def put(self, record: dict) -> dict:
-        """문서 레코드 저장. document_id·owner_id·kind 가 있어야 한다."""
+    def _put(self, record: dict) -> dict:
         record = {"created_at": self._now(), "has_customer_info": False, **record}
         title = (record.get("document") or {}).get("title") or record.get("title") or "문서"
         with closing(self._connect()) as connection, connection:
@@ -192,11 +212,16 @@ class DocumentStore:
             )
         return record
 
-    def save(self, owner_id: str, document: dict, *, form_id: str, has_customer_info: bool) -> dict:
-        return self.put({"document_id": new_document_id(), "owner_id": owner_id, "kind": "form", "form_id": form_id,
-                         "has_customer_info": has_customer_info, "document": document})
+    async def put(self, record: dict, *, session_id: str | None = None) -> dict:
+        """문서 레코드 저장. document_id·owner_id·kind 가 있어야 한다."""
+        return await asyncio.to_thread(self._put, record)
 
-    def list(self, owner_id: str) -> list[dict]:
+    async def save(self, owner_id: str, document: dict, *, form_id: str, has_customer_info: bool,
+                   session_id: str | None = None) -> dict:
+        return await self.put({"document_id": new_document_id(), "owner_id": owner_id, "kind": "form", "form_id": form_id,
+                               "has_customer_info": has_customer_info, "document": document}, session_id=session_id)
+
+    def _list(self, owner_id: str) -> list[dict]:
         with closing(self._connect()) as connection:
             rows = connection.execute(
                 "SELECT document_id, kind, title, created_at FROM documents WHERE owner_id = ? ORDER BY created_at DESC",
@@ -204,29 +229,148 @@ class DocumentStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def get(self, owner_id: str, document_id: str) -> dict | None:
-        """다른 사람의 문서는 없는 것과 같다 (None → 404)."""
+    async def list(self, owner_id: str) -> list[dict]:
+        return await asyncio.to_thread(self._list, owner_id)
+
+    def _get(self, owner_id: str, document_id: str) -> dict | None:
         with closing(self._connect()) as connection:
             row = connection.execute(
                 "SELECT record FROM documents WHERE document_id = ? AND owner_id = ?", (document_id, owner_id),
             ).fetchone()
         return json.loads(row["record"]) if row else None
 
-    def log_download(self, owner_id: str, document_id: str, fmt: str) -> None:
+    async def get(self, owner_id: str, document_id: str) -> dict | None:
+        """다른 사람의 문서는 없는 것과 같다 (None → 404)."""
+        return await asyncio.to_thread(self._get, owner_id, document_id)
+
+    def _log_download(self, owner_id: str, document_id: str, fmt: str) -> None:
         with closing(self._connect()) as connection, connection:
             connection.execute("INSERT INTO document_downloads VALUES (?, ?, ?, ?)",
                                (document_id, owner_id, fmt, self._now()))
 
+    async def log_download(self, owner_id: str, document_id: str, fmt: str) -> None:
+        await asyncio.to_thread(self._log_download, owner_id, document_id, fmt)
+
     # 문서가 되기 전의 작업 기록 (시장 조회 결과·양식 선택). 문서 근거로 남기려고 본인 것만 읽는다.
-    def put_record(self, kind: str, record_id: str, owner_id: str, payload: dict) -> None:
+    def _put_record(self, kind: str, record_id: str, owner_id: str, payload: dict) -> None:
         with closing(self._connect()) as connection, connection:
             connection.execute("INSERT OR REPLACE INTO work_records VALUES (?, ?, ?, ?, ?)",
                                (kind, record_id, owner_id, json.dumps(payload, ensure_ascii=False), self._now()))
 
-    def get_record(self, kind: str, record_id: str, owner_id: str) -> dict | None:
+    async def put_record(self, kind: str, record_id: str, owner_id: str, payload: dict) -> None:
+        await asyncio.to_thread(self._put_record, kind, record_id, owner_id, payload)
+
+    def _get_record(self, kind: str, record_id: str, owner_id: str) -> dict | None:
         with closing(self._connect()) as connection:
             row = connection.execute(
                 "SELECT payload FROM work_records WHERE kind = ? AND record_id = ? AND owner_id = ?",
                 (kind, record_id, owner_id),
             ).fetchone()
         return json.loads(row["payload"]) if row else None
+
+    async def get_record(self, kind: str, record_id: str, owner_id: str) -> dict | None:
+        return await asyncio.to_thread(self._get_record, kind, record_id, owner_id)
+
+
+class DbDocumentStore:
+    """PostgreSQL output_file + 파일 저장소. 문서 JSON 은 outputs/{login_id}/{document_id}.json,
+    작업 기록(시장 조회 결과·양식 선택)은 outputs/{login_id}/work/{kind}/{id}.json 에 둔다."""
+
+    def __init__(self, sessions, storage, forms: dict[str, DocumentForm] | None = None) -> None:
+        self._sessions, self.storage, self.forms = sessions, storage, forms or {}
+
+    @staticmethod
+    def _owner_key(owner_id: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", owner_id or ""):
+            raise ValueError("사용자 ID 형식이 아닙니다.")
+        return owner_id
+
+    async def put(self, record: dict, *, session_id: str | None = None) -> dict:
+        record = {"created_at": datetime.now(timezone.utc).isoformat(), "has_customer_info": False, **record}
+        document_id = record["document_id"]
+        if not _PUBLIC_ID.fullmatch(document_id):
+            raise ValueError("문서 번호 형식이 아닙니다.")
+        title = ((record.get("document") or {}).get("title") or record.get("title") or "문서")[:200]
+        key = f"outputs/{self._owner_key(record['owner_id'])}/{document_id}.json"
+        data = json.dumps(record, ensure_ascii=False).encode("utf-8")
+        stored = await asyncio.to_thread(self.storage.save, key, data)
+        try:
+            async with self._sessions() as s:
+                inserted = await s.scalar(text("""
+                    INSERT INTO output_file (owner_user_id, session_id, title, file_name, mime_type, storage_path, sha256,
+                                             has_customer_info, public_id, kind)
+                    SELECT u.id, (SELECT id FROM chat_session WHERE id = :s), :t, :f, 'application/json', :k, :h, :c, :p, :kind
+                    FROM users u WHERE u.login_id = :u RETURNING id"""),
+                    {"u": record["owner_id"], "s": _session_uuid(session_id), "t": title, "f": document_id + ".json",
+                     "k": stored.key, "h": stored.sha256, "c": bool(record["has_customer_info"]), "p": document_id,
+                     "kind": record["kind"]})
+                if inserted is None:
+                    raise ValueError(f"DB users 표에 없는 사용자입니다: {record['owner_id']}")
+                await s.commit()
+        except Exception:
+            await asyncio.to_thread(self.storage.delete, key)  # 표에 못 넣은 파일은 남기지 않는다
+            raise
+        return record
+
+    async def save(self, owner_id: str, document: dict, *, form_id: str, has_customer_info: bool,
+                   session_id: str | None = None) -> dict:
+        return await self.put({"document_id": new_document_id(), "owner_id": owner_id, "kind": "form", "form_id": form_id,
+                               "has_customer_info": has_customer_info, "document": document}, session_id=session_id)
+
+    async def list(self, owner_id: str) -> list[dict]:
+        async with self._sessions() as s:
+            rows = (await s.execute(text("""
+                SELECT o.public_id, o.kind, o.title, o.created_at FROM output_file o JOIN users u ON u.id = o.owner_user_id
+                WHERE u.login_id = :u AND o.deleted_at IS NULL AND o.public_id IS NOT NULL
+                ORDER BY o.created_at DESC"""), {"u": owner_id})).all()
+        return [{"document_id": r.public_id, "kind": r.kind, "title": r.title, "created_at": r.created_at.isoformat()}
+                for r in rows]
+
+    async def _row(self, owner_id: str, document_id: str):
+        if not _PUBLIC_ID.fullmatch(document_id or ""):
+            return None
+        async with self._sessions() as s:
+            return (await s.execute(text("""
+                SELECT o.id, o.storage_path, o.sha256, u.id AS user_pk FROM output_file o JOIN users u ON u.id = o.owner_user_id
+                WHERE u.login_id = :u AND o.public_id = :p AND o.deleted_at IS NULL"""),
+                {"u": owner_id, "p": document_id})).first()
+
+    async def get(self, owner_id: str, document_id: str) -> dict | None:
+        """다른 사람의 문서는 없는 것과 같다 (None → 404). 파일 해시가 표와 다르면 읽지 않는다."""
+        row = await self._row(owner_id, document_id)
+        if row is None:
+            return None
+        data = await asyncio.to_thread(self.storage.read, row.storage_path)
+        if hashlib.sha256(data).hexdigest() != row.sha256:
+            raise ValueError("저장된 문서 파일이 바뀌어 열 수 없습니다.")
+        return json.loads(data)
+
+    async def log_download(self, owner_id: str, document_id: str, fmt: str) -> None:
+        row = await self._row(owner_id, document_id)
+        if row is None:
+            return
+        async with self._sessions() as s:
+            await s.execute(text("""
+                INSERT INTO audit_log (event_type, user_id, arguments, executed, target_type, target_id)
+                VALUES ('output_download', :u, CAST(:a AS JSONB), true, 'output_file', :t)"""),
+                {"u": row.user_pk, "a": json.dumps({"document_id": document_id, "format": fmt}), "t": row.id})
+            await s.commit()
+
+    def _record_key(self, kind: str, record_id: str, owner_id: str) -> str:
+        if not re.fullmatch(r"[a-z_]{1,40}", kind) or not _PUBLIC_ID.fullmatch(record_id or ""):
+            raise ValueError("작업 기록 번호 형식이 아닙니다.")
+        return f"outputs/{self._owner_key(owner_id)}/work/{kind}/{record_id}.json"
+
+    async def put_record(self, kind: str, record_id: str, owner_id: str, payload: dict) -> None:
+        key = self._record_key(kind, record_id, owner_id)
+        data = json.dumps({**payload, "owner_user_id": owner_id}, ensure_ascii=False).encode("utf-8")
+        await asyncio.to_thread(self.storage.save, key, data, True)
+
+    async def get_record(self, kind: str, record_id: str, owner_id: str) -> dict | None:
+        try:
+            key = self._record_key(kind, record_id, owner_id)
+            data = await asyncio.to_thread(self.storage.read, key)
+        except (ValueError, OSError):
+            return None
+        payload = json.loads(data)
+        return payload if payload.get("owner_user_id") == owner_id else None

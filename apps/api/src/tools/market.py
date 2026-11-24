@@ -8,6 +8,7 @@
 """
 
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -117,8 +118,11 @@ class MarketTool:
             if self.recorder is not None and self.spec.name == "market_snapshot":
                 # 소유자는 로그인 신원으로 붙인다. 이후 저장은 이 보관본만 읽는다.
                 snapshot = {k: v for k, v in payload.items() if k not in ("snapshot_id", "markdown")}
-                await asyncio.to_thread(self.recorder.write, "snapshots",
-                                        {**snapshot, "id": payload["snapshot_id"], "owner_user_id": call.principal.user_id})
+                record = {**snapshot, "id": payload["snapshot_id"], "owner_user_id": call.principal.user_id}
+                if inspect.iscoroutinefunction(self.recorder.write):
+                    await self.recorder.write("snapshots", record)
+                else:
+                    await asyncio.to_thread(self.recorder.write, "snapshots", record)
             return ToolResult(call.call_id, True, json.dumps(payload, ensure_ascii=False), data=payload)
         except Exception as exc:
             log.warning("시장 MCP 호출 실패 (%s): %s", self.spec.name, type(exc).__name__)
@@ -163,16 +167,16 @@ class MarketRecords:
     def __init__(self, documents) -> None:
         self.documents = documents
 
-    def write(self, kind: str, payload: dict) -> None:
+    async def write(self, kind: str, payload: dict) -> None:
         if kind == "reports":
-            self.documents.put({**payload, "document_id": payload["id"], "owner_id": payload["owner_user_id"],
+            await self.documents.put({**payload, "document_id": payload["id"], "owner_id": payload["owner_user_id"],
                                 "kind": "market_report", "title": payload["template"]["name"]})
         else:
-            self.documents.put_record(kind, payload["id"], payload["owner_user_id"], payload)
+            await self.documents.put_record(kind, payload["id"], payload["owner_user_id"], payload)
 
-    def read(self, kind: str, ident: str, owner: str) -> dict:
-        found = (self.documents.get(owner, ident) if kind == "reports"
-                 else self.documents.get_record(kind, ident, owner))
+    async def read(self, kind: str, ident: str, owner: str) -> dict:
+        found = await (self.documents.get(owner, ident) if kind == "reports"
+                       else self.documents.get_record(kind, ident, owner))
         if not found or (kind == "reports" and found.get("kind") != "market_report"):
             raise MarketError("열람 가능한 시장 자료를 찾을 수 없습니다.")
         return found

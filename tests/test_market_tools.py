@@ -168,11 +168,11 @@ async def test_reports_are_saved_in_platform_store_and_downloaded_like_other_doc
     reports = report_service(store, Path("config/report_templates"))
     tools = {tool.spec.name: tool for tool in market_tools(reports, bridge)}
     snapshot = await tools["market_snapshot"].run(call("market_snapshot", {"base_date": "2026-11-18"}))
-    assert store.get_record("snapshots", snapshot.data["snapshot_id"], "kim")["fx"][0]["value"] == 1338.8
+    assert (await store.get_record("snapshots", snapshot.data["snapshot_id"], "kim"))["fx"][0]["value"] == 1338.8
     saved = await tools["save_morning_report"].run(call("save_morning_report", {"snapshot_id": snapshot.data["snapshot_id"]}))
-    record = store.get("kim", saved.data["document_id"])
+    record = await store.get("kim", saved.data["document_id"])
     assert record["kind"] == "market_report" and record["document"]["blocks"]
-    assert store.list("kim")[0]["title"] == record["document"]["title"] and store.get("park", saved.data["document_id"]) is None
+    assert (await store.list("kim"))[0]["title"] == record["document"]["title"] and await store.get("park", saved.data["document_id"]) is None
     svc = AppServices(llm=ScriptedLLM([]), tools=SimpleToolRegistry([]), checker=create_checker(rules=[], default=Decision.ASK),
                       approvals=FutureApprovalHandler(1), audit=JsonlAuditLogger(tmp_path / "audit.jsonl"),
                       users=UserDirectory({"kim": KIM, "park": PARK}), documents=store)

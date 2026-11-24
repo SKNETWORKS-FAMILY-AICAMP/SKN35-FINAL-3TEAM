@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import re
@@ -182,7 +183,7 @@ class MarketService:
         self._owner(requester_id)
         template = await asyncio.to_thread(self.templates.get, template_id, expected_hash)
         selection = {"id": uuid4().hex, "owner_user_id": requester_id, "template": template}
-        await asyncio.to_thread(self._write, "template_selections", selection)
+        await self._write("template_selections", selection)
         return {"template_selection_id": selection["id"], "template": template,
                 "markdown": f"## {template['name']} · 버전 {template['version']}\n\n{template['description']}\n\n" +
                 ("\n".join(s.get("text", "") or s.get("label", "") or s.get("binding", "") for s in template["sections"])
@@ -193,16 +194,22 @@ class MarketService:
             raise MarketError("로그인 사용자 정보를 확인할 수 없습니다.")
         return owner
 
-    def _write(self, kind: str, payload: dict) -> None:
+    async def _write(self, kind: str, payload: dict) -> None:
+        """저장소가 async(플랫폼 문서 저장소)면 기다리고, 파일 저장소면 스레드에서 쓴다."""
         if self.store is None:
             return  # 시장 MCP 서버는 저장하지 않는다
-        self.store.write(kind, payload)
+        if inspect.iscoroutinefunction(self.store.write):
+            await self.store.write(kind, payload)
+        else:
+            await asyncio.to_thread(self.store.write, kind, payload)
 
-    def _read(self, kind: str, ident: str, owner: str) -> dict:
+    async def _read(self, kind: str, ident: str, owner: str) -> dict:
         self._owner(owner)
         if not isinstance(ident, str) or not re.fullmatch(r"[0-9a-f]{32}", ident) or self.store is None:
             raise MarketError("열람 가능한 시장 자료를 찾을 수 없습니다.")
-        return self.store.read(kind, ident, owner)
+        if inspect.iscoroutinefunction(self.store.read):
+            return await self.store.read(kind, ident, owner)
+        return await asyncio.to_thread(self.store.read, kind, ident, owner)
 
     async def market_snapshot(self, requester_id: str, base_date: str | None = None) -> dict:
         self._owner(requester_id)
@@ -214,6 +221,8 @@ class MarketService:
         fx, rates, warnings = [], [], []
         if self.provider.mode == "replay":
             warnings.append("전달받은 기록 파일을 재생한 결과입니다. ECOS 실시간 응답으로 검증한 값이 아닙니다.")
+        if hasattr(self.provider, "notes"):
+            warnings += await self.provider.notes(start, end)
         for series, result in zip(SERIES, results):
             row = {"code": series.code, "name": series.name, "unit": series.unit}
             accepted, held = [], []
@@ -252,16 +261,16 @@ class MarketService:
                     "mode": self.provider.mode, "fetched_at": datetime.now(timezone.utc).isoformat(),
                     "fx": fx, "rates": rates, "warnings": warnings}
         snapshot["markdown"] = snapshot_markdown(snapshot)
-        await asyncio.to_thread(self._write, "snapshots", snapshot)
+        await self._write("snapshots", snapshot)
         return {**{k: v for k, v in snapshot.items() if k != "owner_user_id"}, "snapshot_id": snapshot["id"]}
 
     async def save_morning_report(self, requester_id: str, snapshot_id: str, summary: str = "",
                                   template_selection_id: str | None = None) -> dict:
         if not isinstance(summary, str) or len(summary) > 2000:
             raise MarketError("요약은 2,000자 이내의 문자열이어야 합니다.")
-        snapshot = await asyncio.to_thread(self._read, "snapshots", snapshot_id, requester_id)
+        snapshot = await self._read("snapshots", snapshot_id, requester_id)
         if template_selection_id:
-            selection = await asyncio.to_thread(self._read, "template_selections", template_selection_id, requester_id)
+            selection = await self._read("template_selections", template_selection_id, requester_id)
             template = selection["template"]
             # 내용은 읽은 버전으로 고정하되, 관리자가 사용 중단/삭제한 양식으로 새 보고서를 만들지는 않는다.
             await asyncio.to_thread(self.templates.get, template["id"])
@@ -295,14 +304,14 @@ class MarketService:
             bindings = {**snapshot_parts(scoped), "base_date": snapshot["base_date"],
                         "summary": summary if check["passed"] else note, "prepared_by": requester_id, "report_id": report["id"]}
             report["markdown"] = render_template(template, bindings, available) + "\n\n" + note
-        await asyncio.to_thread(self._write, "reports", report)
+        await self._write("reports", report)
         return {"report_id": report["id"], "base_date": report["base_date"], "mode": report["mode"],
                 "check": check, "template": {key: template[key] for key in ("id", "name", "version", "hash")},
                 **({"document": report["document"], "text": document_text(report["document"])}
                    if "document" in report else {"markdown": report["markdown"]})}
 
     async def get_morning_report(self, requester_id: str, report_id: str) -> dict:
-        report = await asyncio.to_thread(self._read, "reports", report_id, requester_id)
+        report = await self._read("reports", report_id, requester_id)
         return {"report_id": report["id"], "base_date": report["base_date"], "mode": report["mode"],
                 "check": report["check"], "template": report.get("template"),
                 **({"document": report["document"], "text": document_text(report["document"])}

@@ -204,7 +204,7 @@ async def test_legacy_saved_report_is_not_rewritten(service):
     ident = "b" * 32
     legacy = {"id": ident, "owner_user_id": "kim", "base_date": "2026-11-18", "mode": "replay",
               "check": {"passed": True}, "markdown": "# 이전 보고서\n\n보존할 원문"}
-    service._write("reports", legacy)
+    await service._write("reports", legacy)
     loaded = await service.get_morning_report("kim", ident)
     assert loaded["markdown"] == legacy["markdown"] and "document" not in loaded
-    assert service._read("reports", ident, "kim") == legacy
+    assert await service._read("reports", ident, "kim") == legacy

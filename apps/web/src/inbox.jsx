@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, Trash2 } from 'lucide-react';
 import { request } from './api';
 
-// 내 알림함 (UC-03). 서버가 본인 알림만 돌려준다.
+// 내 알림함 (UC-03 만기 알림, UC-05 고객 안내 발송·반려 결과). 서버가 본인 알림만 돌려준다.
 const BUCKETS = ['만기 경과', '7일 이내', '8~30일'];
 const BUCKET_TONE = { '만기 경과': 'off', '7일 이내': 'wait', '8~30일': '' };
 
@@ -11,7 +11,22 @@ function Counts({ counts }) {
     <span key={bucket} className={'badge ' + BUCKET_TONE[bucket]}>{bucket} {counts?.[bucket] ?? 0}</span>)}</span>;
 }
 
+const NOTICE_STATUS = { sent: ['보냄', ''], failed: ['실패', 'off'], unknown: ['확인 필요', 'wait'], rejected: ['반려', 'off'], timeout: ['시간 초과', 'off'] };
+
+function NoticeResult({ alert }) {
+  const { payload } = alert;
+  const [label, tone] = NOTICE_STATUS[payload.status] ?? [payload.status, ''];
+  return <article className="panel inbox-detail">
+    <h2>{alert.title}</h2>
+    <p className="muted">받은 시각 {new Date(alert.created_at).toLocaleString()}</p>
+    <p><span className={'badge ' + tone}>{label}</span> {payload.customer} · {payload.loan_id} · 만기일 {payload.maturity_date}</p>
+    <p className="muted">제목: {payload.subject}</p>
+    {alert.summary && <p className="inbox-summary">{alert.summary}</p>}
+  </article>;
+}
+
 function AlertDetail({ alert }) {
+  if (alert.kind === 'notice_result') return <NoticeResult alert={alert} />;
   const { payload } = alert;
   const first = new Set(payload.first_look ?? []);
   return <article className="panel inbox-detail">
@@ -36,17 +51,29 @@ function AlertDetail({ alert }) {
   </article>;
 }
 
-export function InboxPage({ user, notify }) {
+export function InboxPage({ user, notify, onChange }) {
   const [items, setItems] = useState([]);
   const [selected, setSelected] = useState(null);
 
   const load = useCallback(async () => {
-    try { setItems(await request(user, '/inbox')); } catch (error) { notify(error.message); }
-  }, [user, notify]);
+    try {
+      const list = await request(user, '/inbox');
+      setItems(list);
+      onChange?.(list.filter(item => !item.read_at).length);
+    } catch (error) { notify(error.message); }
+  }, [user, notify, onChange]);
   useEffect(() => { load(); setSelected(null); }, [load]);
 
   async function open(id) {
     try { setSelected(await request(user, '/inbox/' + id)); await load(); } catch (error) { notify(error.message); }
+  }
+
+  async function remove(id) {
+    try {
+      await request(user, '/inbox/' + id, { method: 'DELETE' });
+      if (selected?.alert_id === id) setSelected(null);
+      await load();
+    } catch (error) { notify(error.message); }
   }
 
   return <>
@@ -56,8 +83,9 @@ export function InboxPage({ user, notify }) {
       <button className="inbox-open" onClick={() => open(item.alert_id)}>
         <strong>{!item.read_at && <span className="status-dot" />}{item.title}</strong>
         <span className="muted">{new Date(item.created_at).toLocaleString()}</span>
-        <Counts counts={item.counts} />
+        {item.kind === 'maturity_alert' && <Counts counts={item.counts} />}
       </button>
+      <button className="icon quiet" onClick={() => remove(item.alert_id)} title="알림 지우기" aria-label={`알림 지우기: ${item.title}`}><Trash2 size={15} /></button>
     </li>)}</ul> : <p className="muted">받은 알림이 없습니다. 채팅에서 "대출 만기 알림" 에이전트에게 요청해 보세요.</p>}
     {selected && <AlertDetail alert={selected} />}
   </>;
