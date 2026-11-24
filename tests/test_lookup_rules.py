@@ -137,3 +137,17 @@ def test_answer_check_pieces():
     assert false_completion("알림함으로 보냈습니다.", False) and not false_completion("알림함으로 보냈습니다.", True)
     assert not false_completion("메일은 보내지 않았습니다.", False) and not false_completion("회의록을 정리했습니다.", False)
     assert check_answer("만기 12건", sources=[LOANS], grounded=False, wrote=False).ok  # 조회 안 한 답은 숫자를 보지 않는다
+
+
+async def test_notice_agent_is_forced_to_prepare_when_it_only_talks():
+    """UC-05 에이전트에는 loans_maturing 이 없다. 말로만 답하면 안내문 준비 툴로 조회를 강제한다 (실측 실패 사례)."""
+    log = []
+    runner, llm = harness([
+        {"content": "7일 안에 만기되는 고객의 안내 메일을 준비해드릴게요. 이대로 보낼까요?"},
+        {"tool_calls": [{"id": "p1", "name": "prepare_maturity_notices", "arguments": {"days": 7}}]},
+        {"content": "안내 메일 3건을 준비했습니다. 이대로 보낼까요?"},
+    ], [tool("prepare_maturity_notices", LOANS, log=log), tool("send_maturity_notice", effect="send")])
+    result = await runner.run("7일 안에 만기되는 고객 안내 메일 준비해줘", KIM, "s")
+    assert log == ["prepare_maturity_notices"] and result.final_message.content.startswith("안내 메일 3건")
+    assert [t.name for t in llm.calls[1][1]] == ["prepare_maturity_notices"]
+    assert "prepare_maturity_notices 툴만" in llm.calls[1][0][-1].content

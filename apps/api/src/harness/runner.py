@@ -118,7 +118,7 @@ class AgentRunner:
 
         done: list[DoneTool] = []  # 이번 run 에서 성공한 툴 실행 (거부 시 마무리 답변에 씀)
         by_name = {s.name: s for s in specs}
-        rules = [(rule, by_name[rule.tool]) for rule in self.rules if rule.tool in by_name]
+        rules = [(rule, by_name[name]) for rule in self.rules if (name := rule.available(by_name))]
         rule_tools = frozenset().union(*(rule.grounded_tools for rule, _ in rules)) if rules else frozenset()
         doc_rule = next((rule for rule, _ in rules if isinstance(rule, RequireSearch)), None)
         succeeded: set[str] = set()  # 이번 run 에서 성공한 툴 이름
@@ -161,7 +161,7 @@ class AgentRunner:
             elif force_rule is not None:
                 rule, spec = force_rule
                 force_rule = None
-                reply = rule.forced_call(await self._ask_tool(messages, rule, spec), user_input)
+                reply = rule.forced_call(await self._ask_tool(messages, rule, spec), user_input, spec.name)
                 if reply is None:
                     final = Message("assistant", rule.unavailable)
                     messages.append(final)
@@ -200,7 +200,7 @@ class AgentRunner:
                 if pending and turn + 2 <= self.max_turns:
                     forced_rules.add(pending[0].tool)
                     force_rule = pending
-                    log.info("조회 없이 쓴 답이라 %s 를 강제합니다 (run %s)", pending[0].tool, run_id)
+                    log.info("조회 없이 쓴 답이라 %s 를 강제합니다 (run %s)", pending[1].name, run_id)
                     continue
                 # 문서 검색이 모두 0건이면 검색어를 바꿔 한 번 더, 그래도 없으면 고정 문구 (결정 사항 1번)
                 if (doc_rule and search_hits and not any(search_hits)
@@ -363,12 +363,21 @@ class AgentRunner:
                     body = ("사용할 양식:\n" + template["name"] + "\n" + template["description"][:400]
                             + "\n요약 작성 조건:\n" + template.get("summary_instructions", "")
                             + "\n양식 목차:\n" + outline + "\n확인한 수치:\n" + json.dumps(values, ensure_ascii=False))
-                reply = (await self.llm.chat([
+                prompt = [
                     Message("system", "은행 직원용 시장 리포트의 요약만 한국어 3문장 이내의 평문으로 작성한다. 양식 목차는 다룰 범위를 알려 주는 참고일 뿐이니 목차의 제목·항목 이름(예: '주요 환율:')을 쓰지 말고, 제목·목록·굵은 글씨 없이 문장만 쓴다. 선택한 양식의 목적과 항목 범위만 다루고 양식 전체를 다시 쓰지 않는다. 표의 수치와 단위를 그대로 쓰고 전망·원인 추측·투자 권유를 쓰지 않는다. 기록 재생이면 실시간이라고 하지 않는다. 실제 기준일이 요청일보다 과거이면 관측일 이후에도 변동이 없었다고 단정하지 않는다."),
                     Message("user", body),
-                ], [])).message
+                ]
+                reply = (await self.llm.chat(prompt, [])).message
                 calls_used = 1
+                problem = _summary_problem(_plain_summary(reply.content, outline if selection else ""), data)
+                if problem:  # 저장 전에 같은 검사를 해 보고, 걸리면 이유를 알려 주고 한 번만 다시 쓰게 한다
+                    reply = (await self.llm.chat([*prompt, Message("assistant", reply.content), Message("user", problem)], [])).message
+                    calls_used = 2
                 summary = _plain_summary(reply.content, outline if selection else "") if len(reply.content) <= 2000 else ""
+                if summary and _summary_problem(summary, data):
+                    # 다시 써도 걸리면 걸리는 문장만 빼고, 남은 문장이 검사를 통과할 때만 쓴다
+                    kept = " ".join(p for p in re.split(r"(?<=[.!?다])\s+", summary) if p and not _summary_problem(p, data))
+                    summary = kept if kept and not _summary_problem(kept, data) else summary
             except Exception:
                 # 시장 수치/표는 모델 없이도 확인 가능하다. 연결 실패 시 지어낸 요약을 사용하지 않는다.
                 calls_used = 1
@@ -467,7 +476,7 @@ class AgentRunner:
         LLM 이 특정 툴 호출 강제(tool_choice)를 지원하면 그걸 쓴다 (심사 등록 강제와 같은 방식).
         지원하지 않거나 그래도 안 부르면 rule.forced_call 이 질문에서 뽑은 인자로 직접 부른다.
         """
-        prompt = [*messages, rule.nudge()]
+        prompt = [*messages, rule.nudge(spec.name)]
         try:
             if isinstance(self.llm, RequiredToolLLMClient):
                 return (await self.llm.chat_required_tool(prompt, spec)).message
@@ -589,3 +598,18 @@ def _plain_summary(text: str, outline: str) -> str:
         text = re.sub(rf"(?m)(^|(?<=[\s.]))(?:\d+[.)]\s*)?{re.escape(heading)}\s*[:：]\s*", r"\1", text)
     text = re.sub(r"(?m)^\s*[-•]\s*", "", text)
     return re.sub(r"\s*\n\s*", " ", text).strip()
+
+
+def _summary_problem(summary: str, snapshot: dict) -> str:
+    """시장 리포트 저장 때와 같은 요약 검사 (market_mcp.service.check_summary). 통과하면 빈 문자열."""
+    try:
+        from market_mcp.service import check_summary
+
+        check = check_summary(summary, snapshot)
+    except Exception:
+        return ""
+    if check.get("passed"):
+        return ""
+    reasons = [*(f"표에 없는 숫자 {n}" for n in check.get("numbers_not_in_table", [])), *check.get("forbidden_words", [])]
+    return ("방금 요약은 검사를 통과하지 못했다: " + ", ".join(reasons or ["3문장 초과"]) +
+            ". 표에 있는 수치만 쓰고, 관측하지 않은 기간의 변동 여부를 단정하지 말고, 3문장 이내 평문으로 다시 써라.")

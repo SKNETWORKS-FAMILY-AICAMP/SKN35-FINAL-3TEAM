@@ -69,6 +69,11 @@ class LookupRule:
     tool: str
     grounded_tools: frozenset[str]
     unavailable: str = "요청한 내용을 실제로 조회하지 못해 답할 수 없습니다. 잠시 뒤 다시 요청해 주세요."
+    alternatives: tuple[str, ...] = ()  # 에이전트에 tool 이 없을 때 대신 부를 조회 툴 (같은 인자)
+
+    def available(self, names) -> str | None:
+        """에이전트가 가진 툴 중 이 규칙이 부를 툴 (없으면 None → 규칙을 쓰지 않음)."""
+        return next((name for name in (self.tool, *self.alternatives) if name in names), None)
 
     def needed(self, question: str, answer: str, used_other_tools: bool = False) -> bool:
         raise NotImplementedError
@@ -77,20 +82,21 @@ class LookupRule:
         """하네스가 직접 부를 때의 인자. None 이면 직접 부르지 않는다."""
         return {}
 
-    def nudge_text(self) -> str:
-        return f"방금 답은 실제 조회 없이 쓴 것이라 쓸 수 없다. 지금은 {self.tool} 툴만 호출하라."
+    def nudge_text(self, tool: str) -> str:
+        return f"방금 답은 실제 조회 없이 쓴 것이라 쓸 수 없다. 지금은 {tool} 툴만 호출하라."
 
-    def nudge(self) -> Message:
-        return Message("user", self.nudge_text())
+    def nudge(self, tool: str | None = None) -> Message:
+        return Message("user", self.nudge_text(tool or self.tool))
 
-    def forced_call(self, reply: Message | None, question: str) -> Message | None:
+    def forced_call(self, reply: Message | None, question: str, tool: str | None = None) -> Message | None:
         """LLM 이 이 툴을 불렀으면 그 호출만 남기고, 아니면 하네스가 만든 호출. 만들 수 없으면 None."""
-        calls = tuple(c for c in (reply.tool_calls if reply else ()) if c.tool_name == self.tool)
+        tool = tool or self.tool
+        calls = tuple(c for c in (reply.tool_calls if reply else ()) if c.tool_name == tool)
         if not calls:
             args = self.arguments(question)
             if args is None:
                 return None
-            calls = (LLMToolCall(f"forced_{uuid.uuid4().hex[:12]}", self.tool, args),)
+            calls = (LLMToolCall(f"forced_{uuid.uuid4().hex[:12]}", tool, args),)
         return Message("assistant", "", tool_calls=calls)
 
 
@@ -116,7 +122,7 @@ class RequireSearch(LookupRule):
     def arguments(self, question: str) -> dict:
         return {self.query_arg: keyword_query(question)}
 
-    def nudge_text(self) -> str:
+    def nudge_text(self, tool: str) -> str:
         return NUDGE
 
     def retry_arguments(self, question: str, tried: set[str]) -> dict | None:
@@ -140,6 +146,7 @@ class LoanLookup(LookupRule):
     grounded_tools: frozenset[str] = field(default_factory=lambda: frozenset(
         {"loans_maturing", "send_maturity_alert", "prepare_maturity_notices", "send_maturity_notice", "fill_document"}))
     unavailable: str = "담당 대출을 조회하지 못해 만기 대출을 안내할 수 없습니다. 잠시 뒤 다시 요청해 주세요."
+    alternatives: tuple[str, ...] = ("prepare_maturity_notices",)  # UC-05 에이전트는 안내문 준비로 조회한다
 
     def needed(self, question: str, answer: str, used_other_tools: bool = False) -> bool:
         return bool(_LOAN_QUESTION.search(question) and _LOAN_TARGET.search(question)
@@ -150,9 +157,9 @@ class LoanLookup(LookupRule):
         days = int(found.group(1)) if found else 30
         return {"days": min(max(days, 1), 90)}
 
-    def nudge_text(self) -> str:
+    def nudge_text(self, tool: str) -> str:
         return ("방금 답은 담당 대출을 조회하지 않고 쓴 것이라 쓸 수 없다. 건수·고객·만기일을 지어내지 말고 "
-                "지금은 loans_maturing 툴만 호출하라. 기간(days)은 질문에 있으면 그 값, 없으면 30.")
+                f"지금은 {tool} 툴만 호출하라. 기간(days)은 질문에 있으면 그 값, 없으면 30.")
 
 
 _MARKET_QUESTION = re.compile(r"금리|환율")
@@ -176,8 +183,8 @@ class MarketLookup(LookupRule):
         found = _ISO_DAY.search(question)
         return {"base_date": f"{found[1]}-{int(found[2]):02d}-{int(found[3]):02d}"} if found else {}
 
-    def nudge_text(self) -> str:
-        return "방금 답은 시장 수치를 조회하지 않고 쓴 것이라 쓸 수 없다. 수치를 지어내지 말고 지금은 market_snapshot 툴만 호출하라."
+    def nudge_text(self, tool: str) -> str:
+        return f"방금 답은 시장 수치를 조회하지 않고 쓴 것이라 쓸 수 없다. 수치를 지어내지 말고 지금은 {tool} 툴만 호출하라."
 
 
 DEFAULT_RULES: tuple[LookupRule, ...] = (RequireSearch(), LoanLookup(), MarketLookup())
