@@ -125,16 +125,21 @@ uv run python scripts/db/seed_docs.py
 ```
 
 - 기업은행 내규 10개: 전사 공개, 보안등급 1, 제목 "기업은행 ○○규정" (목록은 `data/seed_docs/manifest.yaml`)
-- 벡터 DB 에는 전사 공개 문서(기업은행 내규 10개)만 넣는다. 예전 "개인채무자 FAQ (부서 10 전용 시험)" 은 11/24 에 뺐다 (이미 넣었다면 아래 "FAQ 끄기")
+- 벡터 DB 에는 전사 공개 문서(기업은행 내규 10개)만 넣는다. 예전 "개인채무자 FAQ (부서 10 전용 시험)" 은 11/24 에 뺐다 (이미 넣었다면 아래 "FAQ 삭제")
 - 처음에는 약 10분 (조각 528개). 다시 돌려도 이미 있는 문서는 건너뛴다
 - 확인: 화면 왼쪽 **사내 문서** 에 "전사 공개 문서 10개 · 검색 조각 528개"
 
-**FAQ 끄기** (11/24 전에 7단계를 한 사람만, 한 번): 예전 목록의 시험 문서를 검색·목록에서 뺀다. 지우지 않고 '폐기'(retired) 로 바꾼다.
+**FAQ 삭제** (11/24 전에 7단계를 한 사람만, 한 번): 예전 목록의 시험 문서는 우리 기조(전사 문서만)와 맞지 않아 DB 에서 지운다.
 
 ```bash
-sudo -u postgres psql -d agent_platform -c "UPDATE doc SET status = 'retired' WHERE title = '개인채무자 FAQ (부서 10 전용 시험)'"
-# UPDATE 1 이면 끝. UPDATE 0 이면 원래 없던 것이라 할 일 없음
+# 1) 파일 위치 확인: 나온 경로(documents/번호/v1/…)의 '번호'를 메모. 아무것도 안 나오면 원래 없던 것이라 끝
+sudo -u postgres psql -d agent_platform -tAc "SELECT v.storage_path FROM doc d JOIN doc_version v ON v.doc_id = d.id WHERE d.title = '개인채무자 FAQ (부서 10 전용 시험)'"
+# 2) DB 에서 삭제: 문서 1건이 지워지면 버전·검색 조각도 같이 지워진다. DELETE 1 이면 끝
+sudo -u postgres psql -d agent_platform -c "DELETE FROM doc WHERE title = '개인채무자 FAQ (부서 10 전용 시험)'"
 ```
+
+3) 파일 폴더 삭제: 저장소의 `data\storage\documents\<1)에서 메모한 번호>` 폴더를 지운다 (`.env` 의 `STORAGE_ROOT` 를 바꿨다면 그 폴더 아래).
+DB 행을 지운 뒤라 이 폴더는 아무 데서도 쓰지 않는다. 영구 삭제라 되돌리려면 파일부터 다시 등록해야 한다.
 
 ## 자주 막히는 곳
 
