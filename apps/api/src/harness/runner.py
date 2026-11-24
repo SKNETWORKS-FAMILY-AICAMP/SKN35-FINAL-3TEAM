@@ -364,11 +364,11 @@ class AgentRunner:
                             + "\n요약 작성 조건:\n" + template.get("summary_instructions", "")
                             + "\n양식 목차:\n" + outline + "\n확인한 수치:\n" + json.dumps(values, ensure_ascii=False))
                 reply = (await self.llm.chat([
-                    Message("system", "은행 직원용 시장 리포트의 요약만 한국어 3문장 이내로 작성한다. 선택한 양식의 목적과 항목 범위만 다루고 양식 전체를 다시 쓰지 않는다. 표의 수치와 단위를 그대로 쓰고 전망·원인 추측·투자 권유를 쓰지 않는다. 기록 재생이면 실시간이라고 하지 않는다. 실제 기준일이 요청일보다 과거이면 관측일 이후에도 변동이 없었다고 단정하지 않는다."),
+                    Message("system", "은행 직원용 시장 리포트의 요약만 한국어 3문장 이내의 평문으로 작성한다. 양식 목차는 다룰 범위를 알려 주는 참고일 뿐이니 목차의 제목·항목 이름(예: '주요 환율:')을 쓰지 말고, 제목·목록·굵은 글씨 없이 문장만 쓴다. 선택한 양식의 목적과 항목 범위만 다루고 양식 전체를 다시 쓰지 않는다. 표의 수치와 단위를 그대로 쓰고 전망·원인 추측·투자 권유를 쓰지 않는다. 기록 재생이면 실시간이라고 하지 않는다. 실제 기준일이 요청일보다 과거이면 관측일 이후에도 변동이 없었다고 단정하지 않는다."),
                     Message("user", body),
                 ], [])).message
                 calls_used = 1
-                summary = reply.content if len(reply.content) <= 2000 else ""
+                summary = _plain_summary(reply.content, outline if selection else "") if len(reply.content) <= 2000 else ""
             except Exception:
                 # 시장 수치/표는 모델 없이도 확인 가능하다. 연결 실패 시 지어낸 요약을 사용하지 않는다.
                 calls_used = 1
@@ -578,3 +578,14 @@ def _hit_count(content: str) -> int:
         return 1
     matches = data.get("matches") if isinstance(data, dict) else None
     return len(matches) if isinstance(matches, list) else 1
+
+
+def _plain_summary(text: str, outline: str) -> str:
+    """요약에서 양식 항목 이름 머리("한눈에 보는 요약:", "**주요 환율**:")와 마크다운 기호를 뗀다 (문장만 남김)."""
+    headings = {re.sub(r"^\s*(?:#+\s*)?(?:\d+[.)]\s*)?", "", line).strip() for line in outline.splitlines()} - {""}
+    headings |= {"요약", "핵심 요약", "한눈에 보는 요약"}  # 수치 이름(기준금리 등)은 문장의 주어라 남긴다
+    text = re.sub(r"[*#`>]+", "", text)
+    for heading in sorted(headings, key=len, reverse=True):
+        text = re.sub(rf"(?m)(^|(?<=[\s.]))(?:\d+[.)]\s*)?{re.escape(heading)}\s*[:：]\s*", r"\1", text)
+    text = re.sub(r"(?m)^\s*[-•]\s*", "", text)
+    return re.sub(r"\s*\n\s*", " ", text).strip()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import asyncio
+import re
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -43,6 +44,16 @@ class Source:
 
 
 MAX_SOURCES = 5
+
+
+def tool_names_to_labels(text: str, labels: dict[str, str]) -> str:
+    """답에 섞여 나온 툴 이름(send_maturity_notice, `fill_document` 등)을 화면 이름으로 바꾼다.
+    직원에게는 툴 이름이 의미가 없고, 모델이 툴 설명을 그대로 옮겨 적는 일이 잦다."""
+    for name in sorted(labels, key=len, reverse=True):
+        label = labels[name]
+        if label and label != name and "_" in name:
+            text = re.sub(rf"`?\b{re.escape(name)}\b(?:\(\))?`?", f"'{label}'", text)
+    return text
 
 
 def sources(new_messages: list[Message]) -> list[Source]:
@@ -235,11 +246,11 @@ async def send_message(
         await svc.sessions.record_turn(session, run_id, result.stop_reason, result.llm_calls, new,
                                        denial=result.denial)  # DB 저장소면 기록 (거부 내용 포함)
 
+    labels = {s.name: s.label for s in specs}
     if result.final_message is not None:
-        text = strip_empty_citation(result.final_message.content)
+        text = tool_names_to_labels(strip_empty_citation(result.final_message.content), labels)
     else:
         text = "요청을 처리하는 데 단계가 너무 많아 중단했습니다. 요청을 나눠서 다시 시도해 주세요."
-    labels = {s.name: s.label for s in specs}
     return ChatTurn(
         session.session_id, run_id, result.stop_reason, text, tool_events(new, labels), result.denial, sources(new),
     )
