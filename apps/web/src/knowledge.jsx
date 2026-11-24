@@ -6,12 +6,10 @@ import { BookOpen } from 'lucide-react';
 // '내 문서'(에이전트가 만든 PDF·DOCX) 와는 다른 화면이다.
 export const KnowledgeIcon = BookOpen;
 
-// 앱에 공통 .badge 모양이 없어서 이 화면 안에서만 쓴다 (style.css 는 다른 사람 작업과 겹치기 쉬워 건드리지 않음)
-const tag = {
-  display: 'inline-block', marginLeft: 6, padding: '1px 7px', borderRadius: 999, verticalAlign: 'middle',
-  border: '1px solid var(--accent-line, #2c3f5e)', color: 'var(--accent-ink, #9ec1ff)',
-  background: 'var(--accent-soft, transparent)', fontSize: '.75rem', fontWeight: 500,
-};
+function formatDate(value) {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? '-' : `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`;
+}
 
 export function KnowledgePage({ load, notify }) {
   const [state, setState] = useState({ loading: true, enabled: true, docs: [] });
@@ -31,11 +29,13 @@ export function KnowledgePage({ load, notify }) {
   const total = state.docs.reduce((sum, doc) => sum + doc.chunks, 0);
   return <>
     <p className="muted">전사 공개 문서 {state.docs.length}개 · 검색 조각 {total.toLocaleString()}개</p>
-    <ul className="tool-catalog">{state.docs.map(doc => <li className="panel catalog-tool" key={doc.doc_id}>
-      <span className="hero-icon small"><BookOpen size={21} aria-hidden="true" /></span>
-      <div>
-        <h2>{doc.title}<span style={tag}>{doc.category}</span><span style={tag}>전사 공개</span></h2>
-        <p>{doc.file_name} · 조각 {doc.chunks}개 · 등록 {new Date(doc.registered_at).toLocaleDateString()}</p>
+    <ul className="doc-grid">{state.docs.map(doc => <li className="panel doc-card" key={doc.doc_id}>
+      <span className="hero-icon small"><BookOpen size={20} aria-hidden="true" /></span>
+      <div className="doc-body">
+        <h2 title={doc.title}>{doc.title}</h2>
+        <p className="doc-tags"><span className="badge dept">{doc.category}</span><span className="badge company">전사 공개</span></p>
+        <p className="doc-file" title={doc.file_name}>{doc.file_name}</p>
+        <p className="doc-meta"><span>조각 {doc.chunks.toLocaleString()}개</span><span>등록 {formatDate(doc.registered_at)}</span></p>
       </div>
     </li>)}</ul>
   </>;
