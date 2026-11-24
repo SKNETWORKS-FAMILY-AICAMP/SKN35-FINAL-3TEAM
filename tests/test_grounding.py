@@ -11,12 +11,15 @@ KIM = Principal("kim")
 FOUND = '{"query": "서류 반려", "matches": [{"title": "공통 지침", "location": "제2절 1항", "preview": "..."}]}'
 
 
+PARSED = '{"filename": "업무지침.hwpx", "elements": [{"heading_path": ["제1장 총칙"], "text": "..."}]}'
+
+
 def build(script, *, tools=("search_doc", "today"), max_turns=5, require=True, checker=None):
     llm = ScriptedLLM(script)
     log: list[str] = []
     audit = MemoryAudit()
     harness = create_harness(
-        llm=llm, tools=FakeRegistry([FakeTool(n, output=FOUND if n == "search_doc" else "ok", log=log) for n in tools]),
+        llm=llm, tools=FakeRegistry([FakeTool(n, output={"search_doc": FOUND, "parse_doc": PARSED}.get(n, "ok"), log=log) for n in tools]),
         checker=checker or ScriptedChecker({}), approver=FixedApprover(True), audit=audit, max_turns=max_turns,
         require_search=RequireSearch() if require else None,
     )

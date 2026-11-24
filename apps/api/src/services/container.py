@@ -11,7 +11,7 @@ from openai import NotFoundError
 
 from contracts.harness import LLMClient
 from contracts.permission import AuditLogger, Decision, PermissionChecker
-from harness.grounding import RequireSearch
+from harness.grounding import DEFAULT_RULES, LookupRule
 from harness.llm import OpenAICompatLLM
 from harness.local_math import LocalMathClient
 from permission import create_checker
@@ -88,7 +88,8 @@ class AppServices:
     max_turns: int = 10
     tool_timeout: float | None = 30.0
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
-    require_search: RequireSearch | None = field(default_factory=RequireSearch)  # 문서 질문 검색 강제. None 이면 끔
+    # 조회 규칙 (harness/grounding.py): 문서·만기 대출·금리·환율 질문은 조회 결과 없이 답하지 않는다. () 면 끔
+    lookup_rules: tuple[LookupRule, ...] = DEFAULT_RULES
     require_review_lookup: bool = True  # 심사 건의 상태는 실제 조회 결과로만 안내
     auth: AuthService | None = None  # AUTH_MODE=session 이면 로그인(쿠키·DB 세션). None 이면 개발용 X-User-Id
 

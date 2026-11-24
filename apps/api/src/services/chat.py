@@ -199,7 +199,7 @@ async def send_message(
     harness = create_harness(
         llm=svc.llm, tools=tools, checker=svc.checker, approver=svc.approvals,
         audit=svc.audit, max_turns=svc.max_turns, tool_timeout=svc.tool_timeout,
-        require_search=svc.require_search,
+        lookup_rules=svc.lookup_rules,
         require_review_lookup=svc.require_review_lookup,
     )
     run_id = str(uuid.uuid4())

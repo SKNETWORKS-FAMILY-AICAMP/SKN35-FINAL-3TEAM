@@ -33,7 +33,8 @@ from contracts.permission import (
     ToolCall,
 )
 from harness.denial import DoneTool, template_reply
-from harness.grounding import RequireSearch
+from harness.answer_check import WRITE_EFFECTS, check_answer, drop_sentences_with, log_blocked
+from harness.grounding import LookupRule, RequireSearch
 from harness.review_grounding import LOOKUP_TOOL, SUBMISSION_TOOL, ReviewLookupGuard
 from harness.attachment_grounding import compact_system, evidence_problem, extractive_reply, parse_record, read_call
 from harness.market_grounding import market_plan
@@ -70,6 +71,8 @@ class AgentRunner:
         tool_timeout: float | None = DEFAULT_TOOL_TIMEOUT,
         require_search: RequireSearch | None = None,
         require_review_lookup: bool = False,
+        lookup_rules: tuple[LookupRule, ...] | None = None,
+        check_answers: bool = True,
     ) -> None:
         self.llm = llm
         self.tools = tools
@@ -78,8 +81,11 @@ class AgentRunner:
         self.audit = audit
         self.max_turns = max_turns
         self.tool_timeout = tool_timeout  # None 이면 제한 없음
-        self.require_search = require_search  # 문서 질문이면 검색 강제 (harness/grounding.py)
+        # 조회 규칙 (harness/grounding.py). lookup_rules 가 없으면 예전 설정(require_search)만 쓴다
+        self.rules: tuple[LookupRule, ...] = (lookup_rules if lookup_rules is not None
+                                              else (require_search,) if require_search else ())
         self.require_review_lookup = require_review_lookup
+        self.check_answers = check_answers  # 최종 답 검사 (harness/answer_check.py)
 
     async def run(
         self,
@@ -111,11 +117,20 @@ class AgentRunner:
             return RunResult(final, messages, 0, "completed")
 
         done: list[DoneTool] = []  # 이번 run 에서 성공한 툴 실행 (거부 시 마무리 답변에 씀)
-        rs = self.require_search
-        search_spec = next((s for s in specs if rs and s.name == rs.search_tool), None)
-        grounded = False  # 이번 run 에서 문서 툴이 성공했는가
-        force_search = False  # 다음 호출은 검색 강제
-        forced = False  # run 당 한 번만
+        by_name = {s.name: s for s in specs}
+        rules = [(rule, by_name[rule.tool]) for rule in self.rules if rule.tool in by_name]
+        rule_tools = frozenset().union(*(rule.grounded_tools for rule, _ in rules)) if rules else frozenset()
+        doc_rule = next((rule for rule, _ in rules if isinstance(rule, RequireSearch)), None)
+        succeeded: set[str] = set()  # 이번 run 에서 성공한 툴 이름
+        wrote = False  # 이번 run 에서 쓰기(write·send) 툴이 성공했는가
+        forced_rules: set[str] = set()  # 규칙마다 run 당 한 번만 강제
+        force_rule: tuple[LookupRule, object] | None = None  # 다음 호출은 이 규칙의 조회 강제
+        search_hits: list[int] = []  # 문서 검색 결과 건수 (0건이면 한 번 더 찾는다)
+        tried_queries: set[str] = set()
+        research_call: LLMToolCall | None = None
+        researched = False
+        answer_nudge: str | None = None  # 답 검사에 걸려 다시 쓰게 할 때의 안내
+        answer_retried = False
         retry_review = False
         retry_submission: tuple[str, ...] = ()
 
@@ -143,9 +158,21 @@ class AgentRunner:
                     messages.append(final)
                     return RunResult(final, messages, turn, "completed")
                 reply = Message("assistant", "", tool_calls=calls)
-            elif force_search:
-                force_search = False
-                reply = rs.forced_call(await self._ask_search(messages, rs, search_spec), user_input)
+            elif force_rule is not None:
+                rule, spec = force_rule
+                force_rule = None
+                reply = rule.forced_call(await self._ask_tool(messages, rule, spec), user_input)
+                if reply is None:
+                    final = Message("assistant", rule.unavailable)
+                    messages.append(final)
+                    return RunResult(final, messages, turn, "completed")
+            elif research_call is not None:
+                reply = Message("assistant", "", tool_calls=(research_call,))
+                research_call = None
+            elif answer_nudge is not None:
+                # 검사에 걸린 답은 기록에 넣지 않고, 이유를 붙여 한 번 더 쓰게 한다 (툴도 같이 준다)
+                reply = (await self.llm.chat([*messages, Message("user", answer_nudge)], specs)).message
+                answer_nudge = None
             else:
                 reply = (await self.llm.chat(list(messages), specs)).message
 
@@ -165,12 +192,39 @@ class AgentRunner:
                         final = Message("assistant", review.summary())
                     messages.append(final)
                     return RunResult(final, messages, turn, "completed")
-                # 문서 근거 없이 규정을 답했으면 그 답은 버리고 검색부터 시킨다 (강제 검색 + 답 쓰기 2회가 남아 있을 때만)
-                if (search_spec and not grounded and not forced and turn + 2 <= self.max_turns
-                        and rs.needed(user_input, reply.content, used_other_tools=bool(done))):
-                    forced = force_search = True
-                    log.info("문서 근거 없는 답이라 검색을 강제합니다 (run %s)", run_id)
+                # 조회 없이 쓴 답은 버리고 그 조회부터 시킨다 (강제 조회 + 답 쓰기 2회가 남아 있을 때만)
+                pending = next(((rule, spec) for rule, spec in rules
+                                if rule.tool not in forced_rules and not (succeeded & rule.grounded_tools)
+                                and rule.needed(user_input, reply.content,
+                                                used_other_tools=bool(succeeded - rule.grounded_tools))), None)
+                if pending and turn + 2 <= self.max_turns:
+                    forced_rules.add(pending[0].tool)
+                    force_rule = pending
+                    log.info("조회 없이 쓴 답이라 %s 를 강제합니다 (run %s)", pending[0].tool, run_id)
                     continue
+                # 문서 검색이 모두 0건이면 검색어를 바꿔 한 번 더, 그래도 없으면 고정 문구 (결정 사항 1번)
+                if (doc_rule and search_hits and not any(search_hits)
+                        and doc_rule.needed(user_input, reply.content)):
+                    args = None if researched else doc_rule.retry_arguments(user_input, tried_queries)
+                    if args and turn + 2 <= self.max_turns:
+                        researched = True
+                        research_call = LLMToolCall(f"research_{uuid.uuid4().hex[:12]}", doc_rule.tool, args)
+                        continue
+                    final = Message("assistant", doc_rule.unavailable)
+                    messages.append(final)
+                    return RunResult(final, messages, turn, "completed")
+                if self.check_answers:
+                    verdict = check_answer(reply.content, sources=[m.content for m in messages if m.role != "assistant"],
+                                           grounded=bool(succeeded & rule_tools), wrote=wrote)
+                    if not verdict.ok:
+                        await log_blocked({"run_id": run_id, "session_id": session_id, "user_id": principal.user_id,
+                                           "problems": verdict.problems(), "answer": reply.content[:1000],
+                                           "retried": answer_retried})
+                        if not answer_retried and turn < self.max_turns:
+                            answer_retried = True
+                            answer_nudge = verdict.nudge()
+                            continue
+                        reply = Message("assistant", self._fallback(reply.content, verdict, doc_rule))
                 messages.append(reply)
                 return RunResult(reply, messages, turn, "completed")
             messages.append(reply)
@@ -210,7 +264,12 @@ class AgentRunner:
                     if review:
                         review.record(call.tool_name, call.arguments, outcome.message.content)
                     done.append(DoneTool(outcome.label, outcome.message.content, call.tool_name))
-                    grounded = grounded or bool(rs and call.tool_name in rs.grounded_tools)
+                    succeeded.add(call.tool_name)
+                    spec = by_name.get(call.tool_name)
+                    wrote = wrote or bool(spec and spec.effect in WRITE_EFFECTS)
+                    if doc_rule and call.tool_name == doc_rule.tool:
+                        tried_queries.add(str(call.arguments.get(doc_rule.query_arg, "")))
+                        search_hits.append(_hit_count(outcome.message.content))
                 denial = outcome.denial
 
             if denial is not None:
@@ -402,20 +461,30 @@ class AgentRunner:
         messages.append(final)
         return RunResult(final, messages, calls_used, "completed")
 
-    async def _ask_search(self, messages: list[Message], rs: RequireSearch, search_spec) -> Message | None:
-        """검색 툴 하나만 주고 다시 묻는다. 안내 문구는 기록에 남기지 않는다. 실패하면 None (하네스가 직접 검색).
+    async def _ask_tool(self, messages: list[Message], rule: LookupRule, spec) -> Message | None:
+        """조회 툴 하나만 주고 다시 묻는다. 안내 문구는 기록에 남기지 않는다. 실패하면 None (하네스가 직접 조회).
 
         LLM 이 특정 툴 호출 강제(tool_choice)를 지원하면 그걸 쓴다 (심사 등록 강제와 같은 방식).
-        지원하지 않거나 그래도 안 부르면 RequireSearch.forced_call 이 질문에서 뽑은 검색어로 직접 부른다.
+        지원하지 않거나 그래도 안 부르면 rule.forced_call 이 질문에서 뽑은 인자로 직접 부른다.
         """
-        prompt = [*messages, rs.nudge()]
+        prompt = [*messages, rule.nudge()]
         try:
             if isinstance(self.llm, RequiredToolLLMClient):
-                return (await self.llm.chat_required_tool(prompt, search_spec)).message
-            return (await self.llm.chat(prompt, [search_spec])).message
+                return (await self.llm.chat_required_tool(prompt, spec)).message
+            return (await self.llm.chat(prompt, [spec])).message
         except Exception:
-            log.warning("검색 강제 LLM 호출 실패, 질문으로 직접 검색", exc_info=True)
+            log.warning("조회 강제 LLM 호출 실패, 질문으로 직접 조회 (%s)", rule.tool, exc_info=True)
             return None
+
+    @staticmethod
+    def _fallback(answer: str, verdict, doc_rule: RequireSearch | None) -> str:
+        """다시 써도 검사에 걸린 답. 숫자만 틀렸으면 그 문장만 빼고, 아니면 고정 문구."""
+        if verdict.completion:
+            return "요청한 작업을 실제로 실행하지 못했습니다. 아직 보내거나 저장한 것이 없으니 다시 요청해 주세요."
+        if verdict.citations:
+            return doc_rule.unavailable if doc_rule else "조회 결과에서 근거를 확인하지 못해 답할 수 없습니다."
+        kept = drop_sentences_with(answer, verdict.numbers)
+        return kept or "조회 결과와 맞지 않는 숫자가 있어 답을 드릴 수 없습니다. 다시 요청해 주세요."
 
     async def _stop_denied(
         self, messages: list[Message], denial: Denial, done: list[DoneTool], llm_calls: int
@@ -490,9 +559,22 @@ def create_harness(
     tool_timeout: float | None = DEFAULT_TOOL_TIMEOUT,
     require_search: RequireSearch | None = None,
     require_review_lookup: bool = False,
+    lookup_rules: tuple[LookupRule, ...] | None = None,
+    check_answers: bool = True,
 ) -> AgentRunner:
     return AgentRunner(
         llm=llm, tools=tools, checker=checker,
         approver=approver, audit=audit, max_turns=max_turns,
         tool_timeout=tool_timeout, require_search=require_search, require_review_lookup=require_review_lookup,
+        lookup_rules=lookup_rules, check_answers=check_answers,
     )
+
+
+def _hit_count(content: str) -> int:
+    """문서 검색 결과의 건수. 모양을 모르면 1 (0건으로 잘못 보지 않게)."""
+    try:
+        data = json.loads(content)
+    except (ValueError, TypeError):
+        return 1
+    matches = data.get("matches") if isinstance(data, dict) else None
+    return len(matches) if isinstance(matches, list) else 1
