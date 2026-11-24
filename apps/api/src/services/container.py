@@ -91,6 +91,8 @@ class AppServices:
     # 조회 규칙 (harness/grounding.py): 문서·만기 대출·금리·환율 질문은 조회 결과 없이 답하지 않는다. () 면 끔
     lookup_rules: tuple[LookupRule, ...] = DEFAULT_RULES
     require_review_lookup: bool = True  # 심사 건의 상태는 실제 조회 결과로만 안내
+    # 플래너 하네스 (harness/plan_runner.py): 계획을 세우고 단계마다 툴 하나씩 붙여 실행. False 면 예전 루프
+    use_planner: bool = False
     auth: AuthService | None = None  # AUTH_MODE=session 이면 로그인(쿠키·DB 세션). None 이면 개발용 X-User-Id
 
 
@@ -297,4 +299,5 @@ def build_from_env(*, gmail_account_resolver: GmailAccountResolver | None = None
         templates=InMemoryTemplateStore(load_templates(env("AGENT_TEMPLATES_PATH", "config/agent_templates.yaml"))),
         max_turns=int(env("HARNESS_MAX_TURNS", "10")),
         tool_timeout=float(env("HARNESS_TOOL_TIMEOUT_SECONDS", "30")),
+        use_planner=env("HARNESS_PLANNER", "1").lower() not in ("0", "false", "off", ""),
     )

@@ -211,7 +211,7 @@ async def send_message(
         llm=svc.llm, tools=tools, checker=svc.checker, approver=svc.approvals,
         audit=svc.audit, max_turns=svc.max_turns, tool_timeout=svc.tool_timeout,
         lookup_rules=svc.lookup_rules,
-        require_review_lookup=svc.require_review_lookup,
+        require_review_lookup=svc.require_review_lookup, planner=svc.use_planner,
     )
     run_id = str(uuid.uuid4())
     async with session.lock:
