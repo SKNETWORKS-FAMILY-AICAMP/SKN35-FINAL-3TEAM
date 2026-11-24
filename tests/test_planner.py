@@ -270,6 +270,80 @@ async def test_attachment_plus_corporate_search_runs_both_steps(setup):  # noqa:
     assert "7년" in body["message"]
 
 
+class PagedParser:
+    """첫 읽기에는 답이 없고 남은 부분이 있다고 알려 주는 첨부 파서."""
+
+    def __init__(self):
+        self.spec = ToolSpec("parse_doc", "첨부 읽기", effect="read")
+        self.offsets = []
+
+    async def run(self, call):
+        from contracts.harness import ToolResult
+
+        offset = call.arguments.get("offset", 0)
+        self.offsets.append(offset)
+        first = offset == 0
+        payload = {"file_id": call.arguments["file_id"],
+                   "text": "1. 일반 사항\n사내 업무 자료를 관리한다." if first else "제2조(보존 기간) 서류 보존 기간은 7년이다.",
+                   "read_status": {"document_complete": False, "has_more": first, "next_offset": 3 if first else None}}
+        return ToolResult(call.call_id, True, json.dumps(payload, ensure_ascii=False))
+
+
+async def test_attachment_answer_reads_the_rest_once_when_the_first_part_lacks_evidence():
+    parser = PagedParser()
+    llm = ScriptedLLM([plan_reply("parse_doc"), {"content": "보존 기간은 7년입니다."}, {"content": "보존 기간은 7년입니다."}])
+    runner = create_harness(llm=llm, tools=FakeRegistry([parser]), checker=ScriptedChecker({}), approver=FixedApprover(True),
+                            audit=MemoryAudit(), max_turns=6, lookup_rules=DEFAULT_RULES, planner=True)
+    result = await runner.run("첨부 문서의 보존 기간은?", KIM, "s",
+                              attachments=[{"file_id": "f1", "filename": "규정.pdf", "new": True}])
+    assert parser.offsets == [0, 3]  # 첫 답이 근거 검사에 걸려 남은 부분을 이어 읽음
+    assert result.final_message.content == "보존 기간은 7년입니다." and len(llm.calls) == 3
+
+
+# ── 규정 모드 (dy UC-1 수정) ───────────────────────────────
+
+def regulation_runner(script, rows=None):
+    from tests.test_regulation_evidence import ROW, DocTool
+
+    search = DocTool("search_doc", [ROW] if rows is None else rows)
+    reader = DocTool("get_doc_chunk", [ROW] if rows is None else rows)
+    llm = ScriptedLLM(list(script))
+    runner = create_harness(llm=llm, tools=FakeRegistry([search, reader]), checker=ScriptedChecker({}),
+                            approver=FixedApprover(True), audit=MemoryAudit(), max_turns=6, lookup_rules=DEFAULT_RULES,
+                            planner=True, regulation_mode=True)
+    return runner, llm, search, reader
+
+
+async def test_planned_regulation_answer_is_a_verified_quote():
+    from tests.test_regulation_evidence import TEXT, selection
+
+    runner, llm, search, reader = regulation_runner([plan_reply("search_doc"), selection(answer="무제한 보관 가능")])
+    result = await runner.run("개인신용정보 삭제 규정", KIM, "s")
+    text = result.final_message.content
+    assert text.startswith("접근 가능한 규정에서 확인한 원문입니다.") and TEXT in text and "무제한" not in text
+    assert search.calls[0].arguments == {"query": "개인신용정보 삭제 규정"}  # 검색어는 코드가 정함
+    assert len(reader.calls) == 2 and len(llm.calls) == 2  # 원문 읽기 + 고른 인용 재확인 / 계획 + 인용 선택
+
+
+async def test_planned_regulation_without_relevant_evidence_says_unavailable():
+    from harness.regulation import UNAVAILABLE
+    from tests.test_regulation_evidence import ROW
+
+    low = [{**ROW, "title": "예금규정", "preview": "예금의 이자를 지급한다.", "score": .18}]
+    runner, llm, search, reader = regulation_runner([plan_reply("search_doc", "get_doc_chunk")], rows=low)
+    result = await runner.run("추심 연락 일주일에 몇 번?", KIM, "s")
+    assert result.final_message.content == UNAVAILABLE
+    assert len(search.calls) == 2 and not reader.calls and len(llm.calls) == 1  # 재검색까지 후보 없음 → 모델 답 없음
+
+
+async def test_planned_regulation_rejects_free_form_answer():
+    from harness.regulation import UNAVAILABLE
+
+    runner, _, _, _ = regulation_runner([plan_reply("search_doc"), {"content": "보유기간이 지나도 보관할 수 있습니다."}])
+    result = await runner.run("개인신용정보 삭제 규정", KIM, "s")
+    assert result.final_message.content == UNAVAILABLE
+
+
 async def test_unusable_attachment_answer_becomes_real_excerpt(setup):  # noqa: F811
     _, body, _ = await ask(setup, [{"content": "계획 없음"}] + [{"content": "보존 기간은 5년입니다."}] * 2,
                            "첨부 문서의 보존 기간은?")

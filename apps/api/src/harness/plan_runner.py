@@ -8,22 +8,29 @@
               권한 거부가 나면 남은 단계는 하지 않고 서버 고정 문구로 끝낸다 (계약 규칙 8).
   3. 답       툴 없이 답만 쓰게 한다. 서버가 만든 결과를 그대로 보여 주는 툴(리포트 저장 등)은 LLM 을 부르지 않는다.
   4. 답 검사  harness/answer_check.py (숫자·근거·완료 주장). 걸리면 이유를 알려 주고 한 번 다시 쓰게 한다.
+              근거는 이번 요청에서 성공한 도구 결과뿐이다 (질문·지난 대화는 근거가 아니다).
+규정 모드(harness/regulation.py, 규정 질문)는 3·4 대신 원문 인용만 답한다: 검색 후보를 점수·주제로 거르고 원문을 읽은 뒤,
+LLM 은 인용할 문장만 고르고 서버가 원문과 같은지 다시 확인해 인용으로 보여 준다.
+첨부를 읽은 답은 근거 검사(evidence_problem)에 걸리면 첨부의 다음 부분을 이어 읽고 한 번 다시 쓰게 한다.
 LLM 호출은 계획·단계·요약·답을 합쳐 max_turns 번을 넘지 않는다.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import uuid
 from typing import TYPE_CHECKING
 
 from contracts.harness import Denial, LLMToolCall, Message, RequiredToolLLMClient, RunResult, ToolSpec
 from contracts.permission import Principal, ToolCall
 from harness.answer_check import WRITE_EFFECTS, check_answer, log_blocked
-from harness.attachment_grounding import compact_system, evidence_problem, extractive_reply
+from harness.attachment_grounding import compact_system, evidence_problem, extractive_reply, parse_record
 from harness.denial import DoneTool
 from harness.grounding import RequireSearch
-from harness.planner import Plan, PlanStep, make_plan
+from harness.planner import Plan, PlanStep, make_plan, require_regulation_steps
+from harness.regulation import SELECT_PROMPT, UNAVAILABLE, read_evidence, render_quotes, selected_quotes
 from harness.steps import AFTER, BIND, Args, Calls, Finish, StepContext, load
 
 if TYPE_CHECKING:
@@ -57,6 +64,7 @@ class PlannedRun:
         self.done: list[DoneTool] = []
         self.succeeded: set[str] = set()
         self.wrote = False
+        self.evidence_sources: list[str] = []  # 답 검사의 근거: 이번 요청에서 성공한 도구 결과 (+ 검증된 인자)
         self.plan: Plan | None = None
 
     # ── 진행 ──────────────────────────────────────────────
@@ -77,7 +85,13 @@ class PlannedRun:
         log.info("계획 (%s, run %s): %s %s", self.plan.source, self.run_id, self.plan.describe(),
                  "; ".join(self.plan.notes))
 
-        ctx = StepContext(self.question, r.llm, self.specs, later=[], files=self.files)
+        regulation = r.regulation_mode and "parse_doc" not in self.plan.tools  # 첨부를 읽는 계획은 첨부 답으로
+        if regulation:
+            if "search_doc" not in self.specs:
+                return self._finish("이 에이전트에 사내 문서 검색 도구가 없어 규정의 근거를 확인할 수 없습니다.")
+            require_regulation_steps(self.plan, self.specs)
+        ctx = StepContext(self.question, r.llm, self.specs, later=[], files=self.files,
+                          regulation=regulation, min_score=r.regulation_min_score)
         steps = self.plan.steps
         for index, step in enumerate(steps):
             ctx.later = [s.tool for s in steps[index + 1:]]
@@ -85,7 +99,9 @@ class PlannedRun:
             if ended is not None:
                 return ended
         if ctx.records:
-            return await self._answer_from_attachments(ctx.records)
+            return await self._answer_from_attachments(ctx)
+        if regulation:
+            return await self._answer_regulation(ctx)
         return await self._answer()
 
     async def _step(self, step: PlanStep, index: int, total: int, ctx: StepContext) -> RunResult | None:
@@ -162,6 +178,14 @@ class PlannedRun:
             outcomes.append((outcome.ok, outcome.message.content))
             if outcome.ok:
                 self.done.append(DoneTool(outcome.label, outcome.message.content, call.tool_name))
+                self.evidence_sources.append(outcome.message.content)
+                # 성공한 작업의 식별자·수치 인자는 완료 답변에 쓸 수 있다. 검색어·메일 본문은 근거로 섞지 않는다
+                if call.tool_name not in {"search_doc", "get_doc_chunk", "parse_doc"}:
+                    verified = {k: v for k, v in call.arguments.items()
+                                if type(v) in (int, float) or (k.endswith("_id") and isinstance(v, str)
+                                                               and re.fullmatch(r"[A-Za-z0-9_-]{1,100}", v))}
+                    if verified:
+                        self.evidence_sources.append(json.dumps(verified))
                 self.succeeded.add(call.tool_name)
                 spec = self.specs.get(call.tool_name)
                 self.wrote = self.wrote or bool(spec and spec.effect in WRITE_EFFECTS)
@@ -184,7 +208,7 @@ class PlannedRun:
             self.calls += 1
             reply = Message("assistant", reply.content)  # 답 단계에서는 툴을 주지 않는다
             if r.check_answers:
-                verdict = check_answer(reply.content, sources=[m.content for m in self.messages if m.role != "assistant"],
+                verdict = check_answer(reply.content, sources=self.evidence_sources,
                                        grounded=bool(self.succeeded & rule_tools), wrote=self.wrote)
                 if not verdict.ok:
                     await log_blocked({"run_id": self.run_id, "session_id": self.session_id,
@@ -198,19 +222,63 @@ class PlannedRun:
             return RunResult(reply, self.messages, self.calls, "completed")
         return RunResult(None, self.messages, self.calls, "max_turns")
 
-    async def _answer_from_attachments(self, records: list[dict]) -> RunResult:
-        """첨부를 읽은 계획의 답. 긴 대화 기록 대신 질문과 이번 run 의 도구 결과만 보여 준다 (원문이 잘리지 않게).
-        근거 검사(evidence_problem)는 첨부 원문 + 이번에 성공한 다른 도구 결과를 근거로 본다."""
+    async def _answer_regulation(self, ctx: StepContext) -> RunResult:
+        """규정 모드의 답: LLM 은 인용할 원문만 고르고, 서버가 원문과 같은지 확인해 인용으로 보여 준다 (dy UC-1 수정과 같은 규칙)."""
         r = self.r
-        focus = [Message("system", compact_system(self.role)), Message("user", self.question),
-                 *self.messages[self.start:]]
-        evidence = [*records, *({"filename": d.tool_name, "text": d.content} for d in self.done if d.name != "parse_doc")]
+        if not ctx.evidence or self.calls >= r.max_turns:
+            return self._finish(UNAVAILABLE)
+        # 예전 대화·사용자 인용·개인 역할 프롬프트는 검증 가능한 규정 원문이 아니다
+        request = {"question": self.question, "documents": [
+            {"chunk_id": e.chunk_id, "title": e.title, "location": e.location, "text": e.text} for e in ctx.evidence]}
+        try:
+            self.calls += 1
+            reply = (await r.llm.chat([Message("system", SELECT_PROMPT),
+                                       Message("user", json.dumps(request, ensure_ascii=False))], [])).message
+            quotes = [] if reply.tool_calls else selected_quotes(reply.content, ctx.evidence, self.question)
+        except Exception:
+            log.warning("규정 원문 선택 실패, 추측 답변을 차단합니다 (run %s)", self.run_id)
+            return self._finish(UNAVAILABLE)
+        if not quotes:
+            await log_blocked({"run_id": self.run_id, "session_id": self.session_id, "user_id": self.principal.user_id,
+                               "problems": ["규정 원문 인용 검증 실패 또는 근거 부족"], "answer": reply.content[:1000]})
+            return self._finish(UNAVAILABLE)
+        if "get_doc_chunk" in self.specs:  # 고르는 사이 권한·버전이 바뀌었을 수 있어 고른 원문을 다시 확인한다
+            checked = []
+            for record, quote in quotes:
+                outcomes, denial = await self._execute([self._call("get_doc_chunk", {"chunk_id": record.chunk_id})])
+                if denial is not None:
+                    return await r._stop_denied(self.messages, denial, self.done, llm_calls=self.calls)
+                ok, content = outcomes[0]
+                fresh = read_evidence(content, {"chunk_id": record.chunk_id}) if ok else None
+                selected = selected_quotes(json.dumps({"status": "supported", "evidence": [
+                    {"chunk_id": record.chunk_id, "quote": quote}]}), [fresh], self.question) if fresh else []
+                if not selected:
+                    return self._finish(UNAVAILABLE)
+                checked.extend(selected)
+            quotes = checked
+        return self._finish(render_quotes(quotes))
+
+    async def _answer_from_attachments(self, ctx: StepContext) -> RunResult:
+        """첨부를 읽은 계획의 답. 긴 대화 기록 대신 질문과 이번 run 의 도구 결과만 보여 준다 (원문이 잘리지 않게).
+        근거 검사(evidence_problem)는 첨부 원문 + 이번에 성공한 다른 도구 결과를 근거로 본다.
+        걸리면 첨부의 다음 부분을 이어 읽고(남은 부분이 있을 때) 한 번만 다시 쓰게 한다. 그래도 걸리면 원문 발췌."""
+        r = self.r
+        records = ctx.records
+
+        def focus_messages() -> list[Message]:
+            return [Message("system", compact_system(self.role)), Message("user", self.question),
+                    *self.messages[self.start:]]
+
+        def evidence() -> list[dict]:
+            return [*records, *({"filename": d.tool_name, "text": d.content} for d in self.done if d.name != "parse_doc")]
+
+        focus = focus_messages()
         answer, retried = "", False
         while self.calls < r.max_turns:
             reply = (await r.llm.chat(focus, [])).message
             self.calls += 1
             answer = reply.content
-            issue = evidence_problem(answer, evidence, self.question)
+            issue = evidence_problem(answer, evidence(), self.question)
             if issue is None:
                 break
             log.info("첨부 답변 재검증 (run %s): %s", self.run_id, issue)
@@ -218,11 +286,40 @@ class PlannedRun:
                 answer = ""
                 break
             retried = True
+            more = await self._read_more(ctx)
+            if isinstance(more, RunResult):
+                return more
+            if more:
+                log.info("첨부 %d건을 이어 읽고 다시 씁니다 (run %s)", len(more), self.run_id)
+                records.extend(more)
+                focus = focus_messages()
             focus += [Message("assistant", answer),
                       Message("system", f"이 답은 사용할 수 없습니다: {issue} 확인한 text에서 직접 인용해 다시 답하세요.")]
-        if not answer or evidence_problem(answer, evidence, self.question):
+        if not answer or evidence_problem(answer, evidence(), self.question):
             answer = extractive_reply(records)
         return self._finish(answer)
+
+    async def _read_more(self, ctx: StepContext) -> list[dict] | RunResult:
+        """남은 부분이 있는 첨부를 이어 읽는다 (같은 검색어, read_status.next_offset 부터). 권한 검사·감사는 그대로."""
+        calls = []
+        for record in ctx.records:
+            status = record.get("read_status") or {}
+            args = ctx.read_args.get(record.get("file_id", ""))
+            if args and status.get("has_more") and status.get("next_offset") is not None:
+                calls.append(self._call("parse_doc", {**args, "offset": status["next_offset"], "max_chars": 1800}))
+                ctx.read_args[record["file_id"]] = {}  # 파일마다 한 번만
+        if not calls:
+            return []
+        outcomes, denial = await self._execute(calls)
+        if denial is not None:
+            return await self.r._stop_denied(self.messages, denial, self.done, llm_calls=self.calls)
+        names = {f["file_id"]: f["filename"] for f in ctx.files}
+        more = []
+        for call, (ok, content) in zip(calls, outcomes):
+            record = parse_record(content, names.get(call.arguments["file_id"], "첨부 문서")) if ok else None
+            if record and record["text"].strip():
+                more.append(record)
+        return more
 
     def _finish(self, text: str) -> RunResult:
         final = Message("assistant", text)

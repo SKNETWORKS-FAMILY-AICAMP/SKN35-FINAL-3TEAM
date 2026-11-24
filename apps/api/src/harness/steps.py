@@ -24,6 +24,7 @@ from contracts.harness import LLMClient, Message, ToolSpec
 from harness.attachment_grounding import extractive_reply, parse_record, pick_files, read_call
 from harness.grounding import RequireSearch
 from harness.market_grounding import CLARIFY_DATE, REPORT_ID, base_date_args, template_query
+from harness.regulation import UNAVAILABLE, Evidence, candidates, read_evidence
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +60,12 @@ class StepContext:
     files: list[dict] = field(default_factory=list)  # 대화에 연결된 첨부 (서버 확인, file_id·filename·new)
     reading: list[dict] = field(default_factory=list)  # 이번에 읽는 첨부
     records: list[dict] = field(default_factory=list)  # 읽은 첨부 원문 (parse_record)
+    read_args: dict[str, dict] = field(default_factory=dict)  # file_id → 마지막으로 읽은 인자 (이어 읽기용)
+    # 규정 모드 (harness/regulation.py): 검색 후보를 점수·주제로 거르고, 원문을 읽어 인용만 답한다
+    regulation: bool = False
+    min_score: float = 0.30
+    candidates: list[dict] = field(default_factory=list)
+    evidence: list[Evidence] = field(default_factory=list)
 
 
 def load(content: str) -> Any:
@@ -84,11 +91,31 @@ def _hit_count(data: Any) -> int:
 
 
 async def bind_search_doc(ctx: StepContext):
+    if ctx.regulation:  # 규정 모드: 질문 원문으로 먼저 찾는다 (없으면 핵심 단어로 한 번 더)
+        return Args({_DOC_RULE.query_arg: ctx.question.strip()[:2000]})
     return None  # 검색어는 LLM 이 정한다. 못 정하면 plan_runner 가 규칙의 인자(질문 핵심 단어)를 쓴다
+
+
+def _after_regulation_search(ctx: StepContext, ok: bool, content: str):
+    if not ok:
+        return Finish("문서 검색을 완료하지 못해 규정의 근거를 확인할 수 없습니다. 잠시 뒤 다시 시도해 주세요.")
+    ctx.candidates = candidates(content, ctx.question, ctx.min_score)
+    if not ctx.candidates:
+        retry = _DOC_RULE.arguments(ctx.question)
+        if "search_doc" not in ctx.retried and retry[_DOC_RULE.query_arg] not in ctx.tried_queries:
+            ctx.retried.add("search_doc")
+            return Args(retry)
+        return Finish(UNAVAILABLE)
+    if "get_doc_chunk" not in ctx.specs:  # 원문 열람 툴이 없으면 잘리지 않은 미리보기만 근거로
+        ctx.evidence = [Evidence(m["chunk_id"], m["title"], str(m.get("location") or ""), m["preview"])
+                        for m in ctx.candidates if m.get("is_truncated") is False]
+    return None
 
 
 def after_search_doc(ctx: StepContext, ok: bool, content: str, arguments: dict):
     ctx.tried_queries.add(str(arguments.get(_DOC_RULE.query_arg, "")))
+    if ctx.regulation:
+        return _after_regulation_search(ctx, ok, content)
     if not ok or _hit_count(load(content)):
         return None
     if "search_doc" not in ctx.retried:  # 0건이면 검색어를 바꿔 한 번 더 (결정 사항 1번)
@@ -99,6 +126,23 @@ def after_search_doc(ctx: StepContext, ok: bool, content: str, arguments: dict):
     if "get_doc_chunk" in ctx.later:
         return None
     return Finish(_DOC_RULE.unavailable)
+
+
+async def bind_get_doc_chunk(ctx: StepContext):
+    if not ctx.regulation:
+        return None  # 어떤 문단을 열지는 LLM 이 검색 결과를 보고 정한다
+    if not ctx.candidates:
+        return Finish(UNAVAILABLE)
+    return Calls([{"chunk_id": m["chunk_id"]} for m in ctx.candidates])
+
+
+def after_get_doc_chunk(ctx: StepContext, ok: bool, content: str, arguments: dict):
+    if ctx.regulation and ok:
+        match = next((m for m in ctx.candidates if m["chunk_id"] == arguments.get("chunk_id")), None)
+        record = read_evidence(content, match) if match else None
+        if record:
+            ctx.evidence.append(record)
+    return None
 
 
 # ── 첨부 문서 ───────────────────────────────────────────────
@@ -120,6 +164,7 @@ def after_parse_doc(ctx: StepContext, ok: bool, content: str, arguments: dict):
     if record is None:
         return Finish(READ_FAILED)
     ctx.records.append(record)
+    ctx.read_args[file["file_id"]] = dict(arguments)
     if len(ctx.records) == len(ctx.reading) and not any(r["text"].strip() for r in ctx.records):
         return Finish(extractive_reply(ctx.records))  # 질문과 맞는 문단이 없음
     return None
@@ -208,6 +253,7 @@ def after_save_morning_report(ctx: StepContext, ok: bool, content: str, argument
 
 
 BIND = {
+    "get_doc_chunk": bind_get_doc_chunk,
     "parse_doc": bind_parse_doc,
     "search_doc": bind_search_doc,
     "search_report_templates": bind_search_report_templates,
@@ -217,6 +263,7 @@ BIND = {
     "save_morning_report": bind_save_morning_report,
 }
 AFTER = {
+    "get_doc_chunk": after_get_doc_chunk,
     "parse_doc": after_parse_doc,
     "search_doc": after_search_doc,
     "search_report_templates": after_search_report_templates,

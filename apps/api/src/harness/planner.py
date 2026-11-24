@@ -221,3 +221,14 @@ def check_plan(plan: Plan, question: str, specs: list[ToolSpec], rules: tuple[Lo
         plan.notes.append(f"단계가 {len(ordered)}개라 {limit}개까지만 씀")
     plan.steps = ordered[:limit]
     return plan
+
+
+def require_regulation_steps(plan: Plan, specs: dict[str, ToolSpec]) -> None:
+    """규정 모드: 사내 문서 검색이 계획에 있어야 하고, 원문 열람 툴이 있으면 검색 바로 뒤에 둔다."""
+    if "search_doc" not in plan.tools:
+        plan.steps.insert(0, PlanStep("search_doc", "사내 문서에서 관련 규정을 찾는다", "rule"))
+        plan.notes.append("규정 질문이라 search_doc 을 넣음")
+    if "get_doc_chunk" in specs:
+        plan.steps = [s for s in plan.steps if s.tool != "get_doc_chunk"]
+        at = next(i for i, s in enumerate(plan.steps) if s.tool == "search_doc") + 1
+        plan.steps.insert(at, PlanStep("get_doc_chunk", "찾은 규정의 원문을 읽는다", "rule"))
