@@ -23,7 +23,8 @@ from tools.db_docs import BackgroundEmbedder, DbReadDocTool, DbSearchDocsTool
 from tools.read_doc import READ_DOC_SPEC
 from tools.search_doc import PREVIEW_LENGTH, SEARCH_DOC_SPEC
 
-SEARCH_KEYS = {"doc_id", "chunk_id", "title", "location", "preview", "is_truncated"}
+# score: 유사도 (규정 모드가 DOC_EVIDENCE_MIN_SCORE 미만 후보를 거를 때 쓴다, harness/regulation.py)
+SEARCH_KEYS = {"doc_id", "chunk_id", "title", "location", "preview", "is_truncated", "score"}
 READ_KEYS = {"doc_id", "chunk_id", "title", "location", "text"}
 
 

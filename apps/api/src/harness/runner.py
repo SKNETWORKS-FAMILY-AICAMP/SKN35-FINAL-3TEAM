@@ -37,7 +37,10 @@ from harness.answer_check import WRITE_EFFECTS, check_answer, drop_sentences_wit
 from harness.grounding import LookupRule, RequireSearch
 from harness.review_grounding import LOOKUP_TOOL, SUBMISSION_TOOL, ReviewLookupGuard
 from harness.attachment_grounding import compact_system, evidence_problem, extractive_reply, parse_record, read_call
-from harness.market_grounding import market_plan
+from harness.market_grounding import CLARIFY_DATE, market_plan
+from harness.regulation import (UNAVAILABLE, MIN_SCORE, SELECT_PROMPT, Evidence, candidates,
+                                read_evidence, selected_quotes, render_quotes)
+from harness.steps import market_summary
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +76,9 @@ class AgentRunner:
         require_review_lookup: bool = False,
         lookup_rules: tuple[LookupRule, ...] | None = None,
         check_answers: bool = True,
+        planner: bool = False,
+        regulation_mode: bool = False,
+        regulation_min_score: float = MIN_SCORE,
     ) -> None:
         self.llm = llm
         self.tools = tools
@@ -86,6 +92,14 @@ class AgentRunner:
                                               else (require_search,) if require_search else ())
         self.require_review_lookup = require_review_lookup
         self.check_answers = check_answers  # 최종 답 검사 (harness/answer_check.py)
+        # True 면 플래너가 계획을 세우고 단계마다 툴 하나씩 붙여 실행한다 (harness/plan_runner.py).
+        # False 면 예전 흐름 (LLM 이 툴을 고르는 루프 + 시장 고정 순서)
+        self.planner = planner
+        # 규정 모드 (harness/regulation.py): 원문 인용만 답한다. 플래너 흐름도 이 값을 따른다
+        self.regulation_mode = regulation_mode
+        if not 0 <= regulation_min_score <= 1:
+            raise ValueError("DOC_EVIDENCE_MIN_SCORE는 0~1이어야 합니다")
+        self.regulation_min_score = regulation_min_score
 
     async def run(
         self,
@@ -102,13 +116,21 @@ class AgentRunner:
         messages: list[Message] = list(history or [])
         messages.append(Message(role="user", content=user_input))
         specs = await self.tools.specs()
-        if attachments and any(s.name == "parse_doc" for s in specs):
+        has_parser = any(s.name == "parse_doc" for s in specs)
+        review = ReviewLookupGuard.from_request(user_input, history or []) if self.require_review_lookup else None
+        if self.planner and review is None:  # 심사 건(UC-04)은 이번 범위 밖이라 예전 흐름을 쓴다
+            from harness.plan_runner import PlannedRun
+
+            return await PlannedRun(self, messages, user_input, specs, principal, session_id, agent_id, run_id,
+                                    files=attachments if has_parser else [], role=attachment_role).run()
+        if attachments and has_parser:
             return await self._read_attachments(messages, user_input, attachments, principal, session_id,
                                                 agent_id, run_id, attachment_role)
         market = market_plan(user_input, specs)
         if market:
             return await self._run_market(messages, user_input, market, principal, session_id, agent_id, run_id)
-        review = ReviewLookupGuard.from_request(user_input, history or []) if self.require_review_lookup else None
+        if self.regulation_mode:
+            return await self._run_regulation(user_input, messages, principal, session_id, agent_id, run_id)
         review_spec = next((spec for spec in specs if spec.name == LOOKUP_TOOL), None)
         submission_spec = next((spec for spec in specs if spec.name == SUBMISSION_TOOL), None)
         if review and review_spec is None:
@@ -131,6 +153,7 @@ class AgentRunner:
         researched = False
         answer_nudge: str | None = None  # 답 검사에 걸려 다시 쓰게 할 때의 안내
         answer_retried = False
+        evidence_sources: list[str] = []  # 이번 요청에서 성공한 도구 결과만 검증 근거로 쓴다.
         retry_review = False
         retry_submission: tuple[str, ...] = ()
 
@@ -202,6 +225,10 @@ class AgentRunner:
                     force_rule = pending
                     log.info("조회 없이 쓴 답이라 %s 를 강제합니다 (run %s)", pending[1].name, run_id)
                     continue
+                if pending:
+                    final = Message("assistant", pending[0].unavailable)
+                    messages.append(final)
+                    return RunResult(final, messages, turn, "completed")
                 # 문서 검색이 모두 0건이면 검색어를 바꿔 한 번 더, 그래도 없으면 고정 문구 (결정 사항 1번)
                 if (doc_rule and search_hits and not any(search_hits)
                         and doc_rule.needed(user_input, reply.content)):
@@ -214,7 +241,7 @@ class AgentRunner:
                     messages.append(final)
                     return RunResult(final, messages, turn, "completed")
                 if self.check_answers:
-                    verdict = check_answer(reply.content, sources=[m.content for m in messages if m.role != "assistant"],
+                    verdict = check_answer(reply.content, sources=evidence_sources,
                                            grounded=bool(succeeded & rule_tools), wrote=wrote)
                     if not verdict.ok:
                         await log_blocked({"run_id": run_id, "session_id": session_id, "user_id": principal.user_id,
@@ -261,6 +288,15 @@ class AgentRunner:
                 outcome = await self._handle_tool_call(call)
                 messages.append(outcome.message)
                 if outcome.ok:
+                    evidence_sources.append(outcome.message.content)
+                    # 성공한 작업의 식별자·수치 인자는 완료 답변에서 사용할 수 있다.
+                    # 질문 전체/메일 본문/문서 검색어를 규정 근거로 섞지는 않는다.
+                    if call.tool_name not in {"search_doc", "get_doc_chunk", "parse_doc"}:
+                        verified_inputs = {k: v for k, v in call.arguments.items()
+                                           if type(v) in (int, float) or (k.endswith("_id") and isinstance(v, str)
+                                                                          and re.fullmatch(r"[A-Za-z0-9_-]{1,100}", v))}
+                        if verified_inputs:
+                            evidence_sources.append(json.dumps(verified_inputs))
                     if review:
                         review.record(call.tool_name, call.arguments, outcome.message.content)
                     done.append(DoneTool(outcome.label, outcome.message.content, call.tool_name))
@@ -294,6 +330,94 @@ class AgentRunner:
 
         return RunResult(None, messages, self.max_turns, "max_turns")
 
+    async def _run_regulation(self, question, messages, principal, session_id, agent_id, run_id):
+        """규정 모드: 권한을 통과한 원문 인용만 반환하며 무근거 자유 답변은 차단한다."""
+        done, llm_calls = [], 0
+
+        def finish(text):
+            final = Message("assistant", text)
+            messages.append(final)
+            return RunResult(final, messages, llm_calls, "completed")
+
+        async def execute(name, arguments):
+            ident = "regulation_" + uuid.uuid4().hex
+            messages.append(Message("assistant", "", tool_calls=(LLMToolCall(ident, name, arguments),)))
+            outcome = await self._handle_tool_call(ToolCall(ident, name, arguments, principal, session_id,
+                                                            agent_id=agent_id, run_id=run_id))
+            messages.append(outcome.message)
+            if outcome.ok:
+                done.append(DoneTool(outcome.label, outcome.message.content, name))
+            return outcome
+
+        if await self.tools.get("search_doc") is None:
+            return finish("이 에이전트에 사내 문서 검색 도구가 없어 규정의 근거를 확인할 수 없습니다.")
+        if self.max_turns <= 0:
+            return finish(UNAVAILABLE)
+        rule = RequireSearch()
+        queries = list(dict.fromkeys([question.strip()[:2000], rule.arguments(question)[rule.query_arg]]))
+        matches = []
+        for query in queries:
+            outcome = await execute("search_doc", {"query": query})
+            if outcome.denial:
+                return await self._stop_denied(messages, outcome.denial, done, llm_calls)
+            if not outcome.ok:
+                return finish("문서 검색을 완료하지 못해 규정의 근거를 확인할 수 없습니다. 잠시 뒤 다시 시도해 주세요.")
+            matches = candidates(outcome.message.content, question, self.regulation_min_score)
+            if matches:
+                break
+        if not matches:
+            return finish(UNAVAILABLE)
+        records = []
+        can_read = await self.tools.get("get_doc_chunk") is not None
+        for match in matches:
+            if can_read:
+                outcome = await execute("get_doc_chunk", {"chunk_id": match["chunk_id"]})
+                if outcome.denial:
+                    return await self._stop_denied(messages, outcome.denial, done, llm_calls)
+                if not outcome.ok:
+                    continue
+                record = read_evidence(outcome.message.content, match)
+                if record:
+                    records.append(record)
+            elif match.get("is_truncated") is False and isinstance(match.get("title"), str):
+                records.append(Evidence(match["chunk_id"], match["title"], str(match.get("location") or ""), match["preview"]))
+        if not records:
+            return finish(UNAVAILABLE)
+        # 예전 대화·사용자 인용·개인 역할 프롬프트는 검증 가능한 규정 원문이 아니다.
+        request = {"question": question, "documents": [
+            {"chunk_id": r.chunk_id, "title": r.title, "location": r.location, "text": r.text} for r in records]}
+        try:
+            llm_calls = 1
+            reply = (await self.llm.chat([Message("system", SELECT_PROMPT),
+                                          Message("user", json.dumps(request, ensure_ascii=False))], [])).message
+            quotes = [] if reply.tool_calls else selected_quotes(reply.content, records, question)
+        except Exception:
+            log.warning("규정 원문 선택 실패, 추측 답변을 차단합니다 (run %s)", run_id)
+            return finish(UNAVAILABLE)
+        if not quotes:
+            await log_blocked({"run_id": run_id, "session_id": session_id, "user_id": principal.user_id,
+                               "problems": ["규정 원문 인용 검증 실패 또는 근거 부족"], "answer": reply.content[:1000]})
+            return finish(UNAVAILABLE)
+        # 모델 처리 중 권한/버전이 바뀌었을 수 있으므로 선택된 원문을 다시 확인한다.
+        if can_read:
+            checked = []
+            for record, quote in quotes:
+                outcome = await execute("get_doc_chunk", {"chunk_id": record.chunk_id})
+                if outcome.denial:
+                    return await self._stop_denied(messages, outcome.denial, [], llm_calls)
+                if not outcome.ok:
+                    return finish(UNAVAILABLE)
+                fresh = read_evidence(outcome.message.content, {"chunk_id": record.chunk_id})
+                if fresh is None:
+                    return finish(UNAVAILABLE)
+                selected = selected_quotes(json.dumps({"status": "supported", "evidence": [
+                    {"chunk_id": record.chunk_id, "quote": quote}]}), [fresh], question)
+                if not selected:
+                    return finish(UNAVAILABLE)
+                checked.extend(selected)
+            quotes = checked
+        return finish(render_quotes(quotes))
+
     async def _run_market(self, messages, question, plan, principal, session_id, agent_id, run_id):
         action, arguments, wants_report = plan
         done, calls_used = [], 0
@@ -314,7 +438,7 @@ class AgentRunner:
             return outcome
 
         if action == "clarify":
-            return finish("조회할 기준일을 YYYY-MM-DD로 알려 주세요. 날짜를 추측해서 리포트를 만들지 않습니다.")
+            return finish(CLARIFY_DATE)
         selection = None
         if wants_report and await self.tools.get("search_report_templates") and await self.tools.get("get_report_template"):
             found = await execute("search_report_templates", {"query": question[:2000]})
@@ -347,41 +471,7 @@ class AgentRunner:
             return finish(data["markdown"] + "\n\n이 에이전트에 리포트 저장 도구가 없어 조회 결과만 표시했습니다.")
         summary = ""
         if not re.search(r"표만|요약\s*없이", question) and self.max_turns > 0:
-            try:
-                body = data["markdown"]
-                if selection:
-                    template = selection["template"]
-                    used = template["bindings"]
-                    values = {key: data[key] for key in ("base_date", "mode")}
-                    if "fx_table" in used or "data_quality" in used:
-                        values["fx"] = data["fx"]
-                    if "rates" in used or "data_quality" in used:
-                        values["rates"] = data["rates"]
-                    # 전체 양식은 서버가 보관/렌더링한다. 요약 모델에는 짧은 목차·작성 규칙만 줘 긴 양식도 자르지 않는다.
-                    outline = ("\n".join(s["text"] for s in template["sections"] if s["type"] == "heading")
-                               if "sections" in template else "\n".join(line for line in template["body_markdown"].splitlines() if line.startswith("#")))[:600]
-                    body = ("사용할 양식:\n" + template["name"] + "\n" + template["description"][:400]
-                            + "\n요약 작성 조건:\n" + template.get("summary_instructions", "")
-                            + "\n양식 목차:\n" + outline + "\n확인한 수치:\n" + json.dumps(values, ensure_ascii=False))
-                prompt = [
-                    Message("system", "은행 직원용 시장 리포트의 요약만 한국어 3문장 이내의 평문으로 작성한다. 양식 목차는 다룰 범위를 알려 주는 참고일 뿐이니 목차의 제목·항목 이름(예: '주요 환율:')을 쓰지 말고, 제목·목록·굵은 글씨 없이 문장만 쓴다. 선택한 양식의 목적과 항목 범위만 다루고 양식 전체를 다시 쓰지 않는다. 표의 수치와 단위를 그대로 쓰고 전망·원인 추측·투자 권유를 쓰지 않는다. 기록 재생이면 실시간이라고 하지 않는다. 실제 기준일이 요청일보다 과거이면 관측일 이후에도 변동이 없었다고 단정하지 않는다."),
-                    Message("user", body),
-                ]
-                reply = (await self.llm.chat(prompt, [])).message
-                calls_used = 1
-                problem = _summary_problem(_plain_summary(reply.content, outline if selection else ""), data)
-                if problem:  # 저장 전에 같은 검사를 해 보고, 걸리면 이유를 알려 주고 한 번만 다시 쓰게 한다
-                    reply = (await self.llm.chat([*prompt, Message("assistant", reply.content), Message("user", problem)], [])).message
-                    calls_used = 2
-                summary = _plain_summary(reply.content, outline if selection else "") if len(reply.content) <= 2000 else ""
-                if summary and _summary_problem(summary, data):
-                    # 다시 써도 걸리면 걸리는 문장만 빼고, 남은 문장이 검사를 통과할 때만 쓴다
-                    kept = " ".join(p for p in re.split(r"(?<=[.!?다])\s+", summary) if p and not _summary_problem(p, data))
-                    summary = kept if kept and not _summary_problem(kept, data) else summary
-            except Exception:
-                # 시장 수치/표는 모델 없이도 확인 가능하다. 연결 실패 시 지어낸 요약을 사용하지 않는다.
-                calls_used = 1
-                log.warning("시장 요약 생성 실패, 요약 없이 저장")
+            summary, calls_used = await market_summary(self.llm, data, selection)
         save_args = {"snapshot_id": data["snapshot_id"], "summary": summary}
         if selection:
             save_args["template_selection_id"] = selection["template_selection_id"]
@@ -570,12 +660,16 @@ def create_harness(
     require_review_lookup: bool = False,
     lookup_rules: tuple[LookupRule, ...] | None = None,
     check_answers: bool = True,
+    planner: bool = False,
+    regulation_mode: bool = False,
+    regulation_min_score: float = MIN_SCORE,
 ) -> AgentRunner:
     return AgentRunner(
         llm=llm, tools=tools, checker=checker,
         approver=approver, audit=audit, max_turns=max_turns,
         tool_timeout=tool_timeout, require_search=require_search, require_review_lookup=require_review_lookup,
-        lookup_rules=lookup_rules, check_answers=check_answers,
+        lookup_rules=lookup_rules, check_answers=check_answers, planner=planner,
+        regulation_mode=regulation_mode, regulation_min_score=regulation_min_score,
     )
 
 
@@ -587,29 +681,3 @@ def _hit_count(content: str) -> int:
         return 1
     matches = data.get("matches") if isinstance(data, dict) else None
     return len(matches) if isinstance(matches, list) else 1
-
-
-def _plain_summary(text: str, outline: str) -> str:
-    """요약에서 양식 항목 이름 머리("한눈에 보는 요약:", "**주요 환율**:")와 마크다운 기호를 뗀다 (문장만 남김)."""
-    headings = {re.sub(r"^\s*(?:#+\s*)?(?:\d+[.)]\s*)?", "", line).strip() for line in outline.splitlines()} - {""}
-    headings |= {"요약", "핵심 요약", "한눈에 보는 요약"}  # 수치 이름(기준금리 등)은 문장의 주어라 남긴다
-    text = re.sub(r"[*#`>]+", "", text)
-    for heading in sorted(headings, key=len, reverse=True):
-        text = re.sub(rf"(?m)(^|(?<=[\s.]))(?:\d+[.)]\s*)?{re.escape(heading)}\s*[:：]\s*", r"\1", text)
-    text = re.sub(r"(?m)^\s*[-•]\s*", "", text)
-    return re.sub(r"\s*\n\s*", " ", text).strip()
-
-
-def _summary_problem(summary: str, snapshot: dict) -> str:
-    """시장 리포트 저장 때와 같은 요약 검사 (market_mcp.service.check_summary). 통과하면 빈 문자열."""
-    try:
-        from market_mcp.service import check_summary
-
-        check = check_summary(summary, snapshot)
-    except Exception:
-        return ""
-    if check.get("passed"):
-        return ""
-    reasons = [*(f"표에 없는 숫자 {n}" for n in check.get("numbers_not_in_table", [])), *check.get("forbidden_words", [])]
-    return ("방금 요약은 검사를 통과하지 못했다: " + ", ".join(reasons or ["3문장 초과"]) +
-            ". 표에 있는 수치만 쓰고, 관측하지 않은 기간의 변동 여부를 단정하지 말고, 3문장 이내 평문으로 다시 써라.")

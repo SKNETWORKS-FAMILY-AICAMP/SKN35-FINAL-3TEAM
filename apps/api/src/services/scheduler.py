@@ -128,7 +128,8 @@ class Scheduler:
                 results[user_id] = "없는 사용자"
                 continue
             harness = create_harness(llm=self.svc.llm, tools=tools, checker=self.svc.checker, approver=_NoApproval(),
-                                     audit=self.svc.audit, max_turns=self.svc.max_turns, tool_timeout=self.svc.tool_timeout)
+                                     audit=self.svc.audit, max_turns=self.svc.max_turns, tool_timeout=self.svc.tool_timeout,
+                                     planner=self.svc.use_planner)
             run = await harness.run(MARKET_REQUEST, principal, f"schedule-{job.id}", run_id=str(uuid.uuid4()))
             saved = [m for m in run.messages if m.role == "tool" and '"report_id"' in m.content]
             results[user_id] = "저장" if saved else (run.final_message.content[:200] if run.final_message else run.stop_reason)
