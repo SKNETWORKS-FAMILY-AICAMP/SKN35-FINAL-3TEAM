@@ -95,11 +95,81 @@ def test_notice_mail_is_sent_only_after_the_list_was_shown():
     assert check(["send_maturity_notice"], "응 보내 줘", specs).tools == ["send_maturity_notice"]
 
 
-def test_mail_is_sent_from_plan_only_with_a_written_address():
+def test_mail_send_step_only_for_send_requests_not_drafts():
     specs = [spec("search_doc"), spec("send_mail", "send")]
     assert check(["send_mail"], "팀장님께 보낼 휴가 신청 메일 초안 작성해 줘", specs).tools == []
-    assert check(["send_mail"], "이 내용 메일로 보내 줘", specs).tools == []  # 받는 사람은 화면에서 고른다
-    assert check(["send_mail"], "kim@example.com 으로 회의 일정 메일 보내 줘", specs).tools == ["send_mail"]
+    assert check(["send_mail"], "휴가 신청 메일 작성해 줘", specs).tools == []  # 보내 달라는 말이 없음
+    assert check(["send_mail"], "박종원 팀장에게 회의 일정 메일 보내 줘", specs).tools == ["send_mail"]
+    assert check([], "박종원 팀장에게 회의 일정 메일 보내 줘", specs).tools == ["send_mail"]  # 플래너가 빠뜨려도 넣음
+
+
+DIRECTORY = [{"user_id": "E1002", "name": "박종원", "email": "park@example.com"},
+             {"user_id": "E2001", "name": "나치훈", "email": "na@example.com"}]
+
+
+class MailTool:
+    def __init__(self):
+        self.spec = ToolSpec("send_mail", "메일 보내기", effect="send", display_name="메일 보내기")
+        self.calls = []
+
+    async def run(self, call):
+        from contracts.harness import ToolResult
+
+        self.calls.append(call)
+        return ToolResult(call.call_id, True, json.dumps({"status": "simulated"}))
+
+
+def mail_runner(script, directory=DIRECTORY, approve=True):
+    mail = MailTool()
+    llm = ScriptedLLM(script)
+
+    async def recipients(principal):
+        return directory
+
+    runner = create_harness(llm=llm, tools=FakeRegistry([mail]), checker=ScriptedChecker({"send_mail": Decision.ASK}),
+                            approver=FixedApprover(approve), audit=MemoryAudit(), max_turns=6,
+                            lookup_rules=DEFAULT_RULES, planner=True, mail_recipients=recipients)
+    return runner, llm, mail
+
+
+async def test_mail_recipient_comes_from_directory_not_from_the_model():
+    runner, llm, mail = mail_runner([
+        plan_reply("send_mail"),
+        {"tool_calls": [{"id": "m1", "name": "send_mail", "arguments": {
+            "to": ["someone@evil.example"], "cc": ["x@evil.example"], "subject": "회의 일정", "body": "내일 10시 회의입니다."}}]},
+    ])
+    result = await runner.run("박종원 팀장에게 내일 10시 회의 일정 메일 보내 줘", KIM, "s")
+    sent = mail.calls[0].arguments
+    assert sent["to"] == ["park@example.com"] and sent["cc"] == [] and sent["subject"] == "회의 일정"
+    assert "박종원" in llm.calls[1][0][-1].content  # 단계 안내에 받는 사람을 알려 줌
+    assert result.final_message.content.startswith("가상 메일 테스트가 완료되었습니다")
+
+
+async def test_mail_without_named_recipient_is_not_sent_and_draft_is_answered():
+    runner, llm, mail = mail_runner([
+        plan_reply("send_mail"),
+        {"content": "제목: 휴가 신청\n\n12월 1일 연차를 신청합니다."},
+    ])
+    result = await runner.run("휴가 신청 메일 보내 줘", KIM, "s")
+    assert not mail.calls and len(llm.calls) == 2
+    text = result.final_message.content
+    assert text.startswith("제목: 휴가 신청") and "받는 사람을 찾지 못해 보내지 않았습니다" in text
+
+
+async def test_mail_to_ambiguous_name_is_not_sent():
+    twins = [*DIRECTORY, {"user_id": "E3001", "name": "박종원", "email": "park2@example.com"}]
+    runner, _, mail = mail_runner([plan_reply("send_mail"), {"content": "제목: 회의\n\n회의 안내입니다."}], directory=twins)
+    result = await runner.run("박종원에게 회의 메일 보내 줘", KIM, "s")
+    assert not mail.calls and "여러 명" in result.final_message.content
+
+
+async def test_rejected_mail_approval_stops_without_sending():
+    runner, _, mail = mail_runner([
+        plan_reply("send_mail"),
+        {"tool_calls": [{"id": "m1", "name": "send_mail", "arguments": {"to": [], "subject": "회의", "body": "안내"}}]},
+    ], approve=False)
+    result = await runner.run("나치훈 대리에게 회의 메일 보내 줘", KIM, "s")
+    assert result.stop_reason == "denied" and not mail.calls
 
 
 async def test_mail_draft_request_writes_a_draft_without_sending():

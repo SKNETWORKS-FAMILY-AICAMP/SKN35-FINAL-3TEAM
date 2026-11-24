@@ -79,6 +79,7 @@ class AgentRunner:
         planner: bool = False,
         regulation_mode: bool = False,
         regulation_min_score: float = MIN_SCORE,
+        mail_recipients=None,
     ) -> None:
         self.llm = llm
         self.tools = tools
@@ -100,6 +101,9 @@ class AgentRunner:
         if not 0 <= regulation_min_score <= 1:
             raise ValueError("DOC_EVIDENCE_MIN_SCORE는 0~1이어야 합니다")
         self.regulation_min_score = regulation_min_score
+        # 메일 받는 사람 목록 (services/mail_recipients.py). async (principal) -> [{"user_id","name","email"}]
+        # 플래너의 메일 보내기 단계가 받는 사람을 이 목록에서만 고른다. None 이면 그 단계를 건너뛴다
+        self.mail_recipients = mail_recipients
 
     async def run(
         self,
@@ -667,6 +671,7 @@ def create_harness(
     planner: bool = False,
     regulation_mode: bool = False,
     regulation_min_score: float = MIN_SCORE,
+    mail_recipients=None,
 ) -> AgentRunner:
     return AgentRunner(
         llm=llm, tools=tools, checker=checker,
@@ -674,6 +679,7 @@ def create_harness(
         tool_timeout=tool_timeout, require_search=require_search, require_review_lookup=require_review_lookup,
         lookup_rules=lookup_rules, check_answers=check_answers, planner=planner,
         regulation_mode=regulation_mode, regulation_min_score=regulation_min_score,
+        mail_recipients=mail_recipients,
     )
 
 
