@@ -82,8 +82,9 @@ class PlannedRun:
 
             self.plan = check_plan(Plan(source="fallback"), self.question, list(self.specs.values()), r.rules,
                                    limit=limit, files=self.files)
-        log.info("계획 (%s, run %s): %s %s", self.plan.source, self.run_id, self.plan.describe(),
-                 "; ".join(self.plan.notes))
+        # 서버 콘솔에서 보이게 uvicorn 로거로 남긴다 (시연 때 계획 확인용)
+        logging.getLogger("uvicorn.error").info("계획 (%s, run %s): %s %s", self.plan.source, self.run_id,
+                                                self.plan.describe(), "; ".join(self.plan.notes))
 
         regulation = r.regulation_mode and "parse_doc" not in self.plan.tools  # 첨부를 읽는 계획은 첨부 답으로
         if regulation:
