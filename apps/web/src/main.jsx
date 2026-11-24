@@ -249,7 +249,7 @@ function Sources({ items = [], searched = false, cited = false }) {
     {!!items.length && <>
     <span className="sources-title"><FileText size={14} />참고 문서</span>
     <ul>{items.map((item, index) => <li key={index} className={item.opened ? '' : 'muted'}>
-      {item.title}{item.location && <span className="loc"> · {item.location}</span>}{item.partial && <span className="loc"> (일부 문단)</span>}{!item.opened && <span className="loc"> {item.previewed ? '(본문 미리보기)' : '(검색 결과)'}</span>}
+      {item.title}{item.location && <span className="loc"> · {item.location}</span>}{item.partial && <span className="loc"> (일부 문단)</span>}{!item.opened && !item.previewed && <span className="loc"> (검색 결과)</span>}
     </li>)}</ul></>}
   </div>;
 }
