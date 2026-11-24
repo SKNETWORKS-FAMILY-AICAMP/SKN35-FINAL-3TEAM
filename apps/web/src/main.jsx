@@ -10,6 +10,7 @@ import LoginScreen from './LoginScreen';
 import { ToolCatalog, ToolPicker } from './tool-visual';
 import AgentSelect from './AgentSelect';
 import { failedToolSummary } from './tool-status';
+import { request } from './api';
 import { InboxPage } from './inbox';
 import { SchedulesPage } from './schedules';
 import { DocumentDownloads, DocumentsPage, documentsFromEvents } from './documents';
@@ -756,7 +757,8 @@ function App({ session, theme, setTheme }) {
   // 안 읽은 알림 수: 화면을 옮길 때와 30초마다 다시 센다 (채팅에서 알림을 보낸 뒤에도 바로 보이게)
   useEffect(() => {
     let current = true;
-    const count = () => api(user, '/api/inbox/unread-count')
+    // 배지는 뒤에서 도는 조회라 실패해도 로그인 화면으로 보내지 않는다 (request 는 auth-expired 를 보내지 않음)
+    const count = () => request(user, '/inbox/unread-count')
       .then(data => { if (current) setUnread(data.unread ?? 0); }).catch(() => { /* 못 세도 메뉴는 그대로 */ });
     count();
     const timer = setInterval(count, 30000);
