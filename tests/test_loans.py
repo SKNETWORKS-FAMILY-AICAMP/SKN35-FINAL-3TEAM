@@ -15,9 +15,11 @@ from permission.audit import JsonlAuditLogger
 from permission.customer_mail import CustomerMailRule
 from permission.policy import load_policy
 from services.container import AppServices
+from services.customer_notices import NoticeLog
 from services.inbox import InboxStore
 from services.users import UserDirectory
-from tests.fakes import ScriptedLLM
+from harness import create_harness
+from tests.fakes import FixedApprover, MemoryAudit, ScriptedLLM
 from tools.loans import LoansMaturingTool, LoanStore, mask_name, won
 from tools.maturity_alert import SendMaturityAlertTool
 from contracts.harness import ToolResult
@@ -26,10 +28,10 @@ from tools.number_check import unknown_numbers
 from tools.registry import SimpleToolRegistry
 
 ROOT = Path(__file__).resolve().parents[1]
-KIM = Principal("kim", ("member",), {"dept_id": 10, "security_grade": 2})
-PARK = Principal("park", ("member",), {"dept_id": 20, "security_grade": 2})
-LEE = Principal("lee", ("dept_head",), {"dept_id": 10, "security_grade": 3})
-ADMIN = Principal("admin", ("admin",), {"dept_id": 1, "security_grade": 5})
+KIM = Principal("E1001", ("member",), {"dept_id": 10, "security_grade": 2})
+PARK = Principal("E2001", ("member",), {"dept_id": 20, "security_grade": 2})
+LEE = Principal("E1002", ("dept_head",), {"dept_id": 10, "security_grade": 3})
+ADMIN = Principal("E0001", ("E0001",), {"dept_id": 1, "security_grade": 5})
 
 
 @pytest.fixture
@@ -77,7 +79,7 @@ async def test_window_boundary_and_no_officer(loans):
 
 async def test_no_way_to_pick_another_officer(loans):
     tool = LoansMaturingTool(loans)
-    for arguments in ({"officer_id": "park"}, {"days": 0}, {"days": 91}, {"days": "30"}):
+    for arguments in ({"officer_id": "E2001"}, {"days": 0}, {"days": 91}, {"days": "30"}):
         assert not (await tool.run(call("loans_maturing", arguments))).ok
 
 
@@ -98,14 +100,21 @@ async def test_alert_rebuilds_list_and_drops_bad_summary(loans, inbox):
     tool = SendMaturityAlertTool(loans, inbox)
     ok = await tool.run(call("send_maturity_alert", {"days": 30, "summary": "만기 경과 1건(홍*동)과 11월 26일 만기인 한빛정밀 건을 오늘 먼저 확인하세요."}))
     assert ok.ok and not ok.data["summary_dropped"] and ok.data["total"] == 6
-    bad = await tool.run(call("send_maturity_alert", {"days": 30, "summary": "총 47건 중 9건이 급합니다."}))
+    # 같은 기준일·기간 알림은 다시 만들지 않고 있던 알림을 알려 준다
+    again = await tool.run(call("send_maturity_alert", {"days": 30, "summary": "다시 보내 주세요."}))
+    assert again.ok and again.data["already_sent"] and again.data["alert_id"] == ok.data["alert_id"]
+    assert len(await inbox.list("E1001")) == 1
+    bad = await tool.run(call("send_maturity_alert", {"days": 60, "summary": "총 47건 중 9건이 급합니다."}))
     assert bad.ok and bad.data["summary_dropped"] and "47, 9" in bad.data["message"]
-    stored = inbox.open("kim", bad.data["alert_id"])
-    assert stored["summary"] == "" and len(stored["payload"]["items"]) == 6
+    stored = await inbox.open("E1001", bad.data["alert_id"])
+    assert stored["summary"] == "" and stored["read_at"] and len(stored["payload"]["items"]) == 7  # 60일 이내 7건
+    assert await inbox.unread_count("E1001") == 1
+    assert await inbox.open("E2001", bad.data["alert_id"]) is None and not await inbox.delete("E2001", bad.data["alert_id"])
+    assert await inbox.delete("E1001", bad.data["alert_id"]) and await inbox.open("E1001", bad.data["alert_id"]) is None
     # 모델이 목록을 넘겨도 받지 않는다
     assert not (await tool.run(call("send_maturity_alert", {"days": 30, "items": []}))).ok
     no_loans = await tool.run(call("send_maturity_alert", {"days": 30}, LEE))
-    assert no_loans.ok and not no_loans.data["sent"] and inbox.list("lee") == []
+    assert no_loans.ok and not no_loans.data["sent"] and (await inbox.list("E1002")) == []
 
 
 async def test_inbox_api_only_shows_own_alerts(loans, inbox, tmp_path):
@@ -113,19 +122,19 @@ async def test_inbox_api_only_shows_own_alerts(loans, inbox, tmp_path):
     svc = AppServices(
         llm=ScriptedLLM([]), tools=SimpleToolRegistry([]), checker=create_checker(rules=[], default=Decision.ASK),
         approvals=FutureApprovalHandler(1), audit=JsonlAuditLogger(tmp_path / "audit.jsonl"),
-        users=UserDirectory({"kim": KIM, "park": PARK}), inbox=inbox,
+        users=UserDirectory({"E1001": KIM, "E2001": PARK}), inbox=inbox,
     )
     app = create_app(build=lambda: svc)
     app.state.services = svc
     alert_id = alert.data["alert_id"]
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        mine = (await client.get("/api/inbox", headers={"X-User-Id": "kim"})).json()
+        mine = (await client.get("/api/inbox", headers={"X-User-Id": "E1001"})).json()
         assert [a["alert_id"] for a in mine] == [alert_id] and mine[0]["read_at"] is None
         assert mine[0]["counts"]["7일 이내"] == 2
-        opened = await client.get(f"/api/inbox/{alert_id}", headers={"X-User-Id": "kim"})
+        opened = await client.get(f"/api/inbox/{alert_id}", headers={"X-User-Id": "E1001"})
         assert opened.status_code == 200 and opened.json()["read_at"]
-        assert (await client.get("/api/inbox", headers={"X-User-Id": "park"})).json() == []
-        assert (await client.get(f"/api/inbox/{alert_id}", headers={"X-User-Id": "park"})).status_code == 404
+        assert (await client.get("/api/inbox", headers={"X-User-Id": "E2001"})).json() == []
+        assert (await client.get(f"/api/inbox/{alert_id}", headers={"X-User-Id": "E2001"})).status_code == 404
 
 
 @pytest.fixture
@@ -154,13 +163,12 @@ async def test_prepare_notices_one_per_customer(loans):
     assert data == await prepared(loans, 30)
 
 
-async def test_customer_mail_must_be_the_prepared_notice(loans, mail_checker):
+async def test_customer_mail_goes_only_through_the_notice_tool(loans, mail_checker):
+    """양식 그대로여도 고객 이메일로 send_mail 을 직접 쓰면 거부한다 (발송 기록이 send_maturity_notice 에만 있다)."""
     notice = (await prepared(loans))["notices"][1]
-    ok = await mail_checker.check(mail(notice["to"], subject=notice["subject"], body=notice["body"] + "\n"))
-    assert ok.decision is Decision.ASK  # 줄 끝 공백 차이는 같은 글로 본다
     changed = notice["body"].replace("2026-11-26", "2026-12-26")
-    for bad in (mail(notice["to"], subject=notice["subject"], body=changed),
-                mail(notice["to"], subject=notice["subject"], body=notice["body"] + "\n연장은 승인될 예정입니다."),
+    for bad in (mail(notice["to"], subject=notice["subject"], body=notice["body"]),
+                mail(notice["to"], subject=notice["subject"], body=changed),
                 mail(notice["to"], subject="다른 제목", body=notice["body"])):
         verdict = await mail_checker.check(bad)
         assert verdict.decision is Decision.DENY and verdict.rule_id == "customer-mail-notice-only"
@@ -169,7 +177,7 @@ async def test_customer_mail_must_be_the_prepared_notice(loans, mail_checker):
 async def test_one_customer_per_mail_and_own_customers_only(loans, mail_checker):
     notice = render_notice(loans.items_for_email(KIM, "hong.gildong@example.com")[0])
     one = await mail_checker.check(mail(["Hong.Gildong@example.com"], ["colleague@bank.example"], subject=notice["subject"], body=notice["body"]))
-    assert one.decision is Decision.ASK  # 원래 정책(승인 카드)으로 넘어간다
+    assert one.decision is Decision.DENY and one.rule_id == "customer-mail-notice-only"
     mixed = await mail_checker.check(mail(["hong.gildong@example.com"], ["minji.kim@example.com"]))
     assert mixed.decision is Decision.DENY and mixed.rule_id == "customer-mail-one-per-customer"
     other = await mail_checker.check(mail(["sua.jung@example.com"]))
@@ -209,3 +217,65 @@ async def test_notice_card_shows_mail_and_send_uses_template(loans, mail_checker
     assert not (await tool.run(call("send_maturity_notice", {"loan_id": "L-1002", "body": "x"}))).ok  # 본문은 못 넘긴다
     assert not (await SendMaturityNoticeTool(loans).run(call("send_maturity_notice", {"loan_id": "L-1002"}))).ok
     assert len(mailer.calls) == 1
+
+
+class LostMailer(FakeMailer):
+    """응답이 끊겨 보냈는지 모르는 경우 (tools/gmail.py 의 문구)."""
+
+    async def run(self, call):
+        self.calls.append(call)
+        return ToolResult(call.call_id, False, "Gmail MCP 서버에 연결하거나 응답을 읽지 못했습니다. 발송 여부가 불확실하므로 보낸편지함을 확인한 후 재시도해 주세요.")
+
+
+class RefusedMailer(FakeMailer):
+    async def run(self, call):
+        self.calls.append(call)
+        return ToolResult(call.call_id, False, "본인 Gmail 계정이 연결되지 않았습니다.")
+
+
+async def test_same_notice_is_sent_only_once(loans, inbox, tmp_path):
+    notices = NoticeLog(tmp_path / "notices.sqlite3")
+    checker = CustomerMailRule(create_checker(rules=load_policy(ROOT / "config/permissions.yaml")[0], default=Decision.ASK),
+                               loans, notices)
+    mailer = FakeMailer()
+    tool = SendMaturityNoticeTool(loans, mailer, notices, inbox)
+    sent = await tool.run(call("send_maturity_notice", {"loan_id": "L-1002"}))
+    assert sent.ok and len(mailer.calls) == 1
+    # 준비 단계에서 빠지고 (UC-05-1 3a), 승인 카드 전에 거부되고, 도구도 다시 보내지 않는다
+    data = (await PrepareMaturityNoticesTool(loans, notices).run(call("prepare_maturity_notices", {"days": 7}))).data
+    assert [n["loan_id"] for n in data["notices"]] == ["L-1001", "L-1003"]
+    assert data["already"][0]["loan_id"] == "L-1002" and data["already"][0]["status"] == "이미 발송함"
+    card = await checker.check(call("send_maturity_notice", {"loan_id": "L-1002"}))
+    assert card.decision is Decision.DENY and card.rule_id == "maturity-notice-once" and "이미 보냈습니다" in card.reason
+    again = await tool.run(call("send_maturity_notice", {"loan_id": "L-1002"}))
+    assert not again.ok and "이미 보냈거나" in again.content and len(mailer.calls) == 1
+    # 결과를 모르면 sending 으로 남아 다시 보내지 않는다
+    lost = await SendMaturityNoticeTool(loans, LostMailer(), notices, inbox).run(call("send_maturity_notice", {"loan_id": "L-1001"}))
+    assert not lost.ok and (await notices.active("L-1001", "2026-11-18"))["status"] == "sending"
+    assert (await checker.check(call("send_maturity_notice", {"loan_id": "L-1001"}))).decision is Decision.DENY
+    # 확실한 실패는 다시 보낼 수 있다
+    refused = await SendMaturityNoticeTool(loans, RefusedMailer(), notices, inbox).run(call("send_maturity_notice", {"loan_id": "L-1003"}))
+    assert not refused.ok and await notices.active("L-1003", "2026-11-30") is None
+    assert (await checker.check(call("send_maturity_notice", {"loan_id": "L-1003"}))).decision is Decision.ASK
+    # 결과는 직원 알림함에 남는다 (UC-05-2)
+    titles = [a["title"] for a in await inbox.list("E1001")]
+    assert any(t.startswith("고객 안내 발송: (주)한빛정밀") for t in titles)
+    assert any("확인 필요" in t for t in titles) and any("실패" in t for t in titles)
+    assert [h["status"] for h in await notices.history("E1001")] == ["failed", "sending", "sent"]
+
+
+async def test_rejected_notice_is_recorded_and_can_be_requested_again(loans, inbox, tmp_path):
+    notices = NoticeLog(tmp_path / "notices.sqlite3")
+    checker = CustomerMailRule(create_checker(rules=load_policy(ROOT / "config/permissions.yaml")[0], default=Decision.ASK),
+                               loans, notices)
+    mailer = FakeMailer()
+    tool = SendMaturityNoticeTool(loans, mailer, notices, inbox)
+    runner = create_harness(
+        llm=ScriptedLLM([{"tool_calls": [{"id": "c1", "name": "send_maturity_notice", "arguments": {"loan_id": "L-1002"}}]}]),
+        tools=SimpleToolRegistry([tool]), checker=checker, approver=FixedApprover(False), audit=MemoryAudit(), max_turns=3)
+    result = await runner.run("L-1002 보내줘", KIM, "s")
+    assert result.stop_reason == "denied" and mailer.calls == []
+    assert [h["status"] for h in await notices.history("E1001")] == ["rejected"]
+    assert (await inbox.list("E1001"))[0]["title"].startswith("고객 안내 반려")
+    # 반려는 보낸 것이 아니므로 다시 요청할 수 있다
+    assert (await checker.check(call("send_maturity_notice", {"loan_id": "L-1002"}))).decision is Decision.ASK

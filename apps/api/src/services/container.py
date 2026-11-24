@@ -11,7 +11,7 @@ from openai import NotFoundError
 
 from contracts.harness import LLMClient
 from contracts.permission import AuditLogger, Decision, PermissionChecker
-from harness.grounding import RequireSearch
+from harness.grounding import DEFAULT_RULES, LookupRule
 from harness.llm import OpenAICompatLLM
 from harness.local_math import LocalMathClient
 from permission import create_checker
@@ -20,8 +20,9 @@ from permission.audit import JsonlAuditLogger
 from permission.customer_mail import CustomerMailRule
 from permission.policy import load_policy
 from services.agents import InMemoryAgentStore, InMemoryShareRequestStore
-from services.documents import DocumentStore, load_forms
-from services.inbox import InboxStore
+from services.customer_notices import DbNoticeLog, NoticeLog
+from services.documents import DbDocumentStore, DocumentStore, load_forms
+from services.inbox import DbInboxStore, InboxStore
 from services.mail_accounts import GmailAccountResolver
 from services.sessions import InMemorySessionStore
 from services.templates import InMemoryTemplateStore, load_templates
@@ -87,7 +88,8 @@ class AppServices:
     max_turns: int = 10
     tool_timeout: float | None = 30.0
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
-    require_search: RequireSearch | None = field(default_factory=RequireSearch)  # 문서 질문 검색 강제. None 이면 끔
+    # 조회 규칙 (harness/grounding.py): 문서·만기 대출·금리·환율 질문은 조회 결과 없이 답하지 않는다. () 면 끔
+    lookup_rules: tuple[LookupRule, ...] = DEFAULT_RULES
     require_review_lookup: bool = True  # 심사 건의 상태는 실제 조회 결과로만 안내
     auth: AuthService | None = None  # AUTH_MODE=session 이면 로그인(쿠키·DB 세션). None 이면 개발용 X-User-Id
 
@@ -166,7 +168,7 @@ def build_tools(doc_path: str | Path = FIXTURES / "doc_chunks.json", upload_dir:
                 holiday_path: str | Path | None = FIXTURES / "business_holidays_demo.json", review_store: ReviewStore | None = None,
                 upload_store: UploadStore | None = None, doc_tools: list | None = None,
                 loan_store: LoanStore | None = None, inbox: InboxStore | None = None,
-                documents: DocumentStore | None = None,
+                documents: DocumentStore | None = None, notices: NoticeLog | None = None,
                 gmail_account_resolver: GmailAccountResolver | None = None) -> list:
     """로컬 도구와 환경변수로 활성화한 Gmail MCP 도구를 함께 등록한다.
     doc_tools 를 주면 파일 예시 대신 그 문서 검색·열람 도구를 쓴다 (DOC_STORE=db → tools/db_docs.py)."""
@@ -180,6 +182,7 @@ def build_tools(doc_path: str | Path = FIXTURES / "doc_chunks.json", upload_dir:
     loan_store = loan_store or LoanStore(FIXTURES / "loans_demo.json")
     inbox = inbox or InboxStore(REPO_ROOT / "data/inbox.sqlite3")
     documents = documents or DocumentStore(REPO_ROOT / "data/documents.sqlite3", load_forms(DOCUMENT_FORMS))
+    notices = notices or NoticeLog(REPO_ROOT / "data/customer_notices.sqlite3")
     # 양식(config/document_forms)의 source.provider 이름 → 조회 함수. 새 서류의 데이터는 여기에 한 줄 추가한다
     providers = {"loans_maturing": lambda principal, params: loan_store.maturing(principal, params["days"])}
     gmail = build_gmail_tools(account_resolver=gmail_account_resolver)
@@ -189,7 +192,8 @@ def build_tools(doc_path: str | Path = FIXTURES / "doc_chunks.json", upload_dir:
         TodayTool(Path(holiday_path) if holiday_path is not None else None),
         ParseDocTool(uploads, timeout=parse_timeout, uploads=upload_store),
         GetReviewCaseTool(review_store), SubmitReviewRequestTool(review_store),
-        LoansMaturingTool(loan_store), SendMaturityAlertTool(loan_store, inbox), PrepareMaturityNoticesTool(loan_store), SendMaturityNoticeTool(loan_store, mailer),
+        LoansMaturingTool(loan_store), SendMaturityAlertTool(loan_store, inbox), PrepareMaturityNoticesTool(loan_store, notices),
+        SendMaturityNoticeTool(loan_store, mailer, notices, inbox),
         FillDocumentTool(documents, providers),
         *gmail,
         *build_market_tools(report_service(documents, Path(os.environ.get("REPORT_TEMPLATES_DIR", str(REPORT_TEMPLATES))))),
@@ -238,6 +242,21 @@ def stores_from_env() -> dict:
             "sessions": DbSessionStore(session_scope)}
 
 
+def output_stores_from_env(forms: dict) -> tuple:
+    """알림함·문서·고객 안내 발송 기록. STORE=db 면 PostgreSQL(0013) + 파일 저장소, 아니면 로컬 SQLite."""
+    env = os.environ.get
+    if os.environ.get("STORE", "memory").strip().lower() == "db":
+        from db.engine import session_scope
+        from storage import LocalStorage
+
+        log.info("저장소: 팀 DB (알림함·문서·고객 안내 발송 기록)")
+        return (DbInboxStore(session_scope), DbDocumentStore(session_scope, LocalStorage.from_env(), forms),
+                DbNoticeLog(session_scope))
+    return (InboxStore(Path(env("INBOX_DB_PATH", str(REPO_ROOT / "data" / "inbox.sqlite3")))),
+            DocumentStore(Path(env("DOCUMENT_DB_PATH", str(REPO_ROOT / "data" / "documents.sqlite3"))), forms),
+            NoticeLog(Path(env("NOTICE_DB_PATH", str(REPO_ROOT / "data" / "customer_notices.sqlite3")))))
+
+
 def build_from_env(*, gmail_account_resolver: GmailAccountResolver | None = None) -> AppServices:
     env = os.environ.get
     rules, default = load_policy(
@@ -252,9 +271,7 @@ def build_from_env(*, gmail_account_resolver: GmailAccountResolver | None = None
         Path(env("REVIEW_REQUEST_DB_PATH", str(REPO_ROOT / "data" / "review_requests.sqlite3"))),
     )
     loan_store = LoanStore(Path(env("LOANS_PATH", str(FIXTURES / "loans_demo.json"))))
-    inbox = InboxStore(Path(env("INBOX_DB_PATH", str(REPO_ROOT / "data" / "inbox.sqlite3"))))
-    documents = DocumentStore(Path(env("DOCUMENT_DB_PATH", str(REPO_ROOT / "data" / "documents.sqlite3"))),
-                              load_forms(Path(env("DOCUMENT_FORMS_DIR", str(DOCUMENT_FORMS)))))
+    inbox, documents, notices = output_stores_from_env(load_forms(Path(env("DOCUMENT_FORMS_DIR", str(DOCUMENT_FORMS)))))
     llm = llm_from_env()
     users, auth = users_from_env()
     stores = stores_from_env()
@@ -266,13 +283,13 @@ def build_from_env(*, gmail_account_resolver: GmailAccountResolver | None = None
             doc_path, upload_dir=env("UPLOAD_DIR"),
             parse_timeout=float(env("PARSE_TOOL_TIMEOUT_SECONDS", str(DEFAULT_PARSE_TIMEOUT))),
             holiday_path=holiday_path, review_store=review_store, upload_store=uploads,
-            doc_tools=db_doc_tools_from_env(), loan_store=loan_store, inbox=inbox, documents=documents,
+            doc_tools=db_doc_tools_from_env(), loan_store=loan_store, inbox=inbox, documents=documents, notices=notices,
             gmail_account_resolver=gmail_account_resolver,
         )),
         inbox=inbox,
         documents=documents,
         uploads=uploads,
-        checker=CustomerMailRule(create_checker(rules=rules, default=default), loan_store),
+        checker=CustomerMailRule(create_checker(rules=rules, default=default), loan_store, notices),
         approvals=FutureApprovalHandler(float(env("PERMISSION_APPROVAL_TIMEOUT_SECONDS", "120"))),
         audit=JsonlAuditLogger(env("PERMISSION_AUDIT_LOG_PATH", "logs/permission_audit.jsonl")),
         users=users,

@@ -47,12 +47,17 @@ SYSTEM = """너는 사내 업무 에이전트의 설정 초안을 만드는 도�
 - 답 형식(결론 먼저, 근거 표시, 내부 값 숨기기)은 공통 규칙이 정하므로 system_prompt 에 따로 쓰지 않는다.
 - missing 에 적은 일은 system_prompt 에 "그 일은 아직 할 수 없다고 안내한다"고 한 문장으로만 쓴다.
 - 툴이 어떻게 동작하는지(휴일 반영 여부 등)는 툴 설명에 적힌 것만 쓰고 짐작해서 쓰지 않는다.
+- 사용자가 말하지 않은 조건·제외·금지 규칙을 지어 넣지 않는다.
+  예) "요약이 없으면 보내지 않는다", "만기가 지난 건은 빼라" 처럼 설명에 없는 제한을 만들지 않는다.
+  툴 인자 중 무엇이 필수인지는 툴이 정하므로 system_prompt 에 적지 않는다.
 - system_prompt 에 권한을 무시하거나 우회하라는 내용을 넣지 않는다.
 
 사용할 수 있는 툴:
 {tools}"""
 
-RETRY = "방금 답은 올바른 JSON 이 아니었다. 설명 없이 위 형식의 JSON 객체 하나만 다시 출력해라."
+# 다시 물을 때는 생각(추론) 없이 바로 쓰게 한다 (/no_think, qwen3). 14b 의 기본 한도(4,096)에서는 답 몫이
+# 1,024 토큰뿐이라, 생각이 길면 JSON 을 쓰기 전에 끊긴다 (2026-11-24 실측: 초안이 기본 초안으로 떨어져 툴 0개)
+RETRY = "방금 답은 올바른 JSON 이 아니었거나 끊겼다. 생각을 쓰지 말고 위 형식의 JSON 객체 하나만 바로 출력해라. /no_think"
 
 
 @dataclass(frozen=True)
@@ -92,6 +97,26 @@ def humanize_tool_names(text: str, specs: list[ToolSpec]) -> str:
     return re.sub(r"(?<![A-Za-z0-9_])chunk_id(?![A-Za-z0-9_])", "문단 번호", text)
 
 
+# 사용자가 말하지 않았는데 모델이 자주 지어 넣는 제한 문장 (실측: "만기 경과 건은 포함하지 않는다", "요약문이 없으면 보내지 않는다")
+_EXCLUSION = re.compile(r"포함하지\s*않|제외|빼고|빼며|뺀다|빼야")
+_CONDITIONAL_BAN = re.compile(r"없으면[^.!?\n]*(?:않|말|안\s)")
+
+
+def drop_invented_rules(prompt: str, description: str) -> str:
+    """역할 지시에서 사용자 설명에 없는 제외·조건부 금지 문장을 뺀다. 사용자가 그런 말을 했으면 그대로 둔다.
+    "아직 할 수 없다고 안내한다" 같은 빈 안내 문장도 뺀다 (missing 이 비었는데 붙는 일이 있음)."""
+    keep = []
+    for sentence in re.split(r"(?<=[.!?다])\s+", prompt.strip()):
+        if _EXCLUSION.search(sentence) and not _EXCLUSION.search(description):
+            continue
+        if _CONDITIONAL_BAN.search(sentence) and "없으면" not in description:
+            continue
+        if re.fullmatch(r"\W*그 일은 아직 할 수 없다고 안내한다\W*", sentence):
+            continue
+        keep.append(sentence)
+    return " ".join(keep).strip()
+
+
 def _strings(value: Any, limit: int = 8) -> list[str]:
     items = value if isinstance(value, list) else []
     return list(dict.fromkeys(str(v).strip()[:60] for v in items if str(v).strip()))[:limit]
@@ -108,7 +133,7 @@ def _clean(data: dict[str, Any], specs: list[ToolSpec], description: str) -> Age
     return AgentDraft(
         name=name[:MAX_NAME],
         description=(str(data.get("description") or "").strip() or description)[:MAX_DESCRIPTION],
-        system_prompt=humanize_tool_names(prompt, specs)[:4000],
+        system_prompt=(drop_invented_rules(humanize_tool_names(prompt, specs), description) or prompt)[:4000],
         tools=[t for t in picked if effects.get(t) in AUTO_EFFECTS],
         suggested_tools=[t for t in picked if t in effects and effects[t] not in AUTO_EFFECTS],
         dropped_tools=[t for t in picked if t not in effects],

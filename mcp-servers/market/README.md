@@ -73,6 +73,26 @@ uv run --no-sync python -m uvicorn main:app --app-dir apps/api/src --reload
 
 조회만 하려면 `2026-11-18 환율 조회해 줘`라고 요청한다. 시장 전용 에이전트에서는 모델 호출 없이 조회 결과를 표시한다.
 
+## 시장 DB 에 쌓고 리포트는 DB 값만 쓰기 (UC-02-1, 추천)
+
+유즈케이스 UC-02-1: 수집기가 ECOS 에서 받은 파일을 **받은 편지함(경계, `MARKET_INBOX_DIR`)** 에 놓고,
+적재기가 해시·형식을 검사해 통과한 값만 **시장 DB(마이그레이션 0014: `market_fetch`·`market_value`)** 에 넣는다.
+
+- 해시가 다르면 파일 전체 거부 (3a). 받은 기록은 성공·빈 응답·오류·거부 모두 `market_fetch` 에 남는다.
+- 직전 관측값보다 환율이 3% 넘게, 기준금리가 0.5%p 넘게 움직이면 보류(`held`, EXT-1). 리포트에 쓰지 않는다.
+- 같은 날짜에 다른 값이 오면 이전 값은 고치지 않고 정정 표시(`superseded`)만 하고 새 값을 쓴다.
+- `MARKET_DATA_MODE=db` 면 `market_snapshot` 은 시장 DB 의 통과 값만 읽는다 (리포트에 "사내 시장 DB" 표시).
+
+`mcp-servers/market/.env` 에 `DATABASE_URL`(플랫폼과 같은 DB)과 `ECOS_API_KEY` 를 넣고 MCP 를 띄우면
+`collect_market_data` 도구가 열린다. 플랫폼의 예약 실행(평일 09:10, `config/schedules.yaml`)이 이 도구를 부른다.
+에이전트 툴 목록에는 들어가지 않는다. 손으로 한 번 돌리려면:
+
+```cmd
+uv run --no-sync --env-file mcp-servers/market/.env --package market-mcp market-collect --days 10
+```
+
+인증키가 없으면 수집기는 기록 파일(replay)로 받는다 (`MARKET_COLLECT_MODE` 로 고정할 수 있다). 이때 리포트에 "기록 재생" 이 표시된다.
+
 ## 실제 ECOS API 사용하기
 
 공식 안내: https://ecos.bok.or.kr/api/

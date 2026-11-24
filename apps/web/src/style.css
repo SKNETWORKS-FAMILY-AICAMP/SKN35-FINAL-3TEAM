@@ -799,3 +799,13 @@ code, pre, .tool code, .catalog-tool code { font-family: Consolas, "D2Coding", u
 
 /* 첫 화면을 세로 가운데가 아니라 위쪽에 붙인다 */
 .chat-body > .welcome { margin: 0 auto; padding-top: 16px; }
+
+/* 알림함 메뉴의 안 읽은 알림 수 */
+.nav-count { margin-left: auto; min-width: 20px; padding: 1px 6px; border-radius: 99px; background: #e5484d; color: #fff; font-size: .72rem; font-weight: 700; text-align: center; }
+.inbox-item { display: flex; align-items: center; gap: 8px; }
+.inbox-item .inbox-open { flex: 1; }
+
+/* 예약 작업 (관리자) */
+.schedule-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.schedule-head button { margin-left: auto; }
+.schedule-result { max-height: 180px; overflow: auto; font-size: .75rem; background: var(--surface-2, rgba(127,127,127,.08)); padding: 8px; border-radius: 6px; white-space: pre-wrap; }
