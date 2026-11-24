@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from contracts.harness import LLMClient, Message, ToolSpec
+from harness.attachment_grounding import extractive_reply, parse_record, pick_files, read_call
 from harness.grounding import RequireSearch
 from harness.market_grounding import CLARIFY_DATE, REPORT_ID, base_date_args, template_query
 
@@ -30,6 +31,13 @@ log = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class Args:
     arguments: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class Calls:
+    """같은 툴을 여러 번 (예: 첨부 파일마다 한 번씩)."""
+
+    arguments: list[dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -48,6 +56,9 @@ class StepContext:
     retried: set[str] = field(default_factory=set)  # 한 번 더 실행한 툴 (run 당 한 번)
     llm_calls: int = 0  # 단계 처리 중 쓴 LLM 호출 (요약 등)
     llm_budget: int = 0  # 단계 처리에 더 쓸 수 있는 LLM 호출 수
+    files: list[dict] = field(default_factory=list)  # 대화에 연결된 첨부 (서버 확인, file_id·filename·new)
+    reading: list[dict] = field(default_factory=list)  # 이번에 읽는 첨부
+    records: list[dict] = field(default_factory=list)  # 읽은 첨부 원문 (parse_record)
 
 
 def load(content: str) -> Any:
@@ -88,6 +99,30 @@ def after_search_doc(ctx: StepContext, ok: bool, content: str, arguments: dict):
     if "get_doc_chunk" in ctx.later:
         return None
     return Finish(_DOC_RULE.unavailable)
+
+
+# ── 첨부 문서 ───────────────────────────────────────────────
+
+READ_FAILED = "첨부 문서를 읽는 과정에서 오류가 발생했습니다. 아래 도구 실행 결과를 확인해 주세요. 문서에 내용이 없다는 뜻은 아닙니다."
+
+
+async def bind_parse_doc(ctx: StepContext):
+    """읽을 파일과 인자는 서버가 정한다. LLM 이 file_id 를 지어내거나 다른 사람 파일을 고를 수 없다."""
+    ctx.reading = pick_files(ctx.question, ctx.files)
+    if not ctx.reading:
+        return Finish("이 대화에 연결된 첨부 파일이 없습니다. 읽을 파일을 첨부해 주세요.")
+    return Calls([read_call(f, ctx.question).arguments for f in ctx.reading])
+
+
+def after_parse_doc(ctx: StepContext, ok: bool, content: str, arguments: dict):
+    file = next((f for f in ctx.reading if f["file_id"] == arguments.get("file_id")), None)
+    record = parse_record(content, file["filename"]) if ok and file else None
+    if record is None:
+        return Finish(READ_FAILED)
+    ctx.records.append(record)
+    if len(ctx.records) == len(ctx.reading) and not any(r["text"].strip() for r in ctx.records):
+        return Finish(extractive_reply(ctx.records))  # 질문과 맞는 문단이 없음
+    return None
 
 
 # ── 금리·환율 리포트 ──────────────────────────────────────────
@@ -173,6 +208,7 @@ def after_save_morning_report(ctx: StepContext, ok: bool, content: str, argument
 
 
 BIND = {
+    "parse_doc": bind_parse_doc,
     "search_doc": bind_search_doc,
     "search_report_templates": bind_search_report_templates,
     "get_report_template": bind_get_report_template,
@@ -181,6 +217,7 @@ BIND = {
     "save_morning_report": bind_save_morning_report,
 }
 AFTER = {
+    "parse_doc": after_parse_doc,
     "search_doc": after_search_doc,
     "search_report_templates": after_search_report_templates,
     "get_report_template": after_get_report_template,

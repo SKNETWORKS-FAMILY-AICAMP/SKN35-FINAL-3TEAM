@@ -13,16 +13,25 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 
 from contracts.harness import LLMClient, Message, ToolSpec
-from harness.grounding import LookupRule
+from harness.attachment_grounding import refers_to_attachment
+from harness.grounding import LookupRule, RequireSearch
 from harness.market_grounding import wants_report
 
 log = logging.getLogger(__name__)
+
+# 계획 한 번에 기다리는 시간(초). 넘으면 규칙만으로 계획한다
+# (2026-11-24 실측: qwen3 8b 가 /no_think 를 무시하고 생각만 하다 4분 걸린 적이 있음)
+PLANNER_TIMEOUT = float(os.environ.get("HARNESS_PLANNER_TIMEOUT_SECONDS", "60"))
+# 첨부를 읽어도 사내 문서 검색이 따로 필요한 질문 (첨부를 사내 규정과 비교 등)
+_CORPORATE = re.compile(r"사내|내규|우리\s*(?:은행|회사|규정)|규정|지침")
 
 EFFECT_LABEL = {"read": "조회", "write": "저장", "send": "발송"}
 # 저장·발송 툴은 이런 요청이 있을 때만 계획에 남긴다
@@ -51,6 +60,7 @@ PLANNER_PROMPT = """너는 은행 업무 에이전트의 계획 담당이다. �
 - 규정·수치·고객·대출 정보가 필요한 답이면 그 정보를 조회하는 단계를 반드시 넣는다. 조회 없이 답하는 계획을 쓰지 않는다.
 - 저장·발송 도구는 직원이 만들기·저장·보내기를 분명히 요청했을 때만 넣는다.
 - 앞 단계 결과가 필요한 단계는 그 뒤에 둔다.
+- 첨부 파일 내용이 필요한 요청이면 parse_doc 을 첫 단계로 넣는다. 어떤 파일을 읽을지는 서버가 정한다.
 - 도구가 필요 없는 요청(인사, 일반 개념 설명)이면 steps 를 빈 목록으로 둔다.
 - 단계는 최대 {limit}개다. 최종 답 쓰기는 단계에 넣지 않는다.
 
@@ -116,24 +126,30 @@ def _recent(history: list[Message], limit: int = 4) -> str:
 
 async def make_plan(
     llm: LLMClient, question: str, history: list[Message], specs: list[ToolSpec],
-    rules: tuple[LookupRule, ...], *, limit: int,
+    rules: tuple[LookupRule, ...], *, limit: int, files: list[dict] | None = None,
 ) -> Plan:
     role = next((m.content for m in history if m.role == "system"), "")
     prompt = PLANNER_PROMPT.format(tools=_tool_lines(specs), limit=limit, role=role[:1500] or "(없음)")
     recent = _recent(history)
     # /no_think: qwen3 가 생각 없이 바로 JSON 을 쓰게 한다 (사용자 메시지 끝에 있어야 듣는다)
-    user = (f"앞선 대화:\n{recent}\n\n" if recent else "") + f"직원 요청:\n{question[:2000]}\n/no_think"
+    attached = ", ".join(f["filename"] + (" (이번에 첨부)" if f.get("new") else "") for f in files or [])
+    user = ((f"앞선 대화:\n{recent}\n\n" if recent else "") + (f"첨부 파일: {attached}\n\n" if attached else "")
+            + f"직원 요청:\n{question[:2000]}\n/no_think")
     steps: list[PlanStep] | None = None
     try:
-        reply = (await llm.chat([Message("system", prompt), Message("user", user)], [])).message
+        reply = (await asyncio.wait_for(llm.chat([Message("system", prompt), Message("user", user)], []),
+                                        PLANNER_TIMEOUT)).message
         steps = parse_plan(reply.content)
+    except TimeoutError:
+        log.warning("플래너가 %g초 안에 답하지 않아 규칙으로 계획을 만듭니다", PLANNER_TIMEOUT)
     except Exception:
         log.warning("플래너 LLM 호출 실패, 규칙으로 계획을 만듭니다", exc_info=True)
     plan = Plan(steps or [], "llm" if steps is not None else "fallback")
-    return check_plan(plan, question, specs, rules, limit=limit)
+    return check_plan(plan, question, specs, rules, limit=limit, files=files)
 
 
-def check_plan(plan: Plan, question: str, specs: list[ToolSpec], rules: tuple[LookupRule, ...], *, limit: int) -> Plan:
+def check_plan(plan: Plan, question: str, specs: list[ToolSpec], rules: tuple[LookupRule, ...], *, limit: int,
+               files: list[dict] | None = None) -> Plan:
     """LLM 계획을 검사·보정한다 (모듈 설명 2번). plan 을 고쳐서 돌려준다."""
     by_name = {s.name: s for s in specs}
     asks_action = bool(_ASKS_ACTION.search(question))
@@ -146,17 +162,33 @@ def check_plan(plan: Plan, question: str, specs: list[ToolSpec], rules: tuple[Lo
             plan.notes.append(f"겹치는 단계 뺌: {step.tool}")
         elif spec.effect in ("write", "send") and not asks_action:
             plan.notes.append(f"요청하지 않은 저장·발송 뺌: {step.tool}")
+        elif step.tool == "parse_doc" and not files:
+            plan.notes.append("첨부가 없어 parse_doc 을 뺌")
         elif step.tool == "save_morning_report" and not wants_report(question):
             plan.notes.append("리포트 저장 요청이 아니라 저장 단계를 뺌")
         else:
             kept.append(step)
 
+    # 첨부: 질문이 첨부를 가리키면 parse_doc 을 넣고, 읽기는 항상 첫 단계로 둔다 (다음 단계가 원문을 쓴다)
+    if files and "parse_doc" in by_name:
+        reading = next((s for s in kept if s.tool == "parse_doc"), None)
+        if reading is None and refers_to_attachment(question, files):
+            reading = PlanStep("parse_doc", "첨부 문서에서 질문과 관련된 원문을 읽는다", "rule")
+            plan.notes.append("첨부를 가리키는 질문이라 parse_doc 을 넣음")
+        if reading is not None:
+            kept = [reading, *(s for s in kept if s.tool != "parse_doc")]
+
     # 조회 규칙: 필요한 조회가 계획에 없으면 맨 앞에 넣는다 (규칙 순서대로)
+    # 첨부 읽기는 첨부를 가리키는 질문에서만 사내 문서 조회를 대신한다. 사내 규정과 비교하는 질문이면 검색도 한다
+    attachment_only = bool(files) and refers_to_attachment(question, files) and not _CORPORATE.search(question)
     lookups: list[PlanStep] = []
     for rule in rules:
         tool = rule.available(by_name)
         planned = {s.tool for s in [*lookups, *kept]}
-        if tool and not (planned & rule.grounded_tools) and rule.needed(question, ""):
+        grounded = rule.grounded_tools
+        if isinstance(rule, RequireSearch) and not attachment_only:
+            grounded = grounded - {"parse_doc"}
+        if tool and not (planned & grounded) and rule.needed(question, ""):
             lookups.append(PlanStep(tool, f"{by_name[tool].label}로 필요한 정보를 조회한다", "rule"))
             plan.notes.append(f"조회 규칙으로 넣음: {tool}")
     # 리포트를 만들어 달라는데 저장 단계가 없으면 넣는다 (시장 리포트)
@@ -179,6 +211,7 @@ def check_plan(plan: Plan, question: str, specs: list[ToolSpec], rules: tuple[Lo
 
     for step in [*lookups, *kept]:
         add(step)
+    ordered.sort(key=lambda s: s.tool != "parse_doc")  # 첨부 읽기가 맨 앞 (나머지 순서는 그대로)
     planned = {s.tool for s in ordered}
     for send, prepare in CONFIRM_FIRST.items():
         if send in planned and prepare in planned:

@@ -13,6 +13,8 @@ from harness.grounding import DEFAULT_RULES
 from harness.market_grounding import CLARIFY_DATE
 from harness.planner import Plan, PlanStep, check_plan, parse_plan
 from tests.fakes import FakeRegistry, FakeTool, FixedApprover, MemoryAudit, ScriptedChecker, ScriptedLLM
+from tests.test_attachment_grounding import prepare
+from tests.test_uploads import HEADERS, setup  # noqa: F401  (fixture)
 from tests.test_market_tools import KIM as MARKET_KIM, bridge, market_tools, service  # noqa: F401  (fixtures)
 from tools.registry import SimpleToolRegistry
 
@@ -185,3 +187,90 @@ async def test_market_relative_date_is_asked_not_guessed(service, bridge):  # no
     result = await runner.run("지난주 금요일 금리·환율 리포트 만들어줘", MARKET_KIM, "s")
     assert result.final_message.content == CLARIFY_DATE
     assert not any(m.tool_calls for m in result.messages)
+
+
+# ── 첨부 문서 ─────────────────────────────────────────────
+
+def test_check_plan_reads_attachment_first_only_when_it_is_referred_to():
+    specs = [spec("parse_doc"), spec("search_doc")]
+    old = [{"file_id": "f1", "filename": "규정.hwpx", "new": False}]
+    assert check(["parse_doc"], "안녕", specs).tools == []  # 첨부가 없으면 읽을 것도 없다
+    plan = check_plan(Plan([PlanStep("search_doc")]), "이 문서 내용이 내규에 맞아?", specs, DEFAULT_RULES, limit=6, files=old)
+    assert plan.tools == ["parse_doc", "search_doc"]
+    later = check_plan(Plan([]), "오늘 날씨 어때", specs, DEFAULT_RULES, limit=6, files=old)
+    assert later.tools == []  # 지난 턴의 첨부를 가리키지 않으면 읽지 않는다
+    new = [{**old[0], "new": True}]
+    assert check_plan(Plan([]), "핵심만 알려줘", specs, DEFAULT_RULES, limit=6, files=new).tools == ["parse_doc"]
+
+
+def test_attachment_does_not_replace_corporate_search_when_rules_are_asked():
+    specs = [spec("parse_doc"), spec("search_doc")]
+    new = [{"file_id": "f1", "filename": "신청서.pdf", "new": True}]
+    compare = check_plan(Plan([]), "첨부한 신청서가 우리 서류 보완 규정에 맞는지 봐 줘", specs, DEFAULT_RULES, limit=6, files=new)
+    assert compare.tools == ["parse_doc", "search_doc"]
+    only = check_plan(Plan([]), "이 문서에서 보완 기한 며칠이야?", specs, DEFAULT_RULES, limit=6, files=new)
+    assert only.tools == ["parse_doc"]
+    # 첨부를 가리키지 않는 규정 질문: 플래너가 지난 첨부를 읽겠다고 해도 사내 검색은 한다
+    old = [{**new[0], "new": False}]
+    rule = check_plan(Plan([PlanStep("parse_doc")]), "서류 반려 사유는 어떻게 적어?", specs, DEFAULT_RULES, limit=6, files=old)
+    assert rule.tools == ["parse_doc", "search_doc"]
+
+
+async def test_slow_planner_falls_back_to_rules(monkeypatch):
+    import asyncio
+
+    import harness.planner as planner
+
+    class Slow(ScriptedLLM):
+        async def chat(self, messages, tools):
+            if not self.calls:
+                self.calls.append((messages, tools))
+                await asyncio.sleep(1)
+            return await super().chat(messages, tools)
+
+    monkeypatch.setattr(planner, "PLANNER_TIMEOUT", 0.01)
+    log = []
+    llm = Slow([{}, {"tool_calls": [{"id": "s1", "name": "search_doc", "arguments": {"query": "연차"}}]},
+                {"content": "연차는 15일입니다.\n근거: 인사규정 제12조(연차)"}])
+    runner = create_harness(llm=llm, tools=FakeRegistry([tool("search_doc", FOUND, log=log)]), checker=ScriptedChecker({}),
+                            approver=FixedApprover(True), audit=MemoryAudit(), max_turns=6, lookup_rules=DEFAULT_RULES,
+                            planner=True)
+    result = await runner.run("연차 규정 알려줘", KIM, "s")
+    assert log == ["search_doc"] and result.final_message.content.startswith("연차는 15일")
+
+
+async def ask(setup, script, content):  # noqa: F811
+    svc, item, client, searched = await prepare(setup, script)
+    svc.use_planner = True
+    (await svc.tools.get("search_doc")).spec = spec("search_doc")  # 가짜 툴 기본값(write) 대신 실제처럼 조회
+    async with client:
+        body = (await client.post("/api/chat/messages", headers=HEADERS,
+                                  json={"content": content, "file_ids": [item["file_id"]]})).json()
+    return svc, body, searched
+
+
+async def test_attachment_question_is_planned_read_by_server_then_answered_without_tools(setup):  # noqa: F811
+    svc, body, searched = await ask(setup, [
+        plan_reply("parse_doc"),
+        {"content": "보존 기간은 7년입니다. 근거: 규정.hwpx 제2조"},
+    ], "첨부 문서의 보존 기간은?")
+    assert "7년" in body["message"] and [e["tool_name"] for e in body["tool_events"]] == ["parse_doc"]
+    assert svc.llm.calls[1][1] == [] and len(svc.llm.calls) == 2  # 파일·인자는 서버가 정해 단계 LLM 호출 없음
+    assert "규정.hwpx" in svc.llm.calls[0][0][1].content  # 플래너는 첨부 파일 이름을 본다
+    assert not searched
+
+
+async def test_attachment_plus_corporate_search_runs_both_steps(setup):  # noqa: F811
+    svc, body, searched = await ask(setup, [
+        plan_reply("parse_doc", "search_doc"),
+        {"tool_calls": [{"id": "s1", "name": "search_doc", "arguments": {"query": "보존 기간"}}]},
+        {"content": "첨부 문서의 보존 기간은 7년입니다."},
+    ], "첨부 문서의 보존 기간이 사내 규정과 같은지 찾아 줘")
+    assert [e["tool_name"] for e in body["tool_events"]] == ["parse_doc", "search_doc"] and searched == ["search_doc"]
+    assert "7년" in body["message"]
+
+
+async def test_unusable_attachment_answer_becomes_real_excerpt(setup):  # noqa: F811
+    _, body, _ = await ask(setup, [{"content": "계획 없음"}] + [{"content": "보존 기간은 5년입니다."}] * 2,
+                           "첨부 문서의 보존 기간은?")
+    assert "7년" in body["message"] and "발췌" in body["message"] and "5년" not in body["message"]

@@ -236,6 +236,11 @@ async def send_message(
         if active_files:
             prompt += "\n[대화에 연결된 첨부 파일 — 서버 확인]\n" + json.dumps(active_files, ensure_ascii=False)
         history = [Message(role="system", content=prompt), *session.messages]
+        if svc.use_planner:
+            # 플래너는 연결된 첨부 전체를 받고, 읽을지(parse_doc 단계)와 다음 단계를 계획에서 정한다.
+            # new: 이번 메시지에 붙인 파일 (질문이 첨부를 가리키지 않아도 읽는다)
+            new_ids = {item["file_id"] for item in attachments or []}
+            selected = [{**item, "new": item["file_id"] in new_ids} for item in active_files]
         result: RunResult = await harness.run(
             content, principal, session.session_id, history,
             agent_id=session.agent_id, run_id=run_id,

@@ -20,10 +20,11 @@ from typing import TYPE_CHECKING
 from contracts.harness import Denial, LLMToolCall, Message, RequiredToolLLMClient, RunResult, ToolSpec
 from contracts.permission import Principal, ToolCall
 from harness.answer_check import WRITE_EFFECTS, check_answer, log_blocked
+from harness.attachment_grounding import compact_system, evidence_problem, extractive_reply
 from harness.denial import DoneTool
 from harness.grounding import RequireSearch
 from harness.planner import Plan, PlanStep, make_plan
-from harness.steps import AFTER, BIND, Args, Finish, StepContext, load
+from harness.steps import AFTER, BIND, Args, Calls, Finish, StepContext, load
 
 if TYPE_CHECKING:
     from harness.runner import AgentRunner
@@ -39,10 +40,14 @@ STEP_PROMPT = ("[계획 {index}/{total}단계] {goal}\n지금은 {tool} 도구�
 
 class PlannedRun:
     def __init__(self, runner: AgentRunner, messages: list[Message], question: str, specs: list[ToolSpec],
-                 principal: Principal, session_id: str, agent_id: str | None, run_id: str | None) -> None:
+                 principal: Principal, session_id: str, agent_id: str | None, run_id: str | None,
+                 *, files: list[dict] | None = None, role: str = "") -> None:
         self.r = runner
         self.messages = messages
-        self.question = question
+        self.start = len(messages)  # 이번 run 에서 붙는 메시지의 시작 (사용자 메시지 다음)
+        self.question = question.split("[사용자 첨부 파일 목록]", 1)[0]
+        self.files = list(files or [])
+        self.role = role
         self.specs = {s.name: s for s in specs}
         self.principal = principal
         self.session_id = session_id
@@ -61,22 +66,26 @@ class PlannedRun:
         limit = max(1, min(MAX_STEPS, r.max_turns - 2))
         history = self.messages[:-1]
         if r.max_turns >= 2:
-            self.plan = await make_plan(r.llm, self.question, history, list(self.specs.values()), r.rules, limit=limit)
+            self.plan = await make_plan(r.llm, self.question, history, list(self.specs.values()), r.rules,
+                                        limit=limit, files=self.files)
             self.calls += 1
         else:  # 계획에 쓸 호출이 없으면 규칙만으로 계획
             from harness.planner import check_plan
 
-            self.plan = check_plan(Plan(source="fallback"), self.question, list(self.specs.values()), r.rules, limit=limit)
+            self.plan = check_plan(Plan(source="fallback"), self.question, list(self.specs.values()), r.rules,
+                                   limit=limit, files=self.files)
         log.info("계획 (%s, run %s): %s %s", self.plan.source, self.run_id, self.plan.describe(),
                  "; ".join(self.plan.notes))
 
-        ctx = StepContext(self.question, r.llm, self.specs, later=[])
+        ctx = StepContext(self.question, r.llm, self.specs, later=[], files=self.files)
         steps = self.plan.steps
         for index, step in enumerate(steps):
             ctx.later = [s.tool for s in steps[index + 1:]]
             ended = await self._step(step, index, len(steps), ctx)
             if ended is not None:
                 return ended
+        if ctx.records:
+            return await self._answer_from_attachments(ctx.records)
         return await self._answer()
 
     async def _step(self, step: PlanStep, index: int, total: int, ctx: StepContext) -> RunResult | None:
@@ -90,6 +99,8 @@ class PlannedRun:
             return self._finish(bound.text)
         if isinstance(bound, Args):
             calls = [self._call(step.tool, bound.arguments)]
+        elif isinstance(bound, Calls):
+            calls = [self._call(step.tool, args) for args in bound.arguments[:MAX_CALLS_PER_STEP]]
         else:
             calls = await self._ask(step, index, total, spec)
         if not calls:
@@ -186,6 +197,32 @@ class PlannedRun:
             self.messages.append(reply)
             return RunResult(reply, self.messages, self.calls, "completed")
         return RunResult(None, self.messages, self.calls, "max_turns")
+
+    async def _answer_from_attachments(self, records: list[dict]) -> RunResult:
+        """첨부를 읽은 계획의 답. 긴 대화 기록 대신 질문과 이번 run 의 도구 결과만 보여 준다 (원문이 잘리지 않게).
+        근거 검사(evidence_problem)는 첨부 원문 + 이번에 성공한 다른 도구 결과를 근거로 본다."""
+        r = self.r
+        focus = [Message("system", compact_system(self.role)), Message("user", self.question),
+                 *self.messages[self.start:]]
+        evidence = [*records, *({"filename": d.tool_name, "text": d.content} for d in self.done if d.name != "parse_doc")]
+        answer, retried = "", False
+        while self.calls < r.max_turns:
+            reply = (await r.llm.chat(focus, [])).message
+            self.calls += 1
+            answer = reply.content
+            issue = evidence_problem(answer, evidence, self.question)
+            if issue is None:
+                break
+            log.info("첨부 답변 재검증 (run %s): %s", self.run_id, issue)
+            if retried:
+                answer = ""
+                break
+            retried = True
+            focus += [Message("assistant", answer),
+                      Message("system", f"이 답은 사용할 수 없습니다: {issue} 확인한 text에서 직접 인용해 다시 답하세요.")]
+        if not answer or evidence_problem(answer, evidence, self.question):
+            answer = extractive_reply(records)
+        return self._finish(answer)
 
     def _finish(self, text: str) -> RunResult:
         final = Message("assistant", text)

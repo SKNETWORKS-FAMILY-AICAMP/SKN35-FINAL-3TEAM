@@ -107,14 +107,16 @@ class AgentRunner:
         messages: list[Message] = list(history or [])
         messages.append(Message(role="user", content=user_input))
         specs = await self.tools.specs()
-        if attachments and any(s.name == "parse_doc" for s in specs):
-            return await self._read_attachments(messages, user_input, attachments, principal, session_id,
-                                                agent_id, run_id, attachment_role)
+        has_parser = any(s.name == "parse_doc" for s in specs)
         review = ReviewLookupGuard.from_request(user_input, history or []) if self.require_review_lookup else None
         if self.planner and review is None:  # 심사 건(UC-04)은 이번 범위 밖이라 예전 흐름을 쓴다
             from harness.plan_runner import PlannedRun
 
-            return await PlannedRun(self, messages, user_input, specs, principal, session_id, agent_id, run_id).run()
+            return await PlannedRun(self, messages, user_input, specs, principal, session_id, agent_id, run_id,
+                                    files=attachments if has_parser else [], role=attachment_role).run()
+        if attachments and has_parser:
+            return await self._read_attachments(messages, user_input, attachments, principal, session_id,
+                                                agent_id, run_id, attachment_role)
         market = market_plan(user_input, specs)
         if market:
             return await self._run_market(messages, user_input, market, principal, session_id, agent_id, run_id)
