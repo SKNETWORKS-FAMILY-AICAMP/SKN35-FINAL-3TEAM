@@ -30,7 +30,8 @@ from harness.attachment_grounding import compact_system, evidence_problem, extra
 from harness.denial import DoneTool
 from harness.grounding import RequireSearch
 from harness.planner import Plan, PlanStep, make_plan, require_regulation_steps
-from harness.regulation import SELECT_PROMPT, UNAVAILABLE, read_evidence, render_quotes, selected_quotes
+from harness.regulation import (SELECT_PROMPT, UNAVAILABLE, read_evidence, render_quotes, selected_quotes,
+                                selection_request, still_present)
 from harness.steps import AFTER, BIND, Args, Calls, Finish, StepContext, load
 
 if TYPE_CHECKING:
@@ -229,8 +230,7 @@ class PlannedRun:
         if not ctx.evidence or self.calls >= r.max_turns:
             return self._finish(UNAVAILABLE)
         # 예전 대화·사용자 인용·개인 역할 프롬프트는 검증 가능한 규정 원문이 아니다
-        request = {"question": self.question, "documents": [
-            {"chunk_id": e.chunk_id, "title": e.title, "location": e.location, "text": e.text} for e in ctx.evidence]}
+        request = selection_request(self.question, ctx.evidence)   # 원문을 번호 붙은 조각으로
         try:
             self.calls += 1
             reply = (await r.llm.chat([Message("system", SELECT_PROMPT),
@@ -251,11 +251,9 @@ class PlannedRun:
                     return await r._stop_denied(self.messages, denial, self.done, llm_calls=self.calls)
                 ok, content = outcomes[0]
                 fresh = read_evidence(content, {"chunk_id": record.chunk_id}) if ok else None
-                selected = selected_quotes(json.dumps({"status": "supported", "evidence": [
-                    {"chunk_id": record.chunk_id, "quote": quote}]}), [fresh], self.question) if fresh else []
-                if not selected:
+                if not still_present(fresh, quote):
                     return self._finish(UNAVAILABLE)
-                checked.extend(selected)
+                checked.append((fresh, quote))
             quotes = checked
         return self._finish(render_quotes(quotes))
 

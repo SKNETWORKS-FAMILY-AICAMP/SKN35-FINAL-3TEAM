@@ -7,7 +7,7 @@ from contracts.harness import Message, ToolResult, ToolSpec
 from contracts.permission import Principal
 from harness import create_harness
 from harness.grounding import DEFAULT_RULES
-from harness.regulation import (UNAVAILABLE, Evidence, candidates, regulation_request, selected_quotes)
+from harness.regulation import (UNAVAILABLE, Evidence, candidates, regulation_request, selected_quotes, split_units)
 from tests.fakes import FakeRegistry, ScriptedLLM, ScriptedChecker, FixedApprover, MemoryAudit
 
 USER = Principal("E2001", ("member",), {"dept_id": 20, "security_grade": 2})
@@ -35,8 +35,14 @@ class DocTool:
         return ToolResult(call.call_id, True, json.dumps(data, ensure_ascii=False))
 
 
-def selection(quote=TEXT, ident="101", **extra):
-    return {"content": json.dumps({"status": "supported", "evidence": [{"chunk_id": ident, "quote": quote}], **extra}, ensure_ascii=False)}
+def selection(*units, **extra):
+    """LLM 의 답: 고른 조각 번호만 (기본: 문단 101 의 첫 조각)."""
+    return {"content": json.dumps({"status": "supported", "evidence": list(units or ["101#1"]), **extra}, ensure_ascii=False)}
+
+
+def legacy(quote, ident="101"):
+    """예전 형식: LLM 이 문장을 직접 적어 낸 답. 이제는 채택하지 않는다."""
+    return {"content": json.dumps({"status": "supported", "evidence": [{"chunk_id": ident, "quote": quote}]}, ensure_ascii=False)}
 
 
 def runner(script=(), rows=None, *, read=True, blocked=False, revoke=False, changed=None, policy=None, turns=6):
@@ -86,8 +92,11 @@ async def test_verified_quote_and_server_citation_replace_free_form_claims():
 
 @pytest.mark.parametrize("reply", [
     {"content": "찾지 못했습니다. 해당 규정 용도 범주에 포함될 수 있습니다."},
-    selection("개인신용정보는 아무 제한 없이 보유할 수 있습니다."),
-    selection(ident="PRIVATE-10"),
+    legacy("개인신용정보는 아무 제한 없이 보유할 수 있습니다."),
+    legacy(TEXT),                       # 원문과 같은 문장이라도 직접 적어 낸 것은 받지 않는다
+    selection("PRIVATE-10#1"),          # 받은 적 없는 문단
+    selection("101#9"),                 # 없는 조각 번호
+    selection("101#1", "개인신용정보는 영구 보유한다"),  # 번호가 아닌 것이 섞임
     {"content": '{"status":"insufficient_evidence","evidence":[]}'},
 ])
 async def test_unverified_quotes_and_plain_speculation_are_blocked(reply):
@@ -98,13 +107,14 @@ async def test_unverified_quotes_and_plain_speculation_are_blocked(reply):
 
 async def test_user_and_previous_tool_text_cannot_supply_current_evidence():
     fake = "개인신용정보를 영구 보유한다."
-    h, llm, _, _, _ = runner([selection(fake)])
+    h, llm, _, _, _ = runner([legacy(fake)])
     result = await h.run("개인신용정보 규정. " + fake, USER, "test", history=[
         Message("tool", json.dumps({"text": fake}, ensure_ascii=False), tool_call_id="past"),
         Message("assistant", "근거: 비공개 규정 제99조")])
     assert result.final_message.content == UNAVAILABLE
     assert "비공개 규정" not in str(llm.calls[0][0])
-    assert fake not in json.loads(llm.calls[0][0][-1].content)["documents"][0]["text"]
+    units = json.loads(llm.calls[0][0][-1].content)["documents"][0]["units"]
+    assert [u["id"] for u in units] == ["101#1"] and all(fake not in u["text"] for u in units)
 
 
 @pytest.mark.parametrize("kwargs", [{"blocked": True}, {"revoke": True}, {"changed": "해당 문단의 내용을 변경했습니다."}])
@@ -132,8 +142,30 @@ async def test_exhausted_budget_never_allows_an_unsupported_answer():
 def test_similarity_and_exact_quotes_are_independent_checks():
     assert not candidates(json.dumps({"matches": [{**ROW, "score": .2}]}), "삭제 규정", .3)
     evidence = Evidence("101", "규정", "제1조", "추심 연락 횟수 제한은 없습니다라는 해석은 잘못된 것입니다.")
-    # '없습니다' 다음의 부정/설명을 잘라 반대 뜻으로 인용하지 못한다.
-    assert not selected_quotes(selection("추심 연락 횟수 제한은 없습니다")["content"], [evidence], "추심 연락 일주일에 몇 번?")
+    # LLM 이 앞부분만 잘라 반대 뜻으로 적어 내는 것은 받지 않는다. 조각을 고르면 문장 전체가 나간다.
+    assert not selected_quotes(legacy("추심 연락 횟수 제한은 없습니다")["content"], [evidence], "추심 연락 일주일에 몇 번?")
+    [(_, quote)] = selected_quotes(selection("101#1")["content"], [evidence], "추심 연락 일주일에 몇 번?")
+    assert quote.endswith("잘못된 것입니다.")
+
+
+ARTICLE16 = ("제16조(고객확인의무)\n① 임직원은 다음 각 호의 사항을 확인하여야 한다.<개정 2025.5.22.>\n"
+             "1. 계좌를 신규로 개설하는 경우: 고객의 신원을 확인\n2. 자금세탁 우려가 있는 경우: 거래자금의 원천을 확인\n"
+             "② 원칙적으로 금융거래가 이루어지기 전에 고객확인을 하여야 한다.<신설 2025.5.22.>")
+
+
+def test_units_follow_article_structure_and_keep_amendment_marks():
+    units = split_units(ARTICLE16)
+    assert units[0] == "제16조(고객확인의무)" and units[-1].endswith("<신설 2025.5.22.>") and len(units) == 5
+    # 개정 표시가 붙은 항도 그대로 고를 수 있다 (예전에는 인용 끝 검사에 걸려 막혔다)
+    [(_, quote)] = selected_quotes(selection("16#5")["content"], [Evidence("16", "자금세탁방지업무취급규정", "제16조", ARTICLE16)],
+                                   "자금세탁방지 고객확인은 언제 해야 해?")
+    assert quote == "② 원칙적으로 금융거래가 이루어지기 전에 고객확인을 하여야 한다.<신설 2025.5.22.>"
+
+
+def test_picking_one_item_shows_its_list_heading_and_sibling_items():
+    record = Evidence("16", "자금세탁방지업무취급규정", "제16조", ARTICLE16)
+    [(_, quote)] = selected_quotes(selection("16#4")["content"], [record], "자금세탁 우려가 있으면 고객확인 때 뭘 확인해?")
+    assert quote.splitlines() == split_units(ARTICLE16)[1:4]   # 머리말(①) + 1호 + 2호, ②항은 넣지 않음
 
 
 async def test_api_automatically_enables_regulation_mode_for_custom_agents():
