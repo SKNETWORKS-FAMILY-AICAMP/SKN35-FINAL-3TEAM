@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import asyncio
 import re
+import os
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -13,6 +14,7 @@ from contracts.harness import Denial, Message, RunResult, ToolSpec
 from contracts.permission import Principal
 from harness import create_harness
 from harness.grounding import strip_empty_citation
+from harness.regulation import UNAVAILABLE, regulation_request
 from harness.attachment_grounding import attachment_request
 from services.agents import Agent
 from services.container import AppServices
@@ -56,7 +58,7 @@ def tool_names_to_labels(text: str, labels: dict[str, str]) -> str:
     return text
 
 
-def sources(new_messages: list[Message]) -> list[Source]:
+def sources(new_messages: list[Message], *, answer: str | None = None) -> list[Source]:
     """문서 툴 결과(JSON)에서 문서명·위치를 모은다. 원문을 연 문서가 앞에 온다."""
     opened: dict[tuple[str, str], Source] = {}
     found: dict[tuple[str, str], Source] = {}
@@ -82,6 +84,10 @@ def sources(new_messages: list[Message]) -> list[Source]:
                 (opened if was_opened else found)[(title, location)] = Source(
                     title, location, was_opened, bool(item.get("preview")), bool(item.get("partial")))
     merged = list(opened.values()) + [s for k, s in found.items() if k not in opened]
+    if answer == UNAVAILABLE:
+        return []
+    if answer and answer.startswith("접근 가능한 규정에서 확인한 원문입니다."):
+        merged = [s for s in merged if f"근거: {s.title} · {s.location}" in answer]
     return merged[:MAX_SOURCES]
 
 
@@ -139,7 +145,7 @@ def past_turns(messages: list[Message], labels: dict[str, str],
         if denial is not None and not denial.display_name:
             denial = Denial(denial.call_id, denial.tool_name, denial.kind, denial.reason, labels.get(denial.tool_name, ""))
         turns.append(PastTurn(question, files, strip_empty_citation(answer) if answer else "",
-                              tool_events(rest, labels), sources(rest), denial))
+                              tool_events(rest, labels), sources(rest, answer=answer), denial))
     return turns
 
 
@@ -212,6 +218,9 @@ async def send_message(
         audit=svc.audit, max_turns=svc.max_turns, tool_timeout=svc.tool_timeout,
         lookup_rules=svc.lookup_rules,
         require_review_lookup=svc.require_review_lookup,
+        regulation_mode=regulation_request(content, names={s.name for s in specs}, custom=agent is not None,
+                                           role=(agent.name + " " + agent.system_prompt) if agent else ""),
+        regulation_min_score=float(os.environ.get("DOC_EVIDENCE_MIN_SCORE", "0.30")),
     )
     run_id = str(uuid.uuid4())
     async with session.lock:
@@ -247,10 +256,11 @@ async def send_message(
                                        denial=result.denial)  # DB 저장소면 기록 (거부 내용 포함)
 
     labels = {s.name: s.label for s in specs}
+    references = sources(new, answer=result.final_message.content if result.final_message else None)
     if result.final_message is not None:
         text = tool_names_to_labels(strip_empty_citation(result.final_message.content), labels)
     else:
         text = "요청을 처리하는 데 단계가 너무 많아 중단했습니다. 요청을 나눠서 다시 시도해 주세요."
     return ChatTurn(
-        session.session_id, run_id, result.stop_reason, text, tool_events(new, labels), result.denial, sources(new),
+        session.session_id, run_id, result.stop_reason, text, tool_events(new, labels), result.denial, references,
     )
