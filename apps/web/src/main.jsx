@@ -881,7 +881,7 @@ function App({ session, theme, setTheme }) {
             shares: '부서·전사 공유는 바로 위 관리자가 승인해야 적용됩니다.',
             templates: '관리자가 미리 만든 업무 에이전트로 시작하세요. 고른 뒤 내용을 고쳐 내 에이전트로 저장합니다.',
             tools: '관리자가 등록한 도구입니다. 에이전트를 만들 때 이 중에서 고릅니다.',
-            knowledge: '에이전트가 나 대신 찾아서 답할 수 있는 사내 문서입니다. 전사 공개 문서와 우리 부서 전용 문서가 보입니다.',
+            knowledge: '에이전트가 검색해서 답할 수 있는 사내 문서입니다. 지금은 전사 공개 문서만 보여 줍니다.',
           }[page]}</p>
         </div>
         {notice && <p role="status" className={'notice ' + notice.tone}>{notice.text}</p>}
