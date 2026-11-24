@@ -6,7 +6,8 @@
 규칙 하나 = LookupRule: 어떤 툴(tool)인지, 어떤 질문·답이면 필요한지(needed), 질문에서 인자를 어떻게 뽑는지(arguments),
 어떤 툴이 성공하면 조회한 것으로 보는지(grounded_tools).
   - 사내 문서 RequireSearch  search_doc      규정을 묻거나 답에 "근거:"·조항 표시가 있을 때
-  - 만기 대출 LoanLookup     loans_maturing  만기 대출 건수·목록을 물을 때 (UC-03)
+  - 고객 안내 NoticeLookup   prepare_maturity_notices  만기 고객 안내 메일을 준비·발송해 달라고 할 때 (UC-05-1)
+  - 만기 대출 LoanLookup     loans_maturing  만기 대출 건수·목록을 물을 때 (UC-03). 없으면 안내문 준비 툴로
   - 금리·환율 MarketLookup   market_snapshot 금리·환율 수치를 물을 때 (UC-02)
 에이전트에 그 툴이 있을 때만 적용한다.
 
@@ -162,6 +163,33 @@ class LoanLookup(LookupRule):
                 f"지금은 {tool} 툴만 호출하라. 기간(days)은 질문에 있으면 그 값, 없으면 30.")
 
 
+_NOTICE_QUESTION = re.compile(r"(?:안내|메일)")
+_NOTICE_ACTION = re.compile(r"준비|만들|보내|발송|작성")
+
+
+@dataclass(frozen=True)
+class NoticeLookup(LookupRule):
+    """고객 만기 안내 준비 (UC-05-1). 대출 목록만 보고 "준비하겠습니다"라고 답하지 않게, 안내문 준비 툴을 부르게 한다.
+    (실측: 커스텀 에이전트가 만기 대출 조회만 하고 안내문은 준비하지 않은 채 끝냄)"""
+
+    tool: str = "prepare_maturity_notices"
+    grounded_tools: frozenset[str] = field(default_factory=lambda: frozenset(
+        {"prepare_maturity_notices", "send_maturity_notice"}))
+    unavailable: str = "안내문을 준비하지 못했습니다. 잠시 뒤 다시 요청해 주세요."
+
+    def needed(self, question: str, answer: str, used_other_tools: bool = False) -> bool:
+        return bool(_LOAN_QUESTION.search(question) and _NOTICE_QUESTION.search(question)
+                    and _NOTICE_ACTION.search(question) and not _RULE_QUESTION.search(question))
+
+    def arguments(self, question: str) -> dict:
+        found = _DAYS.search(question)
+        return {"days": min(max(int(found.group(1)), 1), 90) if found else 7}
+
+    def nudge_text(self, tool: str) -> str:
+        return (f"방금 답은 안내문을 실제로 준비하지 않고 쓴 것이라 쓸 수 없다. 지금은 {tool} 툴만 호출하라. "
+                "기간(days)은 질문에 있으면 그 값, 없으면 7.")
+
+
 _MARKET_QUESTION = re.compile(r"금리|환율")
 _CONCEPT = re.compile(r"이란|란\s*뭐|무슨\s*뜻|개념|의미|원리")
 _ISO_DAY = re.compile(r"(\d{4})[-년.]\s*(\d{1,2})[-월.]\s*(\d{1,2})")
@@ -187,4 +215,4 @@ class MarketLookup(LookupRule):
         return f"방금 답은 시장 수치를 조회하지 않고 쓴 것이라 쓸 수 없다. 수치를 지어내지 말고 지금은 {tool} 툴만 호출하라."
 
 
-DEFAULT_RULES: tuple[LookupRule, ...] = (RequireSearch(), LoanLookup(), MarketLookup())
+DEFAULT_RULES: tuple[LookupRule, ...] = (RequireSearch(), NoticeLookup(), LoanLookup(), MarketLookup())

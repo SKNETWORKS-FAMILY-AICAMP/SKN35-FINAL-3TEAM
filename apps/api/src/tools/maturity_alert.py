@@ -22,7 +22,8 @@ from tools.number_check import unknown_numbers
 class AlertInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
     days: int = Field(default=30, ge=1, le=90, description="loans_maturing 을 부를 때 쓴 기간(일)")
-    summary: str = Field(default="", max_length=300, description="오늘 먼저 할 일 안내 1~2문장. 목록에 있는 숫자만 쓴다")
+    summary: str = Field(default="", max_length=300,
+                         description="오늘 먼저 할 일 안내 1~2문장 (선택). 비워도 목록은 보내진다. 목록에 있는 숫자만 쓴다")
 
 
 SEND_MATURITY_ALERT_SPEC = ToolSpec(
@@ -32,7 +33,8 @@ SEND_MATURITY_ALERT_SPEC = ToolSpec(
     domain="여신",
     description=(
         "내 담당 만기 대출 목록을 내 알림함으로 보냅니다. 받는 사람은 항상 본인입니다. "
-        "대출 목록은 이 도구가 직접 다시 조회해 붙이므로 목록을 넘기지 말고, 기간(days)과 안내 문장(summary)만 넘기세요. "
+        "대출 목록은 이 도구가 직접 다시 조회해 붙이므로 목록을 넘기지 말고, 기간(days)과 안내 문장(summary, 선택)만 넘기세요. "
+        "안내 문장이 없어도 목록은 보내집니다. "
         "안내 문장에 목록에 없는 숫자가 있으면 문장은 빠지고 목록만 보내집니다. 고객에게 보내는 메일이 아닙니다."
     ),
     parameters=AlertInput.model_json_schema(),

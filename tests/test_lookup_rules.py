@@ -151,3 +151,28 @@ async def test_notice_agent_is_forced_to_prepare_when_it_only_talks():
     assert log == ["prepare_maturity_notices"] and result.final_message.content.startswith("안내 메일 3건")
     assert [t.name for t in llm.calls[1][1]] == ["prepare_maturity_notices"]
     assert "prepare_maturity_notices 툴만" in llm.calls[1][0][-1].content
+
+
+async def test_notice_request_is_not_finished_by_a_plain_loan_lookup():
+    """실측: 커스텀 에이전트가 만기 대출 조회만 하고 '준비해 드리겠습니다'로 끝냄 → 안내문 준비를 강제한다."""
+    log = []
+    runner, llm = harness([
+        {"tool_calls": [{"id": "l1", "name": "loans_maturing", "arguments": {"days": 7}}]},
+        {"content": "7일 이내 만기 고객의 안내문을 준비해 드리겠습니다."},
+        {"content": "알겠습니다."},  # 준비 툴만 줬는데도 안 부름 → 하네스가 직접
+        {"content": "안내 메일 3건을 준비했습니다. 이대로 보낼까요?"},
+    ], [tool("loans_maturing", LOANS, log=log), tool("prepare_maturity_notices", LOANS, log=log),
+        tool("send_maturity_notice", effect="send")])
+    result = await runner.run("7일 안에 만기되는 고객 안내 메일 준비해줘", KIM, "s")
+    assert log == ["loans_maturing", "prepare_maturity_notices"]
+    forced = [m for m in result.messages if m.tool_calls][-1].tool_calls[0]
+    assert forced.call_id.startswith("forced_") and forced.arguments == {"days": 7}
+    assert result.final_message.content.startswith("안내 메일 3건")
+
+
+def test_notice_rule_only_for_notice_requests():
+    from harness.grounding import NoticeLookup
+
+    rule = NoticeLookup()
+    assert rule.needed("만기 고객에게 안내 메일 보내줘", "") and rule.arguments("만기 고객 안내 준비") == {"days": 7}
+    assert not rule.needed("만기 대출 몇 건이야?", "") and not rule.needed("만기 안내 규정은 어떻게 돼?", "")
