@@ -15,6 +15,7 @@ from harness import create_harness
 from routers.chat import usable_agent
 from routers.deps import current_user, get_services
 from services.container import AppServices
+from services.mail_recipients import mail_recipients
 from tools.gmail import GmailTool, SendMailInput
 
 router = APIRouter(prefix="/api/mail", tags=["mail"])
@@ -50,26 +51,7 @@ async def mail_context(svc, user, session_id):
 
 async def recipient_directory(svc, user, tool):
     try:
-        owner = await tool.connection.requester_id_for(user)
-        if owner is None:
-            raise ValueError("Gmail 연결 없음")
-        candidates = {}
-        for uid in svc.users.ids():
-            if uid == user.user_id:
-                continue
-            person = svc.users.get(uid)
-            mailbox = await tool.connection.requester_id_for(person)
-            if mailbox and mailbox != owner:
-                candidates[uid] = (person, mailbox)
-        async with tool.connection.session() as client:
-            response = await client.call_tool("list_mail_recipients", {
-                "requester_id": owner, "candidate_ids": [item[1] for item in candidates.values()],
-            })
-        if response.is_error or not isinstance(response.structured_content, dict):
-            raise ValueError("수신자 목록 조회 실패")
-        emails = {item["user_id"]: item["email"] for item in response.structured_content["recipients"]}
-        return [{"user_id": uid, "name": person.attributes.get("name", uid), "email": emails[mailbox]}
-                for uid, (person, mailbox) in candidates.items() if mailbox in emails]
+        return await mail_recipients(svc.users, user, tool)
     except Exception as error:
         log.warning("Gmail recipient directory failed: %s", type(error).__name__, exc_info=True)
         raise HTTPException(503, "수신자 목록을 읽지 못했습니다. Gmail MCP 서버를 최신 코드로 다시 실행하고 본인 계정 연결을 확인해 주세요.") from error

@@ -46,6 +46,13 @@ class Finish:
     text: str
 
 
+@dataclass(frozen=True)
+class Skip:
+    """이 단계를 실행하지 않고 다음으로. note 는 최종 답 끝에 붙는다 (왜 안 했는지)."""
+
+    note: str
+
+
 @dataclass
 class StepContext:
     question: str
@@ -66,6 +73,10 @@ class StepContext:
     min_score: float = 0.0  # 규정 모드 검색 점수 하한 (harness/regulation.py MIN_SCORE, 기본 0 = 거르지 않음)
     candidates: list[dict] = field(default_factory=list)
     evidence: list[Evidence] = field(default_factory=list)
+    # 메일 보내기: 받는 사람 목록 조회 함수 (harness 가 principal 을 묶어 넘김), 코드가 고정하는 인자, LLM 에게 줄 안내
+    recipients: Any = None
+    forced: dict[str, dict] = field(default_factory=dict)  # 툴 → LLM 인자 위에 덮어쓸 값
+    hints: dict[str, str] = field(default_factory=dict)  # 툴 → 단계 안내에 덧붙일 말
 
 
 def load(content: str) -> Any:
@@ -143,6 +154,49 @@ def after_get_doc_chunk(ctx: StepContext, ok: bool, content: str, arguments: dic
         if record:
             ctx.evidence.append(record)
     return None
+
+
+# ── 메일 보내기 ─────────────────────────────────────────────
+
+MAIL_PICK = "답변 아래 '메일로 보내기'에서 받는 사람을 골라 보낼 수 있습니다."
+
+
+async def bind_send_mail(ctx: StepContext):
+    """받는 사람은 코드가 정한다: 요청에 이름·사번·이메일이 적힌 직원만, 서버의 직원 목록에서.
+    제목·본문은 LLM 이 쓴다 (단계 LLM 호출). 승인 카드에서 직원이 받는 사람·제목·본문을 확인한 뒤 보내진다."""
+    from services.mail_recipients import named_recipients
+
+    if ctx.recipients is None:
+        return Skip("메일 받는 사람 목록을 확인할 수 없어 보내지 않았습니다. " + MAIL_PICK)
+    try:
+        directory = await ctx.recipients()
+    except Exception:
+        log.warning("메일 받는 사람 목록 조회 실패", exc_info=True)
+        return Skip("메일 받는 사람 목록을 읽지 못해 보내지 않았습니다. Gmail 연결을 확인해 주세요.")
+    found, ambiguous = named_recipients(ctx.question, directory)
+    if ambiguous:
+        return Skip(f"'{ambiguous[0]}' 이름의 직원이 여러 명이라 보내지 않았습니다. " + MAIL_PICK)
+    if not found:
+        return Skip("요청에서 받는 사람을 찾지 못해 보내지 않았습니다. " + MAIL_PICK)
+    ctx.forced["send_mail"] = {"to": [p["email"] for p in found], "cc": []}
+    ctx.hints["send_mail"] = ("받는 사람(" + ", ".join(p["name"] for p in found) + ")은 서버가 넣는다. "
+                              "제목과 본문만 직원 요청에 맞게 쓴다. 확인하지 않은 사실·숫자는 넣지 않는다.")
+    ctx.results["mail_recipients"] = found
+    return None
+
+
+def after_send_mail(ctx: StepContext, ok: bool, content: str, arguments: dict):
+    if ctx.later:
+        return None
+    names = ", ".join(p["name"] for p in ctx.results.get("mail_recipients", [])) or ", ".join(arguments.get("to", []))
+    subject = arguments.get("subject", "")
+    data = load(content) if ok else None
+    status = data.get("status") if isinstance(data, dict) else None
+    if status == "sent":
+        return Finish(f"{names}에게 메일을 보냈습니다. (제목: {subject})")
+    if status == "simulated":
+        return Finish(f"가상 메일 테스트가 완료되었습니다. 실제 메일은 발송되지 않았습니다. (받는 사람: {names}, 제목: {subject})")
+    return Finish("발송 성공을 확인하지 못했습니다. 자동으로 다시 보내지 않았으니 보낸편지함을 확인해 주세요.")
 
 
 # ── 첨부 문서 ───────────────────────────────────────────────
@@ -253,6 +307,7 @@ def after_save_morning_report(ctx: StepContext, ok: bool, content: str, argument
 
 
 BIND = {
+    "send_mail": bind_send_mail,
     "get_doc_chunk": bind_get_doc_chunk,
     "parse_doc": bind_parse_doc,
     "search_doc": bind_search_doc,
@@ -263,6 +318,7 @@ BIND = {
     "save_morning_report": bind_save_morning_report,
 }
 AFTER = {
+    "send_mail": after_send_mail,
     "get_doc_chunk": after_get_doc_chunk,
     "parse_doc": after_parse_doc,
     "search_doc": after_search_doc,

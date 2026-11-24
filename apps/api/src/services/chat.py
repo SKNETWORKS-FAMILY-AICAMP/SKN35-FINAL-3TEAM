@@ -207,6 +207,17 @@ async def agent_tools(svc: AppServices, agent: Agent | None):
     return svc.tools.only([n for n in agent.tools if await svc.tools.get(n) is not None])
 
 
+async def mail_recipient_lookup(svc: AppServices, tools):
+    """에이전트에 Gmail 메일 보내기가 있으면, 플래너가 받는 사람을 고를 직원 목록 조회 함수 (없으면 None)."""
+    from services.mail_recipients import mail_recipients
+    from tools.gmail import GmailTool
+
+    tool = await tools.get("send_mail")
+    if not isinstance(tool, GmailTool):
+        return None
+    return lambda principal: mail_recipients(svc.users, principal, tool)
+
+
 async def send_message(
     svc: AppServices, principal: Principal, session: ChatSession, content: str, agent: Agent | None = None,
     *, attachments: list[dict] | None = None,
@@ -221,6 +232,7 @@ async def send_message(
         regulation_mode=regulation_request(content, names={s.name for s in specs}, custom=agent is not None,
                                            role=(agent.name + " " + agent.system_prompt) if agent else ""),
         regulation_min_score=float(os.environ.get("DOC_EVIDENCE_MIN_SCORE", "0")),
+        mail_recipients=await mail_recipient_lookup(svc, tools),
     )
     run_id = str(uuid.uuid4())
     async with session.lock:

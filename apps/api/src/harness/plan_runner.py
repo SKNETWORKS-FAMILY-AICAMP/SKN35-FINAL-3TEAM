@@ -32,7 +32,7 @@ from harness.grounding import RequireSearch
 from harness.planner import Plan, PlanStep, make_plan, require_regulation_steps
 from harness.regulation import (SELECT_PROMPT, UNAVAILABLE, read_evidence, render_quotes, selected_quotes,
                                 selection_request, still_present)
-from harness.steps import AFTER, BIND, Args, Calls, Finish, StepContext, load
+from harness.steps import AFTER, BIND, Args, Calls, Finish, Skip, StepContext, load
 
 if TYPE_CHECKING:
     from harness.runner import AgentRunner
@@ -67,6 +67,7 @@ class PlannedRun:
         self.wrote = False
         self.evidence_sources: list[str] = []  # 답 검사의 근거: 이번 요청에서 성공한 도구 결과 (+ 검증된 인자)
         self.plan: Plan | None = None
+        self.notes: list[str] = []  # 건너뛴 단계의 이유 (최종 답 끝에 붙인다)
 
     # ── 진행 ──────────────────────────────────────────────
 
@@ -94,6 +95,8 @@ class PlannedRun:
             require_regulation_steps(self.plan, self.specs)
         ctx = StepContext(self.question, r.llm, self.specs, later=[], files=self.files,
                           regulation=regulation, min_score=r.regulation_min_score)
+        if r.mail_recipients is not None:
+            ctx.recipients = lambda: r.mail_recipients(self.principal)
         steps = self.plan.steps
         for index, step in enumerate(steps):
             ctx.later = [s.tool for s in steps[index + 1:]]
@@ -115,14 +118,20 @@ class PlannedRun:
         ctx.llm_calls = 0
         if isinstance(bound, Finish):
             return self._finish(bound.text)
+        if isinstance(bound, Skip):
+            log.info("단계 %s 건너뜀 (run %s): %s", step.tool, self.run_id, bound.note)
+            self.notes.append(bound.note)
+            return None
         if isinstance(bound, Args):
             calls = [self._call(step.tool, bound.arguments)]
         elif isinstance(bound, Calls):
             calls = [self._call(step.tool, args) for args in bound.arguments[:MAX_CALLS_PER_STEP]]
         else:
-            calls = await self._ask(step, index, total, spec)
+            calls = await self._ask(step, index, total, spec, ctx)
         if not calls:
             log.info("단계 %s 를 실행할 인자를 정하지 못해 건너뜁니다 (run %s)", step.tool, self.run_id)
+            if spec.effect in ("write", "send"):
+                self.notes.append(f"{spec.label}은(는) 실행하지 않았습니다.")
             return None
 
         after = AFTER.get(step.tool)
@@ -144,12 +153,16 @@ class PlannedRun:
             calls = [self._call(step.tool, retry.arguments)]
         return None
 
-    async def _ask(self, step: PlanStep, index: int, total: int, spec: ToolSpec) -> list[LLMToolCall]:
-        """이 단계의 툴 하나만 주고 LLM 에게 인자를 정하게 한다. 못 정하면 조회 규칙의 인자로."""
+    async def _ask(self, step: PlanStep, index: int, total: int, spec: ToolSpec, ctx: StepContext) -> list[LLMToolCall]:
+        """이 단계의 툴 하나만 주고 LLM 에게 인자를 정하게 한다. 못 정하면 조회 규칙의 인자로.
+        코드가 고정한 인자(ctx.forced, 예: 메일 받는 사람)는 LLM 이 쓴 값 위에 덮어쓴다."""
         calls: list[LLMToolCall] = []
         if self.calls < self.r.max_turns - 1:
+            goal = step.goal or spec.label
+            if step.tool in ctx.hints:
+                goal += "\n" + ctx.hints[step.tool]
             prompt = [*self.messages, Message("user", STEP_PROMPT.format(
-                index=index + 1, total=total, goal=step.goal or spec.label, tool=step.tool))]
+                index=index + 1, total=total, goal=goal, tool=step.tool))]
             try:
                 if isinstance(self.r.llm, RequiredToolLLMClient):
                     reply = (await self.r.llm.chat_required_tool(prompt, spec)).message
@@ -159,6 +172,9 @@ class PlannedRun:
             except Exception:
                 log.warning("단계 %s 의 LLM 호출 실패 (run %s)", step.tool, self.run_id, exc_info=True)
             self.calls += 1
+        forced = ctx.forced.get(step.tool)
+        if calls and forced:
+            calls = [LLMToolCall(c.call_id, c.tool_name, {**c.arguments, **forced}) for c in calls[:1]]
         if calls:
             return calls
         for rule in self.r.rules:
@@ -220,8 +236,7 @@ class PlannedRun:
                         nudge = verdict.nudge()
                         continue
                     reply = Message("assistant", r._fallback(reply.content, verdict, doc_rule))
-            self.messages.append(reply)
-            return RunResult(reply, self.messages, self.calls, "completed")
+            return self._finish(reply.content)
         return RunResult(None, self.messages, self.calls, "max_turns")
 
     async def _answer_regulation(self, ctx: StepContext) -> RunResult:
@@ -321,6 +336,8 @@ class PlannedRun:
         return more
 
     def _finish(self, text: str) -> RunResult:
+        if self.notes:  # 건너뛴 단계가 있으면 왜 안 했는지 붙인다 (예: 받는 사람을 못 찾아 메일을 보내지 않음)
+            text = text.rstrip() + "\n\n" + "\n".join(dict.fromkeys(self.notes))
         final = Message("assistant", text)
         self.messages.append(final)
         return RunResult(final, self.messages, self.calls, "completed")
