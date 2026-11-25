@@ -78,11 +78,39 @@ def selection_request(question: str, records: list["Evidence"]) -> dict:
         for r in records]}
 
 
+# 조 제목 한 줄 (예: "제11조(개설서류)"). 이것만 고르면 본문 없이 제목만 나가므로 그 조의 본문을 함께 보여 준다
+_ARTICLE_TITLE = re.compile(r"^\s*제\s*\d+\s*조(?:\s*의\s*\d+)?\s*(?:\([^)]{0,40}\))?\s*$")
+
+
+def _article_body(units: list[str], title: int) -> list[int]:
+    """제목 다음 줄부터 다음 조 제목 전까지 (길이 상한 안에서)."""
+    body, size = [], len(units[title])
+    for k in range(title + 1, len(units)):
+        if _ARTICLE_TITLE.match(units[k]) or size + len(units[k]) > MAX_QUOTE:
+            break
+        body.append(k)
+        size += len(units[k])
+    return body
+
+
 def widen(units: list[str], picked: set[int]) -> list[int]:
-    """목록의 호를 골랐으면 그 목록의 머리말과 같은 목록의 다른 호도 넣는다."""
+    """목록의 호를 골랐으면 그 목록의 머리말과 같은 목록의 다른 호도 넣는다.
+    조 제목만 고르고 그 조의 본문을 하나도 고르지 않았으면 본문을 넣는다 (2026-11-25 실측: "당좌예금 개설 서류" 질문에
+    qwen3 가 "제11조(개설서류)" 한 줄만 골라 서류 목록 없이 제목만 나갔다)."""
+    picked = set(picked)
+    for i in sorted(picked):
+        if _ARTICLE_TITLE.match(units[i]):
+            body = _article_body(units, i)
+            if not picked & set(body):
+                picked |= set(body)
     leads, wide = set(), set(picked)
     for i in picked:
         if not _ITEM.match(units[i]):
+            # 목록의 머리말("다음 서류를 받는다.")만 골랐으면 바로 뒤의 목록도 넣는다
+            k = i + 1
+            while k < len(units) and _ITEM.match(units[k]):
+                wide.add(k)
+                k += 1
             continue
         lead = i - 1
         while lead >= 0 and _ITEM.match(units[lead]):

@@ -119,10 +119,14 @@ function lockReason(agent, user) {
   return '수정 권한이 없습니다.';
 }
 
-// LLM 답의 **굵게**, `코드` 만 표시한다 (HTML 은 해석하지 않는다)
+// LLM 답의 **굵게**, `코드` 만 표시한다 (HTML 은 해석하지 않는다).
+// \( \* 처럼 역슬래시로 막은 기호는 기호 그대로 보여 준다 (서버가 규정 원문을 인용할 때 기호를 이렇게 막는다).
+// 가린 이름(홍*동)처럼 별표가 든 글자도 **홍*동** 이면 굵게 보인다.
+const ESCAPED = /\\([\\`*_{}[\]()<>#|])/g;
 function RichText({ text }) {
-  return text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).map((part, index) => {
-    if (part.startsWith('**') && part.endsWith('**') && part.length > 4) return <strong key={index}>{part.slice(2, -2)}</strong>;
+  return text.split(/(\\[\\`*_{}[\]()<>#|]|\*\*(?:\\.|[^\n])+?\*\*|`[^`]+`)/g).map((part, index) => {
+    if (part.length === 2 && part[0] === '\\') return part[1];
+    if (part.startsWith('**') && part.endsWith('**') && part.length > 4) return <strong key={index}>{part.slice(2, -2).replace(ESCAPED, '$1')}</strong>;
     if (part.startsWith('`') && part.endsWith('`') && part.length > 2) return <code key={index}>{part.slice(1, -1)}</code>;
     return part;
   });
@@ -163,6 +167,11 @@ function Formatted({ text }) {
     }
     const heading = line.match(/^(#{1,4})\s+(.*)$/);
     if (heading) { blocks.push({ kind: 'h', level: heading[1].length, items: [heading[2]] }); continue; }
+    const quoted = line.match(/^>\s?(.*)$/);  // 인용 (규정 원문): 이어지는 > 줄은 한 덩어리
+    if (quoted) {
+      if (last?.kind === 'quote') last.items.push(quoted[1]); else blocks.push({ kind: 'quote', items: [quoted[1]] });
+      continue;
+    }
     const bullet = line.match(/^[-*•]\s+(.*)$/);
     const numbered = line.match(/^\d+[.)]\s+(.*)$/);
     const kind = bullet ? 'ul' : numbered ? 'ol' : line ? 'p' : 'gap';
@@ -174,6 +183,8 @@ function Formatted({ text }) {
     if (block.kind === 'ul') return <ul key={index}>{block.items.map((item, i) => <li key={i}><RichText text={item} /></li>)}</ul>;
     if (block.kind === 'ol') return <ol key={index}>{block.items.map((item, i) => <li key={i}><RichText text={item} /></li>)}</ol>;
     if (block.kind === 'h') return <p key={index} className={'answer-heading level-' + block.level}><RichText text={block.items[0]} /></p>;
+    if (block.kind === 'quote') return <blockquote key={index} className="answer-quote">{block.items.map((item, i) =>
+      <p key={i}><RichText text={item} /></p>)}</blockquote>;
     if (block.kind === 'table') {
       const rows = block.items.map(tableCells);
       const ruleAt = rows.findIndex(cells => cells.every(cell => /^:?-{2,}:?$/.test(cell)));
@@ -257,6 +268,15 @@ function summarize(event, denial) {
   if (event.tool_name === 'get_doc_chunk' && data?.title) return `${data.title} ${data.location ?? ''}`.trim();
   if (event.tool_name === 'today' && data?.date) return `${data.date} ${data.weekday ?? ''}`.trim();
   if (OPERATORS[event.tool_name]) return `${args.a} ${OPERATORS[event.tool_name]} ${args.b} = ${event.result}`;
+  if (event.tool_name === 'fill_document' && data) return data.created ? `${data.document_title ?? '문서'} · 만듦` : (data.message ?? '만들 내용 없음');
+  if (event.tool_name === 'prepare_maturity_notices' && data) {
+    return [`보낼 고객 ${data.count ?? data.notices?.length ?? 0}명`, data.already?.length && `이미 보냄 ${data.already.length}명`,
+      data.skipped?.length && `이메일 없음 ${data.skipped.length}명`].filter(Boolean).join(' · ');
+  }
+  if (event.tool_name === 'send_maturity_notice' && data?.sent) return `${data.customer} · 보냄`;
+  if (event.tool_name === 'loans_maturing' && Array.isArray(data?.items)) return `담당 대출 ${data.items.length}건`;
+  // 그 밖의 툴: JSON 결과는 그대로 보여 주지 않는다 (내부 값은 '자세히'에서)
+  if (data && typeof data === 'object') return '완료';
   return event.result.length > 60 ? event.result.slice(0, 60) + '…' : event.result;
 }
 

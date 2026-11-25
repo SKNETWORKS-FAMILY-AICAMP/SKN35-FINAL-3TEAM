@@ -94,7 +94,7 @@ class PlannedRun:
                 return self._finish("이 에이전트에 사내 문서 검색 도구가 없어 규정의 근거를 확인할 수 없습니다.")
             require_regulation_steps(self.plan, self.specs)
         ctx = StepContext(self.question, r.llm, self.specs, later=[], files=self.files,
-                          regulation=regulation, min_score=r.regulation_min_score)
+                          regulation=regulation, min_score=r.regulation_min_score, history=history)
         if r.mail_recipients is not None:
             ctx.recipients = lambda: r.mail_recipients(self.principal)
         steps = self.plan.steps
