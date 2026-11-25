@@ -6,7 +6,7 @@ templates:
   - id: uc01-regulation
     name: 규정 안내
     description: 업무 중 궁금한 내규를 물으면 조문을 찾아 근거와 함께 답합니다. (UC-01)
-    tools: [search_doc, get_doc_chunk]
+    tools: [search_doc, get_doc_chunk, parse_doc]
     example: 당좌예금 개설할 때 필요한 서류는?
     system_prompt: |
       직원이 묻는 규정을 사내 문서에서 찾아 조문에 적힌 내용만으로 답한다.
@@ -18,7 +18,7 @@ templates:
   - id: review-request
     name: 심사 요청 도우미
     description: 심사 건 상태와 빠진 서류를 확인하고, 요청하면 심사 요청을 등록합니다.
-    tools: [get_review_case, submit_review_request]
+    tools: [get_review_case, submit_review_request, parse_doc]
     example: REVIEW-001 상태랑 빠진 서류 알려줘
     system_prompt: |
       직원이 심사 건 번호를 알려 주면 심사 건의 상태, 제출한 서류, 빠진 서류를 확인해 알려 준다.
@@ -28,7 +28,7 @@ templates:
   - id: doc-deadline
     name: 서류 보완 기한 계산
     description: 영업일 기준으로 서류 보완 기한이 언제인지 계산합니다.
-    tools: [today, search_doc]
+    tools: [today, search_doc, parse_doc]
     example: 오늘부터 5영업일 뒤가 언제야?
     system_prompt: |
       직원이 말한 기간으로 기한을 계산한다. 영업일 기준이면 주말과 휴일을 빼고 계산한다.
@@ -55,7 +55,7 @@ templates:
   - id: uc03-maturity-alert
     name: 대출 만기 알림
     description: 내가 담당하는 대출 중 만기가 가까운 건을 정리해 알림함으로 보냅니다. (UC-03)
-    tools: [loans_maturing, send_maturity_alert, search_doc]
+    tools: [loans_maturing, send_maturity_alert, search_doc, parse_doc]
     example: 30일 이내 만기 대출 정리해서 알림함으로 보내 줘
     system_prompt: |
       로그인한 직원이 담당하는 대출 중 기간 안에 만기가 오는 건을 정리한다.
@@ -68,7 +68,7 @@ templates:
   - id: uc03-maturity-report
     name: 만기 대출 정리표
     description: 내가 담당하는 대출 중 만기가 가까운 건을 정리표로 만듭니다. PDF·DOCX 로 받을 수 있습니다. (UC-03)
-    tools: [fill_document]
+    tools: [fill_document, parse_doc]
     example: 30일 이내 만기 대출 정리표 만들어 줘
     system_prompt: |
       로그인한 직원이 담당하는 대출 중 기간 안에 만기가 오는 건을 정리표 문서로 만든다.
@@ -81,7 +81,7 @@ templates:
   - id: uc05-maturity-notice
     name: 만기 고객 안내 메일
     description: 내가 담당하는 대출 중 만기가 가까운 고객에게 안내 메일을 보냅니다. 보낼 목록을 먼저 보여 주고, 안내문은 정해진 양식으로 만들며, 한 통마다 채팅에서 내가 승인합니다. (UC-05)
-    tools: [prepare_maturity_notices, send_maturity_notice]
+    tools: [prepare_maturity_notices, send_maturity_notice, parse_doc]
     example: 7일 이내 만기 고객에게 만기 안내 메일 보내 줘
     system_prompt: |
       로그인한 직원이 담당하는 고객에게 대출 만기 안내 메일을 보낸다.

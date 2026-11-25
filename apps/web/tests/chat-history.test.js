@@ -47,3 +47,13 @@ test('recent list uses updated messages without duplicates and orders by latest 
   assert.equal(conversationTitle(state.threads.a), '첫 질문 내용');
   assert.equal(conversationTitle({ messages: [{ role: 'user', content: '', attachments: [{ filename: '보고서.hwpx' }] }] }), '보고서.hwpx');
 });
+
+test('removed conversation leaves the list and its agent starts a new one', async () => {
+  const { removeConversation } = await import('../src/chat-history.js');
+  let state = updateConversation(emptyChatHistory(), 'agent-a', addMessage('지울 대화'));
+  const id = currentConversation(state, 'agent-a').id;
+  state = removeConversation(state, id);
+  assert.equal(recentConversations(state).length, 0);
+  assert.equal(currentConversation(state, 'agent-a').messages.length, 0);
+  assert.equal(removeConversation(state, 'nope'), state);
+});

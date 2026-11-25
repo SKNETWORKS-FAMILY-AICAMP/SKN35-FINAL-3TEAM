@@ -262,6 +262,30 @@ class DbSessionStore:
         found = [await self.get_owned(str(i), user_id) for i in ids]
         return [c for c in found if c is not None]
 
+    async def delete_owned(self, session_id: str, user_id: str) -> bool:
+        """본인 대화를 지운다 (메시지·도구 호출·승인 요청은 DB 가 같이 지움, ON DELETE CASCADE).
+        이 대화로 만든 문서·알림·업로드는 지우지 않고 대화 연결만 끊는다. 감사 로그(audit_log)는 그대로 남는다.
+        남의 대화·없는 대화는 False."""
+        try:
+            sid = uuid.UUID(session_id)
+        except (ValueError, TypeError):
+            return False
+        async with self._sessions() as s:
+            owner = await s.scalar(text("""
+                SELECT u.login_id FROM chat_session cs JOIN users u ON u.id = cs.user_id WHERE cs.id = :i"""), {"i": sid})
+            if owner != user_id:
+                return False
+            runs = "SELECT id FROM agent_run WHERE session_id = :i"
+            await s.execute(text(f"UPDATE output_file SET session_id = NULL WHERE session_id = :i"), {"i": sid})
+            await s.execute(text(f"UPDATE output_file SET run_id = NULL WHERE run_id IN ({runs})"), {"i": sid})
+            await s.execute(text(f"UPDATE notification SET session_id = NULL WHERE session_id = :i"), {"i": sid})
+            await s.execute(text(f"UPDATE notification SET run_id = NULL WHERE run_id IN ({runs})"), {"i": sid})
+            await s.execute(text("UPDATE work_file SET session_id = NULL WHERE session_id = :i"), {"i": sid})
+            await s.execute(text("DELETE FROM chat_session WHERE id = :i"), {"i": sid})
+            await s.commit()
+        self._open.pop(session_id, None)
+        return True
+
     async def summaries(self, user_id: str) -> list[SessionSummary]:
         """메시지가 있는 내 대화, 최근 것부터 (제목·시각만 읽고 본문은 안 읽는다)."""
         async with self._sessions() as s:

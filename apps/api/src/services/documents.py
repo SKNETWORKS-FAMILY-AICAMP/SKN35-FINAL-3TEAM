@@ -243,6 +243,15 @@ class DocumentStore:
         """다른 사람의 문서는 없는 것과 같다 (None → 404)."""
         return await asyncio.to_thread(self._get, owner_id, document_id)
 
+    def _delete(self, owner_id: str, document_id: str) -> bool:
+        with closing(self._connect()) as connection, connection:
+            cursor = connection.execute("DELETE FROM documents WHERE document_id = ? AND owner_id = ?", (document_id, owner_id))
+        return cursor.rowcount > 0
+
+    async def delete(self, owner_id: str, document_id: str) -> bool:
+        """내 문서함에서 지운다. 본인 문서만 (남의 문서·없는 문서는 False → 404)."""
+        return await asyncio.to_thread(self._delete, owner_id, document_id)
+
     def _log_download(self, owner_id: str, document_id: str, fmt: str) -> None:
         with closing(self._connect()) as connection, connection:
             connection.execute("INSERT INTO document_downloads VALUES (?, ?, ?, ?)",
@@ -344,6 +353,17 @@ class DbDocumentStore:
         if hashlib.sha256(data).hexdigest() != row.sha256:
             raise ValueError("저장된 문서 파일이 바뀌어 열 수 없습니다.")
         return json.loads(data)
+
+    async def delete(self, owner_id: str, document_id: str) -> bool:
+        """내 문서함에서 지운다. 행은 지우지 않고 output_file.deleted_at(지운 시각)만 채운다 (파일·내려받은 기록은 남음).
+        본인 문서만 (남의 문서·없는 문서는 False → 404)."""
+        row = await self._row(owner_id, document_id)
+        if row is None:
+            return False
+        async with self._sessions() as s:
+            await s.execute(text("UPDATE output_file SET deleted_at = now() WHERE id = :i AND deleted_at IS NULL"), {"i": row.id})
+            await s.commit()
+        return True
 
     async def log_download(self, owner_id: str, document_id: str, fmt: str) -> None:
         row = await self._row(owner_id, document_id)

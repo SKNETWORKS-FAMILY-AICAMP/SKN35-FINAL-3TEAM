@@ -380,7 +380,7 @@ details[open] .more { display: none; }
   .shell { grid-template-columns: 62px minmax(0, 1fr); }
   .sidebar { padding: 14px 8px; }
   .sidebar-heading { justify-content: center; padding: 0; }
-  .sidebar-heading > span:last-child, .sidebar a strong, .sidebar-history h2, .sidebar-history .history-empty, .sidebar-history button span {
+  .sidebar-heading > span, .sidebar a strong, .sidebar-history h2, .sidebar-history .history-empty, .sidebar-history button span {
     position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .sidebar a { display: flex; justify-content: center; padding: 5px; }
   .sidebar-history button { justify-content: center; }
@@ -843,3 +843,56 @@ code, pre, .tool code, .catalog-tool code { font-family: Consolas, "D2Coding", u
 .mail-person input { width: 16px; height: 16px; }
 .mail-person small { display: block; opacity: .65; overflow-wrap: anywhere; }
 .mail-error { color: #e87979; }
+
+/* ── 왼쪽 메뉴 접기 (11/24) ───────────────────────────── */
+.sidebar-heading { justify-content: space-between; }
+.nav-toggle { display: grid; place-items: center; flex: none; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 8px;
+  background: transparent; color: rgba(255, 255, 255, .55); cursor: pointer; }
+.nav-toggle:hover { background: rgba(255, 255, 255, .08); color: #fff; }
+/* 알림 수는 메뉴 이름 바로 오른쪽 (예전에는 칸이 모자라 아래 줄로 내려갔음) */
+.sidebar a { grid-template-columns: 30px minmax(0, 1fr) auto; position: relative; }
+.sidebar a .nav-count { margin-left: 0; justify-self: end; }
+.shell.nav-collapsed { grid-template-columns: 62px minmax(0, 1fr); }
+.nav-collapsed .sidebar { padding: 14px 8px; }
+.nav-collapsed .sidebar-heading { justify-content: center; padding: 0; }
+.nav-collapsed .sidebar-heading > span, .nav-collapsed .sidebar a strong, .nav-collapsed .sidebar-history h2,
+.nav-collapsed .sidebar-history .history-empty, .nav-collapsed .sidebar-history button span {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.nav-collapsed .sidebar a { display: flex; justify-content: center; padding: 5px; }
+.nav-collapsed .sidebar a .nav-count { position: absolute; top: 0; right: 2px; min-width: 16px; padding: 0 4px; font-size: .64rem; line-height: 16px; }
+.nav-collapsed .sidebar-history button { justify-content: center; }
+.nav-collapsed .sidebar-history .history-delete { display: none; }
+.nav-collapsed .sidebar-bottom { flex-direction: column; padding: 8px 4px; }
+.nav-collapsed .sidebar-bottom .user-meta { display: none; }
+@media (max-width: 660px) { .sidebar a .nav-count { position: absolute; top: 0; right: 2px; } }
+
+/* 최근 대화 지우기 버튼: 줄에 마우스를 올리거나 키보드로 가면 보인다 */
+.history-row { position: relative; display: flex; align-items: center; }
+.history-row > button:first-child { flex: 1; min-width: 0; }
+.sidebar-history .history-delete { position: absolute; right: 6px; display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 7px;
+  background: rgba(20, 30, 50, .85); color: rgba(255, 255, 255, .6); opacity: 0; cursor: pointer; }
+.history-row:hover .history-delete, .sidebar-history .history-delete:focus-visible { opacity: 1; }
+.sidebar-history .history-delete:hover { color: #ff8a8a; background: rgba(229, 72, 77, .18); }
+.history-delete:disabled { cursor: default; }
+
+/* 내 문서 지우기 */
+.document-item { justify-content: space-between; }
+.document-item .document-downloads { flex: 1; min-width: 0; }
+.document-delete { display: grid; place-items: center; flex: none; width: 32px; height: 32px; padding: 0; border: 1px solid var(--line-strong, rgba(127,127,127,.3));
+  border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }
+.document-delete:hover:not(:disabled) { color: #e5484d; border-color: #e5484d; }
+
+/* 답 본문의 표·제목 (시장 조회 등) */
+.formatted .answer-heading { margin: 14px 0 6px; font-weight: 700; color: var(--text); }
+.formatted .answer-heading.level-1, .formatted .answer-heading.level-2 { font-size: 1.02rem; }
+.formatted .answer-heading.level-3, .formatted .answer-heading.level-4 { font-size: .93rem; }
+.formatted .answer-heading:first-child { margin-top: 0; }
+.answer-table { max-width: 100%; overflow-x: auto; margin: 8px 0 12px; border: 1px solid var(--line-strong, rgba(127,127,127,.3)); border-radius: 10px; }
+.answer-table table { width: 100%; border-collapse: collapse; font-size: .88rem; font-variant-numeric: tabular-nums; }
+.answer-table th, .answer-table td { padding: 7px 12px; border-bottom: 1px solid var(--line, rgba(127,127,127,.18)); white-space: nowrap; }
+.answer-table th { background: var(--surface-2, rgba(127,127,127,.08)); font-weight: 600; font-size: .8rem; color: var(--muted); }
+.answer-table tbody tr:last-child td { border-bottom: 0; }
+
+/* 답에 걸린 시간 */
+.answer-time { margin-left: 8px; font-size: .74rem; font-weight: 500; color: var(--muted); }
+.answer-time.live { margin-left: 4px; }
