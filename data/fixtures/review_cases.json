@@ -1,0 +1,18 @@
+[
+  {
+    "case_id": "REVIEW-001",
+    "applicant_name": "가상고객A",
+    "product_name": "운전자금대출",
+    "requested_amount": 50000000,
+    "status": "서류 검토 중",
+    "dept_id": 10,
+    "security_grade": 2,
+    "submitted_docs": [
+      "사업자등록증",
+      "재무제표"
+    ],
+    "missing_docs": [
+      "납세증명서"
+    ]
+  }
+]

@@ -1,0 +1,95 @@
+{
+  "id": "market-check",
+  "version": 2,
+  "name": "금리·환율 점검 보고서",
+  "description": "수치와 함께 자료 누락, 요청일과 실제 관측일 차이, 보류 여부를 점검하는 보고서입니다.",
+  "summary_instructions": "자료 누락과 관측일 차이를 중심으로 요약합니다. 담당자의 최종 검토나 승인이 끝났다고 판단하지 않습니다.",
+  "keywords": [
+    "금리",
+    "환율",
+    "점검",
+    "검토",
+    "누락",
+    "관측일",
+    "점검표",
+    "금리·환율 점검 보고서"
+  ],
+  "demo": true,
+  "enabled": true,
+  "required_bindings": [
+    "base_date",
+    "data_quality",
+    "source_notes"
+  ],
+  "sections": [
+    {
+      "type": "heading",
+      "level": 1,
+      "text": "금리·환율 자료 점검 보고서"
+    },
+    {
+      "type": "field",
+      "binding": "base_date",
+      "label": "점검 요청일"
+    },
+    {
+      "type": "field",
+      "binding": "prepared_by",
+      "label": "작성자"
+    },
+    {
+      "type": "paragraph",
+      "text": "상태: 담당자 검토 전"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "1. 자료 점검표"
+    },
+    {
+      "type": "binding",
+      "binding": "data_quality"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "2. 확인된 환율"
+    },
+    {
+      "type": "binding",
+      "binding": "fx_table"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "3. 확인된 기준금리"
+    },
+    {
+      "type": "binding",
+      "binding": "rates"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "4. 점검 요약"
+    },
+    {
+      "type": "binding",
+      "binding": "summary"
+    },
+    {
+      "type": "heading",
+      "level": 2,
+      "text": "5. 출처·보류 안내"
+    },
+    {
+      "type": "binding",
+      "binding": "source_notes"
+    },
+    {
+      "type": "field",
+      "binding": "report_id",
+      "label": "점검 기록 번호"
+    }
+  ]
+}

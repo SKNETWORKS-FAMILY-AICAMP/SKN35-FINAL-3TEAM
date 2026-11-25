@@ -1,0 +1,133 @@
+{
+  "id": "maturity-report",
+  "name": "만기 대출 정리표",
+  "title": "{as_of} 기준 {days}일 이내 만기 대출 정리표",
+  "description": "내 담당 대출 중 기간 안에 만기가 오거나 지난 대출을 구분별로 정리한 표 (UC-03)",
+  "source": {
+    "provider": "loans_maturing",
+    "params": {
+      "days": {
+        "type": "integer",
+        "min": 1,
+        "max": 90,
+        "default": 30,
+        "label": "기간(일)"
+      }
+    }
+  },
+  "has_customer_info": true,
+  "version": 1,
+  "page": "landscape",
+  "sections": [
+    {
+      "key": "as_of",
+      "label": "기준일",
+      "fill": "data",
+      "type": "text",
+      "from": "as_of"
+    },
+    {
+      "key": "counts",
+      "label": "구분별 건수",
+      "fill": "data",
+      "type": "keyvalue",
+      "from": "counts"
+    },
+    {
+      "key": "first_look",
+      "label": "오늘 먼저 볼 대출",
+      "fill": "data",
+      "type": "table",
+      "from": "first_look_items",
+      "columns": [
+        {
+          "key": "customer",
+          "label": "고객",
+          "width": 1.3
+        },
+        {
+          "key": "bucket",
+          "label": "구분",
+          "width": 1
+        },
+        {
+          "key": "maturity_date",
+          "label": "만기일",
+          "width": 1.1
+        },
+        {
+          "key": "days_left",
+          "label": "남은 날",
+          "width": 0.8,
+          "format": "d_day"
+        },
+        {
+          "key": "follow_up",
+          "label": "할 일",
+          "width": 3
+        }
+      ]
+    },
+    {
+      "key": "items",
+      "label": "대상 대출",
+      "fill": "data",
+      "type": "table",
+      "from": "items",
+      "columns": [
+        {
+          "key": "bucket",
+          "label": "구분",
+          "width": 1
+        },
+        {
+          "key": "customer",
+          "label": "고객",
+          "width": 1.3
+        },
+        {
+          "key": "product",
+          "label": "상품",
+          "width": 1.4
+        },
+        {
+          "key": "balance",
+          "label": "잔액",
+          "width": 1.2
+        },
+        {
+          "key": "maturity_date",
+          "label": "만기일",
+          "width": 1.1
+        },
+        {
+          "key": "days_left",
+          "label": "남은 날",
+          "width": 0.8,
+          "format": "d_day"
+        },
+        {
+          "key": "follow_up",
+          "label": "할 일",
+          "width": 2.6
+        }
+      ]
+    },
+    {
+      "key": "memo",
+      "label": "담당자 메모",
+      "fill": "llm",
+      "type": "text",
+      "max_chars": 300,
+      "check_numbers": true,
+      "hint": "직원이 메모로 넣어 달라고 한 내용만. 요청이 없으면 넘기지 않는다"
+    },
+    {
+      "key": "notice",
+      "label": "유의 사항",
+      "fill": "fixed",
+      "type": "text",
+      "text": "개인 고객 이름은 가운데 글자를 가렸습니다. 이 표로 기한연장 승인·거절을 판단하지 않습니다. 고객 정보가 들어 있으므로 외부로 보내지 마세요."
+    }
+  ]
+}

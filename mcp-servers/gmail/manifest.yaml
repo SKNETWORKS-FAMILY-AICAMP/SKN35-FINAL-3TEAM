@@ -1,0 +1,39 @@
+# 커넥터 매니페스트 — 하네스(ToolRegistry)에 이 서버의 툴을 등록할 때 쓰는 정책 정보.
+# 플랫폼 연동 코드(로더·스키마)는 하네스 연동 시점에 다시 만든다. 지금은 서버 실행에 쓰이지 않는다.
+#
+# 직원마다 자기 Google 계정을 연결한다. 메일은 관계형 DB 에만 저장되고(벡터DB 아님),
+# 검색·읽기는 요청자 본인 메일만, 발송은 요청자 본인 계정으로 한다.
+# risk 는 권한 정책(policy_rule)의 기본 판정을 정할 때 참고하는 제안값이다 (권한 파트와 합의 필요).
+schema_version: "1.0"
+name: gmail
+version: 0.2.0
+description: 직원 개인 Gmail 연동 (내 메일 검색 · 읽기, 내 계정으로 발송)
+owner: connector
+endpoint: http://mcp-gmail:8001/mcp
+auth_token_env: GMAIL_MCP_TOKEN
+
+tools:
+  - name: list_mail_recipients
+    side_effect: read
+    risk: medium
+    platform_only: true      # 수신자 선택 화면에서만 호출. 에이전트 ToolRegistry에는 등록하지 않음
+    inject:
+      requester_id: user_id
+
+  - name: search_mail
+    side_effect: read
+    risk: medium            # 개인 메일 — 본인 것만 조회
+    inject:
+      requester_id: user_id # LLM 이 아니라 로그인 사용자 사번으로 채움
+
+  - name: read_mail
+    side_effect: read
+    risk: medium
+    inject:
+      requester_id: user_id
+
+  - name: send_mail
+    side_effect: write
+    risk: high              # 회사 밖으로 나가는 작업 → ASK(사용자 승인) 권장
+    inject:
+      requester_id: user_id

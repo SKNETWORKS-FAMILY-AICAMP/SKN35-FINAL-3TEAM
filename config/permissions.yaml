@@ -1,0 +1,138 @@
+# 권한 정책 (ABAC). 형식은 apps/api/src/permission/policy.py 참고.
+# 위에서부터 처음 맞는 규칙이 이긴다. 맞는 규칙이 없으면 default.
+# 예시 규칙이다. MVP 툴 목록과 위험도가 정해지면 바꾼다.
+
+default: ask
+
+rules:
+  - id: report-template-search
+    tool: search_report_templates
+    decision: allow
+  - id: report-template-read
+    tool: get_report_template
+    decision: allow
+  - id: market-snapshot-read
+    tool: market_snapshot
+    decision: allow
+  - id: market-report-save
+    tool: save_morning_report
+    decision: allow
+  - id: market-report-read
+    tool: get_morning_report
+    decision: allow
+
+  # 메일 발송은 관리자도 요청 내용을 확인하고 승인한다.
+  - id: gmail-send-confirm
+    tool: send_mail
+    decision: ask
+    reason: 연결된 본인 메일 계정으로 메일이 발송됩니다. 수신자·제목·본문을 확인해 주세요.
+
+  - id: gmail-search
+    tool: search_mail
+    decision: allow
+
+  - id: gmail-read
+    tool: read_mail
+    decision: allow
+
+  # 등록은 관리자도 기존 승인 흐름을 거친다.
+  - id: review-submit-confirm
+    tool: submit_review_request
+    decision: ask
+    reason: 로컬 가상 심사시스템에 요청이 등록됩니다. 심사 건과 메모를 확인해 주세요.
+
+  # 심사 건 조회. 부서·보안등급 필터는 툴 안에서 강제한다.
+  - id: review-case-read
+    tool: get_review_case
+    decision: allow
+
+  # 내 담당 대출 조회 (UC-03·05). 담당자 필터는 툴 안에서 로그인 신원으로 강제한다.
+  - id: loans-maturing
+    tool: loans_maturing
+    decision: allow
+
+  # 안내문 준비는 글만 만든다 (보내지 않음). 고객 메일 본문 검사는 permission/customer_mail.py
+  - id: maturity-notice-prepare
+    tool: prepare_maturity_notices
+    decision: allow
+
+  # 고객 만기 안내 메일: 요청자가 채팅에서 승인 (결정사항 2번). 미리보기와 담당자 검사는 permission/customer_mail.py
+  - id: maturity-notice-confirm
+    tool: send_maturity_notice
+    decision: ask
+    reason: 고객에게 만기 안내 메일이 발송됩니다.
+
+  # 양식으로 문서 만들기: 본인 문서함에만 저장된다. 표·숫자는 툴이 조회 권한 안에서 채운다
+  - id: fill-document
+    tool: fill_document
+    decision: allow
+
+  # 만기 알림은 본인 알림함으로만 간다 (받는 사람을 고르는 입력이 없음)
+  - id: maturity-alert-self
+    tool: send_maturity_alert
+    decision: allow
+
+  - id: admin-all
+    tool: "*"
+    decision: allow
+    roles: [admin]
+
+  # 데모용 사칙연산 툴
+  - id: arithmetic
+    tool: add
+    decision: allow
+  - id: arithmetic-subtract
+    tool: subtract
+    decision: allow
+  - id: arithmetic-multiply
+    tool: multiply
+    decision: allow
+
+  # 문서 검색은 누구나. 권한 필터(scope·보안등급)는 검색 툴 안에서 강제한다 (SYS-03).
+  - id: search-docs
+    tool: search_doc
+    decision: allow
+
+  # 자기 부서 데이터만 조회
+  - id: db-own-dept
+    tool: query_db
+    decision: allow
+    conditions:
+      - {attr: args.dept_id, op: eq, value_from: principal.dept_id}
+  - id: db-others
+    tool: query_db
+    decision: deny
+    reason: 다른 부서 데이터는 조회할 수 없습니다
+
+  # 외부로 나가는 메일은 사용자 확인
+  - id: email-confirm
+    tool: send_email
+    decision: ask
+    reason: 메일이 발송됩니다
+
+  # 삭제는 보안등급 3 이상 부서장만, 그 외 거부
+  - id: delete-dept-head
+    tool: delete_file
+    decision: ask
+    roles: [dept_head]
+    reason: 파일을 삭제합니다
+    conditions:
+      - {attr: principal.security_grade, op: gte, value: 3}
+  - id: delete-others
+    tool: delete_file
+    decision: deny
+    reason: 파일 삭제는 보안등급 3 이상 부서장만 가능합니다
+
+  # 문서 원문 열람: 검색과 같은 필터를 툴 안에서 다시 적용한다
+  - id: read-doc-chunk
+    tool: get_doc_chunk
+    decision: allow
+
+  - id : today
+    tool : today
+    decision : allow
+
+  # 업로드 문서 읽기: 업로드 폴더 안 파일만 읽는다 (경로 제한은 툴 안에서 강제)
+  - id: parse-doc
+    tool: parse_doc
+    decision: allow

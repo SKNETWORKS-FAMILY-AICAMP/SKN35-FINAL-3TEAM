@@ -1,0 +1,22 @@
+# 시연용 직원 목록. user_id = 사번 = 로그인 아이디. 이름은 3팀 팀원 (권한·부서 배정은 시연용 가정).
+# 사번은 Gmail 가상 메일함(mcp-servers/gmail/src/gmail_mcp/fake.py)의 사번과 같다. E1xxx = 부서 10, E2xxx = 부서 20.
+# 부서 이름은 아직 정하지 않았다 (DB dept.name 은 "부서 10" 처럼 번호만).
+# AUTH_MODE=dev  : API 요청 헤더 X-User-Id 에 user_id 를 넣으면 그 사용자로 동작한다.
+# AUTH_MODE=session : scripts/db/seed_users.py 로 DB(users, user_role)에 넣고 scripts/db/set_password.py 로 비밀번호를 정한다.
+# 중간 발표까지는 사원 추가·가입 화면 없이 "기존 직원이 모두 등록돼 있다"고 가정한다 (2026-11-23 팀 합의).
+users:
+  - user_id: E1001
+    roles: [member]
+    attributes: {name: 김도영, dept_id: 10, position: 사원, security_grade: 2}
+  - user_id: E1002
+    roles: [dept_head]
+    attributes: {name: 박종원, dept_id: 10, position: 팀장, security_grade: 3}
+  - user_id: E2001
+    roles: [member]
+    attributes: {name: 나치훈, dept_id: 20, position: 대리, security_grade: 2}
+  - user_id: E2002
+    roles: [dept_head]
+    attributes: {name: 손채영, dept_id: 20, position: 팀장, security_grade: 3}
+  - user_id: E0001
+    roles: [admin]
+    attributes: {name: 이형민, dept_id: 1, position: 관리자, security_grade: 5}
