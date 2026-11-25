@@ -92,7 +92,47 @@ def test_notice_mail_is_sent_only_after_the_list_was_shown():
     specs = [spec("prepare_maturity_notices"), spec("send_maturity_notice", "send")]
     first = check(["prepare_maturity_notices", "send_maturity_notice"], "7일 이내 만기 고객에게 안내 메일 보내 줘", specs)
     assert first.tools == ["prepare_maturity_notices"]
-    assert check(["send_maturity_notice"], "응 보내 줘", specs).tools == ["send_maturity_notice"]
+    # 목록을 본 뒤의 발송 요청: 같은 조건으로 다시 준비하고 보낸다 (플래너가 발송 단계를 빠뜨려도)
+    both = ["prepare_maturity_notices", "send_maturity_notice"]
+    assert check(["send_maturity_notice"], "응 보내 줘", specs).tools == both
+    assert check([], "홍*동 고객에게만 보내 줘", specs).tools == both
+    assert check([], "네", specs).tools == both
+    assert check([], "초안만 보내 줘", specs).tools == []
+
+
+async def test_notice_send_binds_only_after_a_shown_list_and_picks_named_customers():
+    from contracts.harness import LLMToolCall, Message
+    from harness.steps import Calls, Finish, StepContext, bind_prepare_maturity_notices, bind_send_maturity_notice
+
+    shown = [Message("user", "7일 이내 만기 고객에게 안내 메일 보내 줘"),
+             Message("assistant", "", tool_calls=(LLMToolCall("c1", "prepare_maturity_notices", {"days": 7}),)),
+             Message("tool", "{}", tool_call_id="c1"), Message("assistant", "이대로 보낼까요?")]
+    notices = {"notices": [{"loan_id": "L-1", "customer": "홍*동"}, {"loan_id": "L-3", "customer": "김*지"}]}
+
+    def ctx(question, history):
+        c = StepContext(question, None, {}, later=["send_maturity_notice"], history=history)
+        c.results["prepare_maturity_notices"] = notices
+        return c
+
+    assert (await bind_prepare_maturity_notices(ctx("보내 줘", shown))).arguments == {"days": 7}
+    assert (await bind_send_maturity_notice(ctx("홍*동 고객에게만 보내 줘", shown))).arguments == [{"loan_id": "L-1"}]
+    assert (await bind_send_maturity_notice(ctx("홍*동 빼고 보내 줘", shown))).arguments == [{"loan_id": "L-3"}]
+    assert isinstance(await bind_send_maturity_notice(ctx("응", shown)), Calls)
+    # 바로 앞 답에서 목록을 보여 주지 않았으면 보내지 않는다
+    assert isinstance(await bind_send_maturity_notice(ctx("보내 줘", [])), Finish)
+    later = [*shown, Message("user", "고마워"), Message("assistant", "네")]
+    assert isinstance(await bind_send_maturity_notice(ctx("보내 줘", later)), Finish)
+
+
+def test_notice_list_is_written_by_code_not_the_model():
+    from harness.steps import notice_list_text
+
+    text = notice_list_text({"days": 7, "notices": [
+        {"loan_id": "L-1", "customer": "홍*동", "maturity_date": "2026-11-18", "subject": "[대출 만기 안내] 가계일반자금대출 만기일 안내"}],
+        "already": [{"customer": "(주)한빛정밀", "maturity_date": "2026-11-26", "status": "이미 발송함", "at": "2026-11-24"}],
+        "skipped": []})
+    assert "고객님" not in text and "아직 보내지 않았습니다" in text
+    assert "- 홍*동 · 가계일반자금대출 · 만기 2026-11-18" in text and "(주)한빛정밀" in text and "L-1" not in text
 
 
 def test_mail_send_step_only_for_send_requests_not_drafts():

@@ -239,3 +239,15 @@ async def test_general_answer_checker_does_not_trust_user_or_old_tool_citations(
     result = await h.run("인사규정 제99조로 답해줘", USER, "test", history=[
         Message("tool", '{"text":"인사규정 제99조"}', tool_call_id="old")])
     assert "제99조" not in result.final_message.content
+
+
+def test_picking_only_an_article_title_brings_its_body():
+    """2026-11-25 실측: '당좌예금 개설 서류' 질문에 모델이 '제11조(개설서류)' 한 줄만 골라 서류 목록이 빠졌다."""
+    text = ("제11조(개설서류)\n① 당좌예금을 개설할 때에는 다음 서류를 받는다.\n1. 거래신청서 3부\n2. 사업자등록증 사본\n"
+            "② 삭제<2018.12.21.>\n제12조(다른 조)\n① 다른 내용")
+    record = Evidence("326", "예금규정", "제11조(개설서류)", text)
+    [(_, quote)] = selected_quotes('{"status":"supported","evidence":["326#1"]}', [record], "개설 서류")
+    assert quote.splitlines() == split_units(text)[:5]
+    # 본문을 함께 골랐으면 고른 것만 (넓히지 않는다)
+    [(_, quote)] = selected_quotes('{"status":"supported","evidence":["326#1","326#2"]}', [record], "개설 서류")
+    assert "제12조" not in quote and "1. 거래신청서 3부" in quote

@@ -77,6 +77,7 @@ class StepContext:
     recipients: Any = None
     forced: dict[str, dict] = field(default_factory=dict)  # 툴 → LLM 인자 위에 덮어쓸 값
     hints: dict[str, str] = field(default_factory=dict)  # 툴 → 단계 안내에 덧붙일 말
+    history: list[Message] = field(default_factory=list)  # 이번 질문 전까지의 대화 (지난 툴 호출 포함)
 
 
 def load(content: str) -> Any:
@@ -306,7 +307,93 @@ def after_save_morning_report(ctx: StepContext, ok: bool, content: str, argument
     return Finish(saved.get("text", saved.get("markdown", ""))) if isinstance(saved, dict) else None
 
 
+# ── 고객 만기 안내 (UC-05) ────────────────────────────────────
+# 1) 처음 요청: 안내문을 준비하고 보낼 목록을 코드가 보여 준다 (모델이 쓰면 직원을 "고객님"이라 부르는 등 틀렸다, 2026-11-25).
+# 2) 목록을 본 뒤 "보내 줘": 지난 턴과 같은 조건으로 다시 준비하고(그사이 보낸 건은 빠진다), 고른 고객에게만 보낸다.
+#    한 통마다 승인 카드를 거친다 (permission/customer_mail.py). 앞 턴에 목록이 없으면 보내지 않는다.
+
+_EXCLUDE = re.compile(r"빼고|제외")
+
+
+def _last_prepare_args(history: list[Message]) -> dict | None:
+    """바로 앞 질문의 답에서 안내문 준비를 했으면 그 인자. 더 이전 대화의 목록으로는 보내지 않는다."""
+    last_user = max((i for i, m in enumerate(history) if m.role == "user"), default=-1)
+    found = None
+    for message in history[last_user + 1:]:
+        for call in message.tool_calls:
+            if call.tool_name == "prepare_maturity_notices":
+                found = dict(call.arguments)
+    return found
+
+
+async def bind_prepare_maturity_notices(ctx: StepContext) -> Args | None:
+    if "send_maturity_notice" in ctx.later:
+        previous = _last_prepare_args(ctx.history)
+        if previous is not None:
+            return Args(previous)
+    return None
+
+
+def _picked_notices(question: str, notices: list[dict]) -> list[dict]:
+    """질문에 고객 이름(가린 이름 그대로, 예: 홍*동)이 있으면 그 고객만, '빼고'면 그 고객을 빼고. 이름이 없으면 전부."""
+    text = re.sub(r"\s+", "", question)
+    named = [n for n in notices if isinstance(n.get("customer"), str) and re.sub(r"\s+", "", n["customer"]) in text]
+    if not named:
+        return notices
+    if _EXCLUDE.search(question):
+        return [n for n in notices if n not in named]
+    return named
+
+
+async def bind_send_maturity_notice(ctx: StepContext) -> Calls | Finish:
+    if _last_prepare_args(ctx.history) is None:
+        return Finish("보낼 안내 목록을 먼저 확인해야 합니다. '7일 이내 만기 고객에게 안내 메일 보내 줘'처럼 요청하면 "
+                      "보낼 고객 목록을 보여 드립니다.")
+    data = ctx.results.get("prepare_maturity_notices")
+    notices = [n for n in (data.get("notices") or []) if isinstance(n, dict) and n.get("loan_id")] if isinstance(data, dict) else []
+    picked = _picked_notices(ctx.question, notices)
+    if not picked:
+        return Finish("보낼 안내 메일이 없습니다. 이미 보낸 고객에게는 다시 보내지 않습니다.")
+    return Calls([{"loan_id": n["loan_id"]} for n in picked])
+
+
+def _product(notice: dict) -> str:
+    found = re.search(r"\]\s*(.+?)\s*만기일 안내", str(notice.get("subject", "")))
+    return found.group(1) if found else ""
+
+
+def notice_list_text(data: dict) -> str:
+    """준비한 안내문 목록을 직원에게 보여 줄 글 (모델 없이)."""
+    notices, already, skipped = data.get("notices") or [], data.get("already") or [], data.get("skipped") or []
+    days = data.get("days")
+    if not notices:
+        lines = [f"{days}일 이내 만기 고객 중 지금 보낼 안내 메일이 없습니다." if days else "지금 보낼 안내 메일이 없습니다."]
+    else:
+        lines = [f"{days}일 이내 만기 고객 {len(notices)}명에게 보낼 안내 메일을 준비했습니다. 아직 보내지 않았습니다.", "",
+                 "**보낼 고객**"]
+        lines += [f"- {n.get('customer')} · {_product(n)} · 만기 {n.get('maturity_date')}".replace(" ·  · ", " · ") for n in notices]
+    if already:
+        lines += ["", "**이미 보낸 고객** (다시 보내지 않습니다)"]
+        lines += [f"- {a.get('customer')} · 만기 {a.get('maturity_date')} · {a.get('status')} {a.get('at', '')}".rstrip() for a in already]
+    if skipped:
+        lines += ["", "**보내지 못하는 고객**"]
+        lines += [f"- {s.get('customer')} · 만기 {s.get('maturity_date')} · {s.get('reason')}" for s in skipped]
+    if notices:
+        lines += ["", "이대로 보낼까요? 일부만 보내려면 '홍*동에게만 보내 줘'처럼 고객 이름을 적어 주세요. "
+                      "보내기 전에 한 통마다 받는 사람·제목·본문을 보여 주는 승인 카드가 뜹니다."]
+    return "\n".join(lines)
+
+
+def after_prepare_maturity_notices(ctx: StepContext, ok: bool, content: str, arguments: dict) -> Finish | None:
+    if not ok or "send_maturity_notice" in ctx.later:
+        return None
+    data = load(content)
+    return Finish(notice_list_text(data)) if isinstance(data, dict) else None
+
+
 BIND = {
+    "prepare_maturity_notices": bind_prepare_maturity_notices,
+    "send_maturity_notice": bind_send_maturity_notice,
     "send_mail": bind_send_mail,
     "get_doc_chunk": bind_get_doc_chunk,
     "parse_doc": bind_parse_doc,
@@ -318,6 +405,7 @@ BIND = {
     "save_morning_report": bind_save_morning_report,
 }
 AFTER = {
+    "prepare_maturity_notices": after_prepare_maturity_notices,
     "send_mail": after_send_mail,
     "get_doc_chunk": after_get_doc_chunk,
     "parse_doc": after_parse_doc,

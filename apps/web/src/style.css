@@ -304,6 +304,8 @@ code { font-family: Consolas, "D2Coding", monospace; }
 .formatted li::marker { color: var(--accent-ink); }
 .formatted code, .event-raw code { padding: 1px 6px; border-radius: 6px; background: var(--code-bg); font-size: .86em; }
 .cite-line { margin-top: 4px; color: var(--muted); font-size: .84rem; }
+.formatted .answer-quote { margin: 0; padding: 8px 14px; border-left: 3px solid var(--accent-ink); background: var(--code-bg); border-radius: 0 8px 8px 0; display: grid; gap: 4px; }
+.formatted .answer-quote p { margin: 0; }
 
 details.tool-events { display: block; margin-bottom: 10px; }
 details.tool-events summary { list-style: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; cursor: pointer; }

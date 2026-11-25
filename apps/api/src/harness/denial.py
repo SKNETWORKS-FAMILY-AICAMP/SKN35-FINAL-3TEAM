@@ -41,7 +41,18 @@ def _done_summary(done: DoneTool) -> str:
             if isinstance(missing, list) and all(isinstance(item, str) for item in missing):
                 lines.append(f"  - 누락 서류: {_clip(', '.join(missing)) if missing else '없음'}")
             return "\n".join(lines)
-    return f"- {done.tool_name}: {_clip(done.content)}"
+    try:
+        data = json.loads(done.content)
+    except (ValueError, TypeError):
+        data = None
+    if not isinstance(data, (dict, list)):
+        return f"- {done.tool_name}: {_clip(done.content)}"
+    # JSON 객체 결과는 그대로 붙이지 않는다 (2026-11-25: 고객 이메일·안내문 본문이 거절 안내에 그대로 나왔다)
+    if done.name == "prepare_maturity_notices" and isinstance(data, dict) and isinstance(data.get("notices"), list):
+        return f"- {done.tool_name}: 보낼 고객 {len(data['notices'])}명 확인"
+    if done.name == "send_maturity_notice" and isinstance(data, dict) and data.get("sent"):
+        return f"- {done.tool_name}: {_clip(str(data.get('customer', '')))} 고객에게 보냄"
+    return f"- {done.tool_name}"
 
 
 def template_reply(denial: Denial, done: list[DoneTool] = ()) -> str:

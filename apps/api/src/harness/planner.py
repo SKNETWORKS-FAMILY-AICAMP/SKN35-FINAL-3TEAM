@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 
 from contracts.harness import LLMClient, Message, ToolSpec
 from harness.attachment_grounding import refers_to_attachment
-from harness.grounding import LookupRule, RequireSearch
+from harness.grounding import LookupRule, NoticeLookup, RequireSearch
 from harness.market_grounding import wants_report
 
 log = logging.getLogger(__name__)
@@ -53,6 +53,16 @@ CONFIRM_FIRST: dict[str, str] = {
 # 초안만 달라고 하면 답에 초안('제목: ...' + 본문)을 쓰고, 화면의 '메일로 보내기'에서 직원을 골라 보낸다
 _SEND_VERB = re.compile(r"보내|발송|전송")
 _DRAFT = re.compile(r"초안|draft", re.I)
+_YES = re.compile(r"^\s*(?:응|어|네|넵|예|그래|좋아|ㅇㅇ|오케이|ok)(?:[\s.!,~]|$)", re.I)
+
+
+def notice_follow_up(question: str, by_name: dict) -> bool:
+    """고객 안내 목록을 본 뒤의 발송 요청인가: 보내 달라(또는 "응")는 말이고, 처음 요청(만기·안내·메일이 다 있는 말)은 아니다."""
+    if not {"prepare_maturity_notices", "send_maturity_notice"} <= by_name.keys() or _DRAFT.search(question):
+        return False
+    if not (_SEND_VERB.search(question) or _YES.match(question)):
+        return False
+    return not NoticeLookup().needed(question, "")
 
 PLANNER_PROMPT = """너는 은행 업무 에이전트의 계획 담당이다. 직원 요청을 처리할 단계를 정한다.
 각 단계는 아래 도구 중 하나를 쓰는 일이다. 도구를 직접 호출하지 말고 계획만 쓴다.
@@ -230,10 +240,19 @@ def check_plan(plan: Plan, question: str, specs: list[ToolSpec], rules: tuple[Lo
         add(step)
     ordered.sort(key=lambda s: s.tool != "parse_doc")  # 첨부 읽기가 맨 앞 (나머지 순서는 그대로)
     planned = {s.tool for s in ordered}
-    for send, prepare in CONFIRM_FIRST.items():
-        if send in planned and prepare in planned:
-            ordered = [s for s in ordered if s.tool != send]
-            plan.notes.append(f"{prepare} 결과를 직원이 확인한 뒤에 보내도록 {send} 를 뺌")
+    if notice_follow_up(question, by_name):
+        # 목록을 본 뒤의 "보내 줘·홍*동에게만 보내 줘": 목록을 같은 조건으로 다시 확인하고 바로 보낸다.
+        # 앞 대화에 목록이 없으면 보내지 않는다 (harness/steps.py bind_send_maturity_notice).
+        # (2026-11-25 실측: "홍*동 고객에게만 보내 줘"에 플래너가 발송 단계를 넣지 않아, 모델이 "자동 발송"이라고만 답함)
+        ordered = [s for s in ordered if s.tool not in CONFIRM_FIRST and s.tool not in CONFIRM_FIRST.values()]
+        ordered += [PlanStep("prepare_maturity_notices", "직원이 본 안내 목록을 같은 조건으로 다시 확인한다", "rule"),
+                    PlanStep("send_maturity_notice", "확인한 고객에게 안내 메일을 한 통씩 보낸다", "rule")]
+        plan.notes.append("안내 목록을 본 뒤의 발송 요청이라 준비 → 발송 단계를 넣음")
+    else:
+        for send, prepare in CONFIRM_FIRST.items():
+            if send in planned and prepare in planned:
+                ordered = [s for s in ordered if s.tool != send]
+                plan.notes.append(f"{prepare} 결과를 직원이 확인한 뒤에 보내도록 {send} 를 뺌")
     if len(ordered) > limit:
         plan.notes.append(f"단계가 {len(ordered)}개라 {limit}개까지만 씀")
     plan.steps = ordered[:limit]
