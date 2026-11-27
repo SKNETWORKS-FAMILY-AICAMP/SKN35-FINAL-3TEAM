@@ -204,3 +204,30 @@ def test_picture_without_text_inside_new_table_kept():
     d.add_picture(prov=ProvenanceItem(page_no=1, charspan=(0, 0), bbox=BoundingBox(l=110, t=110, r=190, b=180, coord_origin=CoordOrigin.TOPLEFT)))
     dropped = _drop_duplicates(d, t, 1, (98, 98, 402, 192))
     assert dropped == [] and any(isinstance(it, PictureItem) for it, _ in d.iterate_items())
+
+
+# ---- 한컴 PDF 대비책: 칸 클립 혼합 뒤 표 모델 그대로 남은 표에만 늘려 만들기 격자 (2026-11-27)
+def _fallback_case():
+    """바닥 테두리가 반만 그려진 2x2 표 → 엄격 격자는 포기, 늘려 만들기 격자는 만든다."""
+    from docling_core.types.doc import (BoundingBox, CoordOrigin, DoclingDocument, ProvenanceItem, Size, TableCell,
+                                        TableData)
+    from knowledge.ingestion.parsers.pdf.pdf_lines import PageLines
+    d = DoclingDocument(name="t")
+    d.add_page(page_no=1, size=Size(width=600, height=800))
+    cells = [TableCell(start_row_offset_idx=0, end_row_offset_idx=1, start_col_offset_idx=0, end_col_offset_idx=2,
+                       row_span=1, col_span=2, text="가 나 다 라")]
+    d.add_table(data=TableData(num_rows=1, num_cols=2, table_cells=cells),
+                prov=ProvenanceItem(page_no=1, charspan=(0, 0), bbox=BoundingBox(l=50, t=100, r=500, b=200, coord_origin=CoordOrigin.TOPLEFT)))
+    hs = [(100, 50, 500), (150, 50, 500), (200, 50, 300)]
+    vs = [(50, 100, 200), (275, 100, 200), (500, 100, 200)]
+    words = {1: [("가", 60, 110, 80, 130), ("나", 300, 110, 320, 130), ("다", 60, 160, 80, 180), ("라", 300, 160, 320, 180)]}
+    return d, {1: PageLines(height=800, h=hs, v=vs)}, words
+
+
+def test_fallback_greedy_only_for_given_tables():
+    from knowledge.ingestion.parsers.pdf.line_tables import apply_line_tables
+    d, lines, words = _fallback_case()
+    assert not apply_line_tables(d, lines, words, relaxed=False).replaced                  # 한컴 첫 호출: 엄격만 → 포기
+    assert not apply_line_tables(d, lines, words, relaxed=False, only=set(), fallback=True).replaced   # 대상 아님
+    log = apply_line_tables(d, lines, words, relaxed=False, only={id(d.tables[0])}, fallback=True)
+    assert log.replaced and log.replaced[0].get("greedy") and d.tables[0].data.num_rows == 2

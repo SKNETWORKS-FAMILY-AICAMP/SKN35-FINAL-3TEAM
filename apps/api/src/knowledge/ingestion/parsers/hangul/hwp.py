@@ -4,12 +4,62 @@
 암호·배포용 여부는 syhwp를 부르기 전에 FileHeader 속성 비트로 먼저 확인한다.
   bit0 압축, bit1 암호 설정, bit2 배포용 문서
 """
+import contextvars
 import io
 import os
 import struct
 import tempfile
 
 import olefile
+
+# ------------------------------------------------------------------ 머리말·꼬리말·각주 구분
+# syhwp 0.0.8 은 머리말·꼬리말·각주·미주 컨트롤 안 문단을 본문 문단과 똑같이 blocks 에 넣는다(_hwp5._emit_control).
+# 그래서 "…내부 규정 | 대외비" 같은 머리말이 본문에 섞였다(S1, 2026-11-27 진단). HWPX 경로는 이것을 furniture 로 뺀다.
+# syhwp 의 _emit_control 을 감싸서, 이 네 컨트롤이면 안의 blocks 를 표시(_Furniture)로 묶는다.
+# 감싼 동작은 우리 read_hwp 안에서만 켜진다(contextvars) — 같은 프로세스의 다른 syhwp 사용에는 영향 없음.
+# syhwp 내부 함수에 기대므로 버전은 0.0.8 로 고정한다(pyproject). 내부가 바뀌면 감싸기를 건너뛰고 예전처럼 동작한다.
+_FURN_IDS = {b"head"[::-1]: "header", b"foot"[::-1]: "footer", b"fn  "[::-1]: "footnote", b"en  "[::-1]: "footnote"}
+_COLLECT = contextvars.ContextVar("hwp_collect_furniture", default=False)
+
+
+class _Furniture:
+    """머리말·각주 컨트롤 하나가 낸 syhwp blocks 묶음."""
+
+    def __init__(self, kind, blocks):
+        self.kind, self.blocks = kind, blocks
+
+
+def _install_furniture_hook() -> bool:
+    try:
+        from syhwp import _hwp5
+    except ImportError:
+        return False
+    orig = getattr(_hwp5, "_emit_control", None)
+    if orig is None or getattr(orig, "_furniture_hook", False):
+        return orig is not None
+
+    def emit_control(ctrl, blocks, depth=0):
+        kind = _FURN_IDS.get(bytes(ctrl.payload[:4])) if _COLLECT.get() and len(ctrl.payload) >= 4 else None
+        if kind is None:
+            return orig(ctrl, blocks, depth)
+        inner = []
+        orig(ctrl, inner, depth)              # 원래 동작 그대로 안쪽 blocks 를 만들고
+        if inner:
+            blocks.append(_Furniture(kind, inner))   # 본문 대신 묶음 하나로 넣는다
+
+    emit_control._furniture_hook = True
+    _hwp5._emit_control = emit_control
+    return True
+
+
+def _block_text(b) -> str:
+    """syhwp block 하나의 글 (머리말 묶음 글자 만들기용)."""
+    name = type(b).__name__
+    if name == "Paragraph":
+        return _fix_text(b.text)
+    if name == "Table":
+        return " ".join(_fix_text(c.text) for c in b.cells)
+    return ""
 
 
 def _fix_text(s: str) -> str:
@@ -44,16 +94,23 @@ def read_hwp(data: bytes, allow_distribution: bool = False) -> dict:
 
     # syhwp는 경로를 받는다. 임시 파일은 시스템 임시 폴더(영어 경로)에 만들고 바로 지운다.
     fd, tmp = tempfile.mkstemp(suffix=".hwp")
+    hooked = _install_furniture_hook()
+    token = _COLLECT.set(hooked)
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
         d = syhwp.open(tmp)
     finally:
+        _COLLECT.reset(token)
         os.remove(tmp)
     blocks = []
     for b in d.blocks:
         name = type(b).__name__
-        if name == "Paragraph":
+        if isinstance(b, _Furniture):          # 머리말·꼬리말·각주 → 본문이 아닌 영역 (hwpx.py 와 같은 블록)
+            text = " ".join(t for t in (" ".join(_block_text(x).split()) for x in b.blocks) if t).strip()
+            if text:
+                blocks.append({"type": "furniture", "kind": b.kind, "text": text})
+        elif name == "Paragraph":
             text = _fix_text(b.text)
             if text.strip():
                 blocks.append({"type": "para", "text": text.strip(), "style_level": None})

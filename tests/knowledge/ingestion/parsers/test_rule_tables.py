@@ -110,3 +110,20 @@ def test_single_bullet_sentence_kept_in_one_cell():
     data = _table_data([100, 130], [50, 150, 500], [(0, 1, 0, 1), (0, 1, 1, 2)],
                        [("정책일반", 60, 105, 110, 117), ("◆", 160, 105, 168, 117), ("검토하였습니까?", 175, 105, 260, 117)])
     assert (data.num_rows, data.num_cols) == (1, 2) and data.grid[0][1].text == "◆ 검토하였습니까?"
+
+
+def test_inner_fragment_line_does_not_split_region():
+    """같은 y 에 오른쪽 끝이 표 끝보다 안쪽인 조각선(겹줄·일부 칸만 긋는 선)이 있어도 표 자리가 끊기지 않는다
+    (2026-11-27 v4: 서울 '사전 검토' 서식표가 머리행 위·가운데에서 잘리던 문제)."""
+    from knowledge.ingestion.parsers.pdf.rule_tables import find_regions
+    hs = [(100, 50, 500), (150, 50, 500), (150, 110, 400),        # 머리행 아래 선 + 같은 y 조각선
+          (180, 110, 400), (180, 50, 500), (220, 50, 500), (260, 50, 500)]
+    assert find_regions(PageLines(height=H, h=hs, v=[]), 600) == [(50, 100, 500, 260)]
+
+
+def test_outer_line_with_other_right_end_still_splits():
+    """표 범위 밖으로 뻗은(오른쪽 끝이 다른) 선은 예전처럼 다른 표로 나눈다."""
+    from knowledge.ingestion.parsers.pdf.rule_tables import find_regions
+    hs = [(100, 50, 500), (130, 50, 500), (160, 50, 500), (190, 50, 500),
+          (220, 50, 560), (250, 50, 560), (280, 50, 560), (310, 50, 560)]
+    assert len(find_regions(PageLines(height=H, h=hs, v=[]), 600)) == 2
