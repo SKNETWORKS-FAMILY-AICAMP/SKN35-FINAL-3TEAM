@@ -146,3 +146,51 @@ def test_trusted_clip_candidate_overrides_protected_table(tmp_path):
     log = apply_kordoc_tables(d2, load_kordoc_tables(_kordoc(tmp_path, GRID), d2), WORDS, protected={t2.self_ref},
                               always_keep={t2.self_ref}, trusted=True)
     assert log.replaced and t2.data.num_rows == 2
+
+
+# ---- 짝 없는 칸 클립 표 넣기 (2026-11-27: Docling 이 신구조문 대비표를 문단으로 읽어 표가 사라지던 문제)
+def _text_doc(lines):
+    """표 없이 글 문단만 있는 쪽 (y 위치는 100부터 30 간격)."""
+    from docling_core.types.doc import DocItemLabel
+    d = DoclingDocument(name="t")
+    d.add_page(page_no=1, size=Size(width=600, height=H))
+    for i, t in enumerate(lines):
+        y = 100 + 30 * i
+        d.add_text(label=DocItemLabel.TEXT, text=t,
+                   prov=ProvenanceItem(page_no=1, charspan=(0, len(t)), bbox=BoundingBox(l=100, t=y, r=400, b=y + 20, coord_origin=CoordOrigin.TOPLEFT)))
+    return d
+
+
+def _clip(rows, box=(90, 90, 410, 200)):
+    cells = [TableCell(start_row_offset_idx=r, end_row_offset_idx=r + 1, start_col_offset_idx=c, end_col_offset_idx=c + 1,
+                       row_span=1, col_span=1, text=t) for r, row in enumerate(rows) for c, t in enumerate(row)]
+    return {"page": 1, "box": box, "pages": [1], "data": TableData(num_rows=len(rows), num_cols=len(rows[0]), table_cells=cells)}
+
+
+def _words(lines):
+    """글자층 낱말: 문단마다 한 낱말 (가운데가 그 문단 자리)."""
+    return {1: [(t, 100, 100 + 30 * i, 400, 120 + 30 * i) for i, t in enumerate(lines)]}
+
+
+def test_unpaired_clip_table_inserted_and_paragraphs_removed():
+    lines = ["현행 개정안", "제1조(목적) 제1조(목적)", "<삭제> 1. 노인복지주택"]
+    d = _text_doc(lines + ["표 밖 본문 문단입니다"])
+    rows = [["현행", "개정안"], ["제1조(목적)", "제1조(목적)"], ["<삭제>", "1. 노인복지주택"]]
+    log = apply_kordoc_tables(d, [_clip(rows)], _words(lines), set(), trusted=True)
+    assert len(d.tables) == 1 and d.tables[0].data.num_rows == 3
+    assert log.replaced[0]["pair"] == "짝 없음 → 넣음" and log.items == [d.tables[0]]
+    assert [t.text for t in d.texts] == ["표 밖 본문 문단입니다"]           # 표 안 문단만 지운다
+
+
+def test_unpaired_small_box_not_inserted():
+    lines = ["보도자료", "배포 즉시"]
+    d = _text_doc(lines)
+    apply_kordoc_tables(d, [_clip([["보도자료", "배포 즉시"]])], _words(lines), set(), trusted=True)   # 1행 머리 상자
+    assert len(d.tables) == 0 and len(d.texts) == 2
+
+
+def test_unpaired_needs_trusted():
+    lines = ["현행 개정안", "제1조 제1조", "제2조 제2조"]
+    d = _text_doc(lines)
+    apply_kordoc_tables(d, [_clip([["현행", "개정안"], ["제1조", "제1조"], ["제2조", "제2조"]])], _words(lines), set(), trusted=False)
+    assert len(d.tables) == 0                                                   # kordoc 원본 후보는 예전처럼 넣지 않는다

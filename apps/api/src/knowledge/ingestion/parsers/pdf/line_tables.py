@@ -393,20 +393,27 @@ def _kept_share(old: TableData, new: TableData, words, old_box, new_box) -> floa
 
 
 def apply_line_tables(doc: DoclingDocument, lines: dict[int, PageLines], words: dict[int, list],
-                      relaxed: bool = True) -> LineTableLog:
+                      relaxed: bool = True, only: set[int] | None = None, fallback: bool = False) -> LineTableLog:
     """글자층이 있는 쪽에서, Docling 표와 겹치는 선 격자 표가 있으면 표 구조를 선 격자로 바꾼다.
 
     relaxed: 트인 표 가상 테두리(OPEN_EDGES)와 늘려 만들기 격자(GREEDY)를 쓸지. 한컴 PDF 는 칸 클립(clip_tables)이 원본 칸을
-      그대로 주므로 끈다 — 켜면 이 격자가 먼저 표를 바꿔 혼합 단계가 흔들렸다(v2 금감원 전자금융업 구조 일치 −1)."""
+      그대로 주므로 끈다 — 켜면 이 격자가 먼저 표를 바꿔 혼합 단계가 흔들렸다(v2 금감원 전자금융업 구조 일치 −1).
+    only: 이 표 객체(id)들만 본다. None 이면 모든 표.
+    fallback: 한컴 PDF 의 두 번째 호출 — 칸 클립 혼합이 끝난 뒤에도 표 모델(TableFormer) 그대로 남은 표(only)에만
+      늘려 만들기 격자(GREEDY)를 시도한다. 가상 테두리는 쓰지 않고, 엄격 격자는 첫 호출에서 이미 해 봤으므로 건너뛴다.
+      왜(2026-11-27 v4 재측정 C 진단): 규제영향분석서 16쪽 비용표 — Docling 이 붙은 두 표를 12x8 하나로 읽고 칸도 틀렸는데,
+      칸 클립은 위 2x5 만 내 혼합에서 거절, 바깥 테두리가 덜 그려져 엄격 격자도 포기. 늘려 만들기 격자는 두 표를 정답 그대로 냈다
+      (13/13, 21/21). 첫 호출에서 켜면 혼합이 흔들리므로(위 relaxed) 혼합 뒤 남은 표에만 쓴다."""
     log = LineTableLog()
-    tables = [t for t, _ in doc.iterate_items() if isinstance(t, TableItem) and len(t.prov) == 1]
+    tables = [t for t, _ in doc.iterate_items() if isinstance(t, TableItem) and len(t.prov) == 1
+              and (only is None or id(t) in only)]
     closed: dict[int, tuple] = {}                       # 쪽 → (가상 테두리를 더한 선, 가상 테두리 목록)
     for t in tables:
         p = t.prov[0]
         pl, ws = lines.get(p.page_no), words.get(p.page_no)
         if pl is None or not ws:
             continue
-        if OPEN_EDGES and relaxed:
+        if OPEN_EDGES and relaxed and not fallback:
             # 양옆이 트인 표에 가상 세로 테두리를 더한다 (kordoc closeOpenTableEdges 이식, open_edges) — 안쪽 세로선이
             # 가로 괘선 묶음과 실제로 교차할 때만 합성하므로, 선 없는 글 영역에는 생기지 않는다
             if p.page_no not in closed:
@@ -441,9 +448,9 @@ def apply_line_tables(doc: DoclingDocument, lines: dict[int, PageLines], words: 
         if side:
             log.skipped.append({"page": p.page_no, "why": f"한쪽이 트인 표({side})"})
             continue
-        data = grid_table(best[0], best[1], ws)
+        data = None if fallback else grid_table(best[0], best[1], ws)
         greedy = False
-        if data is None and GREEDY and relaxed and best_iou >= GREEDY_IOU:
+        if data is None and GREEDY and (relaxed or fallback) and best_iou >= GREEDY_IOU:
             # 우리 격자가 포기한 표(바깥 테두리 덜 그려짐·ㄱ자 병합)는 kordoc 방식(왼쪽 위부터 늘리기)으로 다시 만든다
             data, greedy = grid_table(best[0], best[1], ws, greedy=True), True
         if data is None:

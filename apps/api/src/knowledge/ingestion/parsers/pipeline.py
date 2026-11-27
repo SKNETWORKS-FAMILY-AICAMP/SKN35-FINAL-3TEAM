@@ -16,16 +16,18 @@
 
 형식별 경로 (router 판별 — 확장자를 믿지 않는다)
   HWPX            → 우리 추출기 (readers.hwpx) — 원본 구조 그대로
-  HWP (바이너리)  → syhwp (readers.hwp) — 암호·배포용은 거절
+  HWP (바이너리)  → syhwp (readers.hwp) — 암호·배포용은 거절, 머리말·꼬리말·각주는 본문과 나눔
+  HWPML (XML)     → 우리 추출기 (hangul/hwpml.py) — 법제처 법령 '.hwp' 가 실제로 이 형식
   PDF · 이미지     → Docling(heron 배치, TableFormer accurate, RapidOCR) + 우리 후처리 (최종본 순서, 아래)
-  DOCX·XLSX·PPTX·HTML·EML·CSV·MD → Docling
-  그 밖(옛 Office, HWPML, 암호 PDF, 알 수 없음) → 거절 + 이유
+  XLSX            → Docling + 우리 후처리 (office/xlsx.py: 시트 이름 제목, 1칸 표 → 글, 숫자 서식, 빈 수식 기록)
+  DOCX·PPTX·HTML·EML·CSV·MD → Docling
+  그 밖(옛 Office, 암호 PDF, 알 수 없음) → 거절 + 이유
 
 PDF·이미지 후처리 순서 (2026-11-19 최종본 = 실험 PY15 설정과 같다)
   1) 글자 충실도(낱말): 둥근 따옴표·원문자·글꼴 지문 (text_fidelity) — 표 칸 글자가 낱말에서 오므로 먼저
   2) 스캔 쪽 다시 읽기 (ocr_reread) → 그림 속 글자 꺼내기 (picture_text) → 쪽 안 병합 칸 되살리기 (table_spans)
   3) 선 격자 표 (line_tables — 한컴 PDF 가 아니면 가상 테두리·늘려 만들기 격자도) → 규칙선 표 (rule_tables)
-  4) 한컴 칸 클립 표 혼합 (clip_tables + kordoc_tables, 칸 클립 우선)
+  4) 한컴 칸 클립 표 혼합 (clip_tables + kordoc_tables, 칸 클립 우선) → 한컴 PDF 는 남은 표 모델 표에 늘려 만들기 격자 대비책
   5) 쪽 넘김 표 합치기 (table_merge)
   6) 글자 충실도(문서): 글 항목·표 칸의 따옴표·원문자
 
@@ -40,7 +42,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-PARSER_VERSION = "parsers 0.2.0 (최종본 2026-11-19)"
+PARSER_VERSION = "parsers 0.3.0 (XLSX 후처리 2026-11-27)"
 SCHEMA = "parse_result/1"
 MODELS_ENV = "PARSER_MODELS_DIR"   # 모델 폴더 (heron 배치, TableFormer, RapidOcr) — 용량이 커서 git 에 넣지 않는다
 
@@ -131,24 +133,25 @@ class DocParser:
         info = {"format": r.format, "group": r.group.value, "handler": r.handler.value, "evidence": r.evidence}
         if r.handler == Handler.REJECT:
             return ParseResult("rejected", r.reject_reason, name, info)
-        if r.handler == Handler.HWPML_EXTRACT:
-            return ParseResult("rejected", "HWPML(XML) 리더 없음", name, info)
-        if r.handler in (Handler.HWPX_EXTRACT, Handler.HWP_CONVERT):
-            return self._parse_hangul(path, name, info, r.handler == Handler.HWPX_EXTRACT)
+        kind = {Handler.HWPX_EXTRACT: "hwpx", Handler.HWP_CONVERT: "hwp", Handler.HWPML_EXTRACT: "hwpml"}.get(r.handler)
+        if kind:
+            return self._parse_hangul(path, name, info, kind)
         return self._parse_docling(path, name, info, r)
 
-    def _parse_hangul(self, path: Path, name: str, info: dict, hwpx: bool) -> ParseResult:
+    def _parse_hangul(self, path: Path, name: str, info: dict, kind: str) -> ParseResult:
+        """kind: hwpx(우리 추출기) · hwp(syhwp) · hwpml(우리 추출기, 법제처 법령 '.hwp' 가 실제로 이것)."""
         from knowledge.ingestion.parsers.hangul import builder, headings
         from knowledge.ingestion.parsers.hangul.hwp import read_hwp
+        from knowledge.ingestion.parsers.hangul.hwpml import read_hwpml
         from knowledge.ingestion.parsers.hangul.hwpx import read_hwpx
 
         data = path.read_bytes()
-        r = read_hwpx(data) if hwpx else read_hwp(data)
+        r = {"hwpx": read_hwpx, "hwp": read_hwp, "hwpml": read_hwpml}[kind](data)
         if r["status"] != "ok":
             why = r.get("reason") or {"encrypted": "암호가 걸린 문서", "distribution": "배포용 문서(읽기 제한)"}.get(r["status"], r["status"])
             return ParseResult("rejected" if r["status"] in ("encrypted", "distribution") else "failed", why, name, info)
         doc = builder.build(headings.assign(r["blocks"]), Path(name).stem)
-        src = "원본(HWPX)" if hwpx else "원본(HWP·syhwp)"
+        src = {"hwpx": "원본(HWPX)", "hwp": "원본(HWP·syhwp)", "hwpml": "원본(HWPML)"}[kind]
         return self._result(doc, name, info, {}, {"reader": src}, default_table_source=src)
 
     def _parse_docling(self, path: Path, name: str, info: dict, r) -> ParseResult:
@@ -170,6 +173,9 @@ class DocParser:
         sources: dict[int, dict] = {}
         if r.format in ("pdf", "image"):
             log.update(self._postprocess(doc, path, data, r.format, sources))
+        elif r.format == "xlsx":                                # 시트 이름·1칸 표·숫자 서식·빈 수식 보완 (office/xlsx.py)
+            from knowledge.ingestion.parsers.office.xlsx import fix_xlsx
+            log["xlsx"] = fix_xlsx(doc, data)
         default = "모델(TableFormer)" if r.format in ("pdf", "image") else f"Docling({r.format})"
         return self._result(doc, name, info, sources, log, default_table_source=default)
 
@@ -236,6 +242,14 @@ class DocParser:
             for obj, x in zip(clog.items, clog.replaced):
                 tag(obj, source="칸 클립", extra_pages=x.get("absorbed_pages") or [])
             log["clip_tables"] = {"replaced": clog.replaced, "kept": clog.kept}
+            if not relaxed:
+                # 한컴 PDF: 칸 클립 혼합 뒤에도 표 모델 그대로 남은 표에만 늘려 만들기 격자 대비책 (line_tables fallback 설명)
+                from docling_core.types.doc import TableItem
+                left = {id(t) for t, _ in doc.iterate_items() if isinstance(t, TableItem) and id(t) not in sources}
+                flog = apply_line_tables(doc, lines, words, relaxed=False, only=left, fallback=True)
+                for obj in flog.items:
+                    tag(obj, source="선 격자 · 늘려 만들기")
+                log["line_tables_fallback"] = {"replaced": flog.replaced, "skipped": flog.skipped}
         mlog = merge_split_tables(doc, lines)
         log["table_merge"] = {"merged": mlog.merged, "refused": mlog.refused}
         if tflog is not None:

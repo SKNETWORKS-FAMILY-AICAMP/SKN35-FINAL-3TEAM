@@ -86,18 +86,26 @@ def _drop_thin(edges):
 
 def find_regions(pl: PageLines, page_w: float) -> list[tuple]:
     """긴 가로선 연속 → 표 자리 [(l, t, r, b)]."""
-    long = sorted((h for h in pl.h if h[2] - h[1] >= H_MIN_FRAC * page_w), key=lambda h: h[0])
-    regions, cur = [], []
+    # 긴 가로선을 위→아래, 같은 y 에서는 긴 것 먼저 (오른쪽 끝이 표 끝인 선이 기준이 되도록)
+    long = sorted((h for h in pl.h if h[2] - h[1] >= H_MIN_FRAC * page_w), key=lambda h: (round(h[0] / SNAP), -(h[2] - h[1])))
+    regions, cur, last = [], [], None                      # last: 마지막 '기준선'(오른쪽 끝이 표 끝과 같은 선)의 y
     for h in long:
-        if cur and abs(h[2] - max(x[2] for x in cur)) <= END_TOL and h[0] - cur[-1][0] <= GAP_MAX:
-            cur.append(h)
-            continue
-        if cur and abs(h[2] - max(x[2] for x in cur)) <= END_TOL and abs(h[0] - cur[-1][0]) <= SNAP:
-            cur.append(h)                                  # 같은 y의 다른 조각
-            continue
+        if cur:
+            right, left = max(x[2] for x in cur), min(x[1] for x in cur)
+            if abs(h[2] - right) <= END_TOL and h[0] - last <= GAP_MAX:
+                cur.append(h)
+                last = h[0]
+                continue
+            # 표 안쪽 조각선: 오른쪽 끝이 표 끝보다 안쪽이고 표 가로 범위 안에 든 선 (겹줄·일부 칸만 긋는 선).
+            # 예전엔 이런 선을 만나면 표 자리가 끊겼다 → 서울 '사전 검토' 서식표가 머리행 위·가운데에서 잘림
+            # (2026-11-27 v4 재측정: 도시재생 19x5 머리행 빠짐 84/112, 시니어클럽 12x4 가운데 4행만 17/63).
+            # 조각선은 표 자리에 넣되 끊김 판단(간격)의 기준으로는 쓰지 않는다.
+            if h[2] < right - END_TOL and h[1] >= left - END_TOL and h[0] - last <= GAP_MAX:
+                cur.append(h)
+                continue
         if cur:
             regions.append(cur)
-        cur = [h]
+        cur, last = [h], h[0]
     if cur:
         regions.append(cur)
     out = []

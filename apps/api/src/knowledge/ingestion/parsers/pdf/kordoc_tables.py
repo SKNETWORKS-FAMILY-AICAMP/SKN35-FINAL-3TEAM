@@ -15,7 +15,9 @@
      글자 보존 — 우리 표 자리의 글자층 글자 중 kordoc 칸 글자에 있는 비율이 KEEP_CHARS 미만이면 우리 것
      (kordoc이 글자를 놓친 표: 사옥 8x4, 원화대출 4x10 — 맞힘 0).
      반대로 kordoc 칸 글자 중 그 자리 글자층에 없는 것이 EXTRA_MAX를 넘어도 우리 것 (글자 정확도 보호).
-  4) kordoc에만 있는 표는 이번 단계에서 넣지 않는다 (보도자료 머리 상자 같은 장식이 많고, 글자 중복 정리가 필요).
+  4) kordoc에만 있는 표는 넣지 않는다 (보도자료 머리 상자 같은 장식이 많고, 글자 중복 정리가 필요).
+     예외(2026-11-27): trusted 후보(한컴 칸 클립)는 안전장치를 거쳐 넣는다 — _insert_unpaired.
+     Docling 이 신구조문 대비표를 문단으로 읽어 표가 통째로 사라지던 문제.
 
 kordoc 표 JSON: {"rows", "cols", "cells": [[{"text", "rowSpan", "colSpan"}, ...], ...]} — 전체 격자, 병합 칸은 기준 칸에만
 폭이 있고 가려진 자리는 빈 칸 → 가려진 자리는 건너뛴다.
@@ -39,6 +41,9 @@ ABSORB = 0.8        # 이웃 우리 표 글자의 이 비율 이상이 kordoc �
 TEXT_ABSORB = 0.9   # 여러 쪽 클립 표의 뒤 쪽 글 문단: 글자의 이 비율 이상이 후보 표에 있으면 표 조각 (표보다 엄격 — 문단은 짧아 우연히 들기 쉽다)
 TEXT_MIN_CHARS = 4  # 이보다 짧은 문단(쪽 번호·"현 행" 같은 머리 낱말)은 흡수 증거로 쓰지 않는다
 TEXT_X_SLACK = 6.0  # 문단 가운데가 표 좌우 범위(첫 쪽 표 상자) 밖으로 이만큼까지는 안
+MIN_ROWS = 3        # 짝 없는 클립 표를 넣을 최소 행·열 (보도자료 머리 상자·1열 글상자 제외)
+MIN_COLS = 2
+OVERLAP_MAX = 0.1   # 짝 없는 클립 표 상자가 이미 있는 표와 이 비율 넘게 겹치면 넣지 않는다
 
 
 @dataclass
@@ -225,7 +230,106 @@ def apply_kordoc_tables(doc: DoclingDocument, kordoc_tables: list[dict], words: 
             rec["absorbed_text"] = len(text_group)
         log.replaced.append(rec)
         log.items.append(t)
+    if trusted:
+        absorbed_text.extend(_insert_unpaired(doc, kordoc_tables, used, tables, words, log))
     gone = [o for o in tables if o.self_ref in absorbed] + absorbed_text
     if gone:
         doc.delete_items(node_items=gone)
     return log
+
+
+def _top_level(doc: DoclingDocument, it):
+    """본문(body) 바로 아래 조상 — 표를 목록 묶음 안이 아니라 본문 순서에 넣으려고 (rule_tables 와 같음)."""
+    while it.parent is not None:
+        par = it.parent.resolve(doc)
+        if par is doc.body:
+            return it
+        it = par
+    return it
+
+
+def _insert_unpaired(doc: DoclingDocument, cands: list[dict], used: set, tables: list, words, log: KordocLog) -> list:
+    """짝 없는 칸 클립 표 넣기 (trusted 후보만 — 한컴 PDF 칸 클립 = 원본 칸 경계).
+
+    왜 (2026-11-27 v4 재측정 진단)
+      Docling 레이아웃 모델이 금융위 신구조문 대비표(현행|개정안, 6~11쪽)를 표가 아니라 문단·목록으로 읽었다.
+      칸 클립은 같은 자리에서 25x2 표를 제대로 냈지만, 위 4) 규칙(짝 없으면 넣지 않음)에 걸려 표가 통째로 사라졌다 (0/73).
+    안전장치 (4) 규칙을 만든 이유 — 보도자료 머리 상자 같은 장식 — 를 지킨다)
+      - MIN_ROWS 행·MIN_COLS 열 이상 (머리 상자·1열 글상자 제외)
+      - 이미 있는 표(바꾼 표 포함)와 겹치지 않는다
+      - 그 자리 글자층 글자의 KEEP_CHARS 이상이 후보 칸 글자에 있다 (표가 자리 글자를 거의 다 담는다)
+      - 첫 쪽에서 지울 문단: 가운데가 표 상자 안이고 글자의 TEXT_ABSORB 이상이 후보에 있는 것
+      - 뒤 쪽(여러 쪽 표): 표 열 범위 안 + 글자 TEXT_ABSORB 이상 (위 여러 쪽 흡수와 같은 규칙)
+      - 흡수한 글자를 합쳐도 후보 글자의 (1 - EXTRA_MAX) 이상을 설명해야 한다 (자리 밖 글자가 많으면 다른 내용)
+    반환: 지울 글 항목들 (호출한 쪽에서 표 삭제와 함께 지운다)."""
+    from docling_core.types.doc import BoundingBox, CoordOrigin, ProvenanceItem
+
+    taken_boxes: dict[int, list] = {}
+    for t in tables:
+        if t.prov:
+            pp = t.prov[0]
+            b = pp.bbox.to_top_left_origin(doc.pages[pp.page_no].size.height)
+            taken_boxes.setdefault(pp.page_no, []).append((b.l, b.t, b.r, b.b))
+    texts = [it for it, _ in doc.iterate_items() if isinstance(it, TextItem) and it.prov]
+    gone_all: list = []
+    for j, k in enumerate(cands):
+        if j in used or k.get("box") is None or k["page"] not in doc.pages:
+            continue
+        d, pg, box = k["data"], k["page"], k["box"]
+        info = {"page": pg, "ref": None, "ours": "없음", "kordoc": f"{d.num_rows}x{d.num_cols}"}
+        if d.num_rows < MIN_ROWS or d.num_cols < MIN_COLS:
+            continue                                            # 머리 상자·글상자: 기록하지 않는다 (흔해서 log 가 길어짐)
+        area = max(1e-6, (box[2] - box[0]) * (box[3] - box[1]))
+        if any(_inter(box, o) / area > OVERLAP_MAX for o in taken_boxes.get(pg, [])):
+            continue                                            # 이미 표가 있는 자리
+        theirs = _chars(" ".join(c.text for c in d.table_cells))
+        ws = (words or {}).get(pg) or []
+        before = _chars(" ".join(w[0] for w in ws if box[0] <= (w[1] + w[3]) / 2 <= box[2] and box[1] <= (w[2] + w[4]) / 2 <= box[3]))
+        if not before:
+            continue
+        share = sum((before & theirs).values()) / max(1, sum(before.values()))
+        if share < KEEP_CHARS:
+            log.kept.append({**info, "why": f"짝 없는 클립 표: 글자 보존 부족({share:.2f})"})
+            continue
+        H = doc.pages[pg].size.height
+        later = set((k.get("pages") or [])[1:])
+        first_items, later_items, pool = [], [], before.copy()
+        for it in texts:
+            ip = it.prov[0]
+            ib = ip.bbox.to_top_left_origin(doc.pages[ip.page_no].size.height)
+            cx, cy = (ib.l + ib.r) / 2, (ib.t + ib.b) / 2
+            ic = _chars(it.text)
+            if not ic or sum((ic & theirs).values()) < TEXT_ABSORB * sum(ic.values()):
+                continue                                        # 글자가 표에 없는 문단은 지우지 않는다
+            if ip.page_no == pg and box[0] <= cx <= box[2] and box[1] <= cy <= box[3]:
+                first_items.append(it)
+            elif ip.page_no in later and box[0] - TEXT_X_SLACK <= cx <= box[2] + TEXT_X_SLACK and sum(ic.values()) >= TEXT_MIN_CHARS:
+                later_items.append(it)
+                pool += ic
+        if not first_items:
+            log.kept.append({**info, "why": "짝 없는 클립 표: 그 자리 글 항목 없음"})
+            continue
+        extra = 1 - sum((pool & theirs).values()) / max(1, sum(theirs.values()))
+        if extra > EXTRA_MAX:
+            log.kept.append({**info, "why": f"짝 없는 클립 표: 자리 밖 글자({extra:.2f})"})
+            continue
+        nb = BoundingBox(l=box[0], t=box[1], r=box[2], b=box[3], coord_origin=CoordOrigin.TOPLEFT)
+        ref = first_items[0].prov[0].bbox.coord_origin
+        prov = ProvenanceItem(page_no=pg, charspan=(0, 0), bbox=nb if ref == CoordOrigin.TOPLEFT else nb.to_bottom_left_origin(H))
+        new_t = doc.insert_table(sibling=_top_level(doc, first_items[0]), data=d, prov=prov, after=False)
+        gone_all += first_items + later_items
+        taken_boxes.setdefault(pg, []).append(box)
+        used.add(j)
+        rec = {**info, "ref": new_t.self_ref, "pair": "짝 없음 → 넣음", "kept_chars": round(share, 2), "extra": round(extra, 2),
+               "removed_text": len(first_items) + len(later_items)}
+        later_pages = sorted({it.prov[0].page_no for it in later_items})
+        if later_pages:
+            rec["absorbed_pages"] = later_pages
+        log.replaced.append(rec)
+        log.items.append(new_t)
+    return gone_all
+
+
+def _inter(a, b) -> float:
+    x0, y0, x1, y1 = max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3])
+    return max(0.0, x1 - x0) * max(0.0, y1 - y0)
